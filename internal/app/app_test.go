@@ -174,15 +174,49 @@ func TestRestartResumes(t *testing.T) {
 	addBotAndWhitelist(t, a1.Handler, 42)
 	fake.PushMessage(tgtest.PhotoMsg(1, 42, "ph"))
 	eventually(t, "👀 before restart", func() bool { e := emojis(fake); return len(e) == 1 && e[0] == "👀" })
+	eventually(t, "getFile in flight before restart", func() bool {
+		for _, c := range fake.Calls("getFile") {
+			if c.Params["file_id"] == "ph" {
+				return true
+			}
+		}
+		return false
+	})
 	a1.Close()
 
 	fake.HoldFiles(false)
+	n := len(fake.Calls("getUpdates"))
 	a2 := start(t, cfgFor(fake, dataDir))
 	defer a2.Close()
 	eventually(t, "👌 after restart", func() bool { e := emojis(fake); return len(e) == 2 && e[1] == "👌" })
-	eventually(t, "poll after restart", func() bool { return fake.LastOffset() == 2 })
+	eventually(t, "poll after restart", func() bool {
+		calls := fake.Calls("getUpdates")
+		if len(calls) <= n {
+			return false
+		}
+		sawOffsetTwo := false
+		for _, c := range calls[n:] {
+			off, _ := c.Params["offset"].(float64)
+			if off < 2 {
+				return false
+			}
+			if off == 2 {
+				sawOffsetTwo = true
+			}
+		}
+		return sawOffsetTwo
+	})
 	msgs := firstChatMessages(t, a2.Handler)
 	if len(msgs) != 1 || msgs[0].Media[0].State != store.StateDone {
 		t.Fatalf("messages after restart = %+v", msgs)
+	}
+	gets := 0
+	for _, c := range fake.Calls("getFile") {
+		if c.Params["file_id"] == "ph" {
+			gets++
+		}
+	}
+	if gets != 2 {
+		t.Fatalf("ph fetched %d times, want 2 (once held/cancelled, once after restart)", gets)
 	}
 }

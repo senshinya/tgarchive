@@ -36,15 +36,21 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx }, // ends SSE streams on shutdown
 	}
+	shutdownDone := make(chan struct{})
 	go func() {
 		<-ctx.Done()
+		stop() // a second signal now hits the default handler and force-exits
 		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		srv.Shutdown(sctx)
+		if err := srv.Shutdown(sctx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
+		close(shutdownDone)
 	}()
 	log.Printf("tgarchive listening on %s", cfg.Listen)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	<-shutdownDone // let in-flight handlers finish draining before tearing down the app
 	a.Close()
 }
