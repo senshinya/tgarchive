@@ -116,7 +116,11 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 		}
 
 		if res.Created {
-			if _, err := tx.ExecContext(ctx, "UPDATE chats SET last_message_at = ? WHERE id = ? AND last_message_at < ?", m.Date, res.ChatID, m.Date); err != nil {
+			lastAt := m.Date
+			if m.Source == model.SourceUserbotFetch {
+				lastAt = in.Now
+			}
+			if _, err := tx.ExecContext(ctx, "UPDATE chats SET last_message_at = ? WHERE id = ? AND last_message_at < ?", lastAt, res.ChatID, lastAt); err != nil {
 				return err
 			}
 		} else {
