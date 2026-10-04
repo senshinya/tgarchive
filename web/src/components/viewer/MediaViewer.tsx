@@ -143,6 +143,8 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
         onPointerDown={(e) => {
           // zoom > 1 is the pan-drag's territory (handled on the <img> itself below); leave it alone.
           if (zoom > 1) return;
+          // A drag on a video's native controls (scrubbing) is not a swipe.
+          if ((e.target as HTMLElement).tagName === 'VIDEO') return;
           swipeStart.current = { x: e.clientX, y: e.clientY };
         }}
         onPointerUp={(e) => {
