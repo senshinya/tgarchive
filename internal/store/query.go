@@ -53,6 +53,7 @@ type ReplyView struct {
 
 type MessageView struct {
 	ID                 int64           `json:"id"`
+	ChatID             int64           `json:"chat_id"`
 	TgMessageID        int64           `json:"tg_message_id"`
 	Source             string          `json:"source"`
 	MediaGroupID       string          `json:"media_group_id"`
@@ -96,13 +97,13 @@ func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) 
 	return out, rows.Err()
 }
 
-const msgCols = `id, tg_message_id, source, media_group_id, date, edit_date, kind, text, entities_json, forward_origin_json,
+const msgCols = `id, chat_id, tg_message_id, source, media_group_id, date, edit_date, kind, text, entities_json, forward_origin_json,
 	reply_to_tg_message_id, origin_chat_title, origin_link, extra_json`
 
 func scanMessageView(r scanner) (MessageView, error) {
 	var v MessageView
 	var ents, fwd, extra string
-	err := r.Scan(&v.ID, &v.TgMessageID, &v.Source, &v.MediaGroupID, &v.Date, &v.EditDate, &v.Kind, &v.Text, &ents, &fwd,
+	err := r.Scan(&v.ID, &v.ChatID, &v.TgMessageID, &v.Source, &v.MediaGroupID, &v.Date, &v.EditDate, &v.Kind, &v.Text, &ents, &fwd,
 		&v.ReplyToTgMessageID, &v.OriginChatTitle, &v.OriginLink, &extra)
 	if ents == "" {
 		ents = "[]"
@@ -157,6 +158,21 @@ func (s *Store) ListMessages(ctx context.Context, chatID, beforeID int64, limit 
 		return nil, err
 	}
 	return views, nil
+}
+
+// GetMessageView returns one non-deleted message with its media and reply preview.
+func (s *Store) GetMessageView(ctx context.Context, id int64) (MessageView, error) {
+	views, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages WHERE id = ? AND deleted_at = 0`, id))
+	if err != nil {
+		return MessageView{}, err
+	}
+	if len(views) == 0 {
+		return MessageView{}, ErrNotFound
+	}
+	if err := s.hydrate(ctx, views[0].ChatID, views); err != nil {
+		return MessageView{}, err
+	}
+	return views[0], nil
 }
 
 func (s *Store) ListChatMedia(ctx context.Context, chatID int64, typ string, beforeID int64, limit int) ([]MessageView, error) {

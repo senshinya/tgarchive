@@ -126,3 +126,37 @@ func TestListChatMedia(t *testing.T) {
 		t.Fatalf("bad type err = %v", err)
 	}
 }
+
+func TestGetMessageView(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	first := ingest(t, s, bot, textMsg(1, "hello"))
+	reply := textMsg(2, "re")
+	reply.ReplyToTgMessageID = 1
+	second := ingest(t, s, bot, reply)
+	photo := ingest(t, s, bot, photoMsg(3, "bot:p"))
+
+	v, err := s.GetMessageView(ctx, second.MessageID)
+	if err != nil || v.ID != second.MessageID || v.ChatID != first.ChatID || v.Text != "re" {
+		t.Fatalf("view = %+v, %v", v, err)
+	}
+	if v.Reply == nil || v.Reply.ID != first.MessageID || v.Reply.Text != "hello" {
+		t.Fatalf("reply = %+v", v.Reply)
+	}
+	if pv, _ := s.GetMessageView(ctx, photo.MessageID); len(pv.Media) != 1 || pv.Media[0].State != StatePending {
+		t.Fatalf("media not hydrated: %+v", pv.Media)
+	}
+	page, _ := s.ListMessages(ctx, first.ChatID, 0, 10)
+	if page[0].ChatID != first.ChatID {
+		t.Fatalf("list views must carry chat_id: %+v", page[0])
+	}
+	if _, _, err := s.DeleteMessage(ctx, first.MessageID, 9); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetMessageView(ctx, first.MessageID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted message err = %v", err)
+	}
+	if _, err := s.GetMessageView(ctx, 99999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing message err = %v", err)
+	}
+}

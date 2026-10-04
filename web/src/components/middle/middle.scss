@@ -1,0 +1,128 @@
+#MiddleColumn {
+  position: relative;
+  isolation: isolate;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  &.empty {
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+.empty-hint span {
+  display: inline-block;
+  padding: 0.1875rem 0.75rem;
+  border-radius: var(--border-radius-messages);
+  font-size: calc(var(--message-text-size) - 1px);
+  font-weight: var(--font-weight-medium);
+  color: #fff;
+  background: var(--action-message-bg);
+}
+
+.MiddleHeader {
+  position: absolute;
+  top: var(--middle-panel-inline-padding);
+  left: var(--middle-panel-inline-padding);
+  right: var(--middle-panel-inline-padding);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: var(--middle-header-height);
+  max-width: calc(var(--messages-container-width) - 2rem);
+  margin: 0 auto;
+  padding: 0 0.25rem 0 0.125rem;
+  border-radius: 2rem;
+  background: var(--color-background);
+  box-shadow: var(--shadow-pane);
+
+  .back-button {
+    display: none;
+  }
+
+  @media (max-width: 925px) {
+    .back-button {
+      display: flex;
+    }
+  }
+}
+
+.MiddleHeader-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  height: 100%;
+  padding: 0.125rem;
+  text-align: start;
+  border-radius: 2rem;
+
+  .Avatar {
+    width: 2.75rem !important;
+    height: 2.75rem !important;
+  }
+}
+
+.MiddleHeader-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.MiddleHeader-title {
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.375rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.MiddleHeader-status {
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// Default wallpaper: four-colour corner gradient with a doodle pattern (original artwork in
+// public/pattern.svg). Light draws the doodles darker on the gradient; dark cuts the gradient
+// out of black through the doodle mask.
+.Wallpaper {
+  --wallpaper-gradient: radial-gradient(circle at 0% 0%, var(--wallpaper-1) 0%, transparent 70%),
+    radial-gradient(circle at 100% 0%, var(--wallpaper-2) 0%, transparent 70%),
+    radial-gradient(circle at 100% 100%, var(--wallpaper-3) 0%, transparent 70%),
+    radial-gradient(circle at 0% 100%, var(--wallpaper-4) 0%, transparent 70%),
+    linear-gradient(135deg, var(--wallpaper-1), var(--wallpaper-3));
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--wallpaper-gradient);
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: #000;
+    opacity: 0.12;
+    -webkit-mask: url("/pattern.svg") 0 0 / 360px 360px repeat;
+    mask: url("/pattern.svg") 0 0 / 360px 360px repeat;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .Wallpaper {
+    background: #000;
+
+    &::after {
+      background: var(--wallpaper-gradient);
+      opacity: 0.45;
+    }
+  }
+}

@@ -285,3 +285,27 @@ func TestCrossSiteWritesRejected(t *testing.T) {
 		t.Fatalf("same-origin delete = %d %s", w.Code, w.Body)
 	}
 }
+
+func TestGetMessage(t *testing.T) {
+	e := newReadEnv(t)
+	w := do(e.h, "GET", fmt.Sprintf("/api/messages/%d", e.photoMsg), nil)
+	var v store.MessageView
+	if err := json.Unmarshal(w.Body.Bytes(), &v); w.Code != 200 || err != nil {
+		t.Fatalf("get = %d %s", w.Code, w.Body)
+	}
+	if v.ID != e.photoMsg || v.ChatID != e.chat || len(v.Media) != 1 || v.Media[0].ID != e.media {
+		t.Fatalf("view = %+v", v)
+	}
+	if !strings.Contains(w.Body.String(), fmt.Sprintf(`"chat_id":%d`, e.chat)) {
+		t.Fatalf("chat_id missing from JSON: %s", w.Body)
+	}
+	if w := do(e.h, "GET", "/api/messages/abc", nil); w.Code != 400 {
+		t.Fatalf("bad id = %d", w.Code)
+	}
+	if w := do(e.h, "DELETE", fmt.Sprintf("/api/messages/%d", e.photoMsg), nil); w.Code != 204 {
+		t.Fatalf("delete = %d", w.Code)
+	}
+	if w := do(e.h, "GET", fmt.Sprintf("/api/messages/%d", e.photoMsg), nil); w.Code != 404 || !strings.Contains(w.Body.String(), `"error"`) {
+		t.Fatalf("deleted = %d %s", w.Code, w.Body)
+	}
+}

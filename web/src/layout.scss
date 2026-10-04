@@ -1,0 +1,153 @@
+// Three floating islands (left list, middle chat, right shared media); single column below 926px.
+
+#Main {
+  position: relative;
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+  // Deliberately not --color-background-secondary: that token is also the settings-canvas /
+  // right-column card color (see settings.scss, §8 of webA-design.md). Reusing it here made the
+  // gap around the left island visually fuse with the settings canvas once a page's cards ran
+  // out, so the island looked like it ended early instead of the gray continuing to the bottom.
+  background: var(--color-background-secondary-accent);
+}
+
+#LeftColumn {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  width: 33vw;
+  min-width: 16rem;
+  max-width: 26.5rem;
+  margin: 1rem 0 1rem 1rem;
+  border-radius: var(--border-radius-island);
+  background: var(--color-background);
+  box-shadow: var(--shadow-island);
+  overflow: hidden;
+}
+
+@media (min-width: 926px) {
+  #LeftColumn {
+    max-width: 40vw;
+  }
+}
+
+@media (min-width: 1276px) {
+  #LeftColumn {
+    width: 25vw;
+    max-width: 33vw;
+  }
+}
+
+#MiddleColumn {
+  z-index: 1;
+}
+
+#RightColumn {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 4;
+  width: calc(var(--right-column-width) - 1rem);
+  border-radius: var(--border-radius-island);
+  background: var(--color-background-secondary);
+  box-shadow: var(--shadow-island);
+  overflow: hidden;
+  transform: translate3d(calc(100% + 1rem), 0, 0);
+  transition: transform var(--layer-transition);
+}
+
+#Main.right-column-open #RightColumn {
+  transform: translate3d(0, 0, 0);
+}
+
+@media (min-width: 1276px) {
+  #MiddleColumn {
+    transition: margin-right var(--layer-transition);
+  }
+
+  #Main.right-column-open #MiddleColumn {
+    margin-right: var(--right-column-width);
+  }
+}
+
+@media (max-width: 925px) {
+  #LeftColumn {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 3;
+    width: 26.5rem;
+    max-width: calc(100vw - 2rem);
+    margin: 1rem;
+    transform: translate3d(calc(-100% - 1rem), 0, 0);
+    transition: transform var(--layer-transition);
+  }
+
+  #Main.left-column-open #LeftColumn {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+// Dims the content behind the left overlay at tablet widths and offers a tap-back to the chat
+// that's underneath. Not shown at ≤600px (single-column, no overlay-over-content to dim) or
+// ≥926px (left column sits beside the rest, not over it).
+#LeftScrim {
+  display: none;
+}
+
+@media (min-width: 601px) and (max-width: 925px) {
+  #Main.left-column-open #LeftScrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: rgba(0, 0, 0, 0.25);
+  }
+}
+
+@media (max-width: 600px) {
+  #LeftColumn {
+    z-index: 2;
+    width: 100vw;
+    max-width: 100vw;
+    margin: 0;
+    border-radius: 0;
+    box-shadow: none;
+    transform: translate3d(-20vw, 0, 0);
+  }
+
+  #MiddleColumn {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    transform: translate3d(0, 0, 0);
+    transition: transform var(--layer-transition);
+  }
+
+  #Main.left-column-open #MiddleColumn {
+    transform: translate3d(100vw, 0, 0);
+  }
+
+  #Main.right-column-open #MiddleColumn {
+    transform: translate3d(-20vw, 0, 0);
+  }
+
+  #RightColumn {
+    inset: 0;
+    width: 100vw;
+    border-radius: 0;
+    box-shadow: none;
+    transform: translate3d(100vw, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #LeftColumn,
+  #MiddleColumn,
+  #RightColumn {
+    transition: none !important;
+  }
+}

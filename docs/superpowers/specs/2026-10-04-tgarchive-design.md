@@ -296,6 +296,7 @@ userbot 违反 Telegram 使用条款，存在账号受限风险。session 等同
 | GET | `/api/chats?bot_id=` | 会话列表，按 `last_message_at` 倒序 |
 | GET | `/api/chats/:id/messages?before=&limit=50` | 游标分页，含媒体与 sender |
 | GET | `/api/chats/:id/media?type=media\|file\|link&before=` | 共享媒体 |
+| GET | `/api/messages/:id` | 单条消息（含媒体、回复预览与 `chat_id`），SSE 增量更新用；已删除 404 |
 | DELETE | `/api/messages/:id` | 删除存档（软删 + 清理孤立媒体） |
 | POST | `/api/media/:id/retry` | 重试失败媒体 |
 | GET | `/api/events` | SSE：`message.created/updated/deleted`、`media.updated`、`bot.status` |
@@ -314,7 +315,7 @@ userbot 违反 Telegram 使用条款，存在账号受限风险。session 等同
 
 ### 基准
 
-**以 Telegram Web A（`Ajaxy/telegram-tt`，web.telegram.org/a）为唯一像素基准。** 前端使用 Preact + Vite + SCSS。从 Web A 源码移植：SCSS 变量与主题（浅/深）、组件样式与 DOM/class 结构、图标字体、默认壁纸图案、相册拼图算法、动画曲线与时长、日期/时间格式化规则。移植代码在源文件头注明来源路径与上游 commit。
+**以 Telegram Web A（`Ajaxy/telegram-tt`，web.telegram.org/a）为唯一像素基准。** 前端使用 Preact + Vite + SCSS，按调研文档（`.superpowers/research/webA-design.md`）记录的视觉数值（配色、尺寸、圆角、动画曲线与时长、断点、日期格式）从零实现，不复制 telegram-tt 的源码、样式或资产；图标使用 Lucide，默认壁纸图案为本仓库原创；相册拼图按 Web A 的行为（2–4 张固定模板、5 张以上按行打包）自行实现。
 
 ### 布局
 

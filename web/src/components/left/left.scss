@@ -1,0 +1,154 @@
+.ChatsPanel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.left-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: var(--column-header-height);
+  padding: 0.5rem 0.8125rem;
+}
+
+.left-header-title {
+  margin-left: 1.375rem;
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.BotTabs {
+  flex-shrink: 0;
+  padding: 0 0.5rem;
+  box-shadow: inset 0 -1px 0 var(--color-borders);
+
+  .Avatar {
+    font-size: 0.625rem !important;
+  }
+}
+
+.chat-list {
+  flex: 1;
+  min-height: 0;
+  padding: 0.5rem;
+}
+
+.chat-list-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 2rem 1rem;
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+
+  .chat-list-empty-title {
+    font-size: 1rem;
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text);
+  }
+}
+
+.ChatItem {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.5625rem 0.5625rem;
+  border-radius: var(--border-radius-default);
+  text-align: start;
+  transition: background-color 0.15s;
+
+  &:hover {
+    background: var(--color-chat-hover);
+  }
+
+  &.selected {
+    @media (min-width: 601px) {
+      --color-text: #fff;
+      --color-text-secondary: #fff;
+      --color-chat-username: #fff;
+      color: #fff;
+      background: var(--color-chat-active);
+    }
+
+    @media (max-width: 600px) {
+      background: var(--color-chat-hover);
+    }
+  }
+}
+
+.ChatItem-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ChatItem-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.ChatItem-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 1rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.5rem;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ChatItem-time {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.ChatItem-subtitle {
+  font-size: 0.875rem;
+  line-height: 1.375rem;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  .sender-name {
+    color: var(--color-chat-username);
+  }
+}
+
+html.is-apple .ChatItem-subtitle .sender-name {
+  color: var(--color-text);
+}
+
+.FloatingActionButton {
+  position: absolute;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--color-primary);
+  box-shadow: 0 1px 8px 1px rgba(0, 0, 0, 0.12);
+  transition: background-color 0.15s, transform 0.2s;
+
+  &:hover {
+    background: var(--color-primary-shade);
+  }
+}
