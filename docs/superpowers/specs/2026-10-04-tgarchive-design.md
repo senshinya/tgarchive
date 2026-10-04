@@ -36,31 +36,39 @@
 
 ### 容器
 
-- `tgarchive-botapi`：Telegram 官方 `telegram-bot-api` 本地服务器（社区镜像 `aiogram/telegram-bot-api`，部署时按 CLAUDE.md §6.8 查最新版本并 pin），参数 `--local`，仅接 internal 网络 `tgarchive-internal`，监听 8081，不对外暴露。挂 `/opt/app/tgarchive/botapi`
-- `tgarchive`：自建镜像，接 `web` 与 `tgarchive-internal`，8080。同样挂 `/opt/app/tgarchive/botapi`（路径在两个容器内一致，`getFile` 返回的绝对路径可直接读）
+单容器 `tgarchive`：自建镜像，接 `web`，监听 8080，挂 `/opt/app/tgarchive` 到 `/data`。
+
+- 应用进程托管 Telegram 官方 `telegram-bot-api` 本地服务器作为子进程（`internal/botapiserver`）：参数 `--local --dir=/data/botapi --temp-dir=/data/botapi-tmp --http-ip-address=127.0.0.1 --http-port=8081`，只监听回环地址，不对外暴露
+- 子进程所需的 `api_id` / `api_hash` 在 WebUI 设置页填写，加密存入 `settings` 表；未配置时子进程不启动，状态为 `unconfigured`，添加机器人接口返回 409。保存新凭据后子进程以新凭据重启；子进程异常退出按 1s 起指数退避重启，上限 30s
+- 子进程环境不继承应用环境变量，看不到 `TOKEN_ENC_KEY`
+- 子进程与应用共用 `/data/botapi`，`getFile` 返回的绝对路径可直接读取
+- `BOT_API_MANAGED=false` 时不托管子进程，改连 `BOT_API_URL` 指向的外部 Bot API 服务器（开发与测试用）
 
 ### 镜像构建
 
-多阶段 Dockerfile：Node 阶段构建前端 → Go 阶段 `go test ./...` + 构建（`go:embed` 前端产物，`CGO_ENABLED=0`）→ distroless/static 运行。本地镜像前缀 `tgarchive` 加入 Cup exclude；`aiogram/telegram-bot-api` 保持 Cup 监控。
+多阶段 Dockerfile：Node 阶段构建前端 → Go 阶段 `go test ./...` + 构建（`go:embed` 前端产物，`CGO_ENABLED=0`）→ 运行阶段同时包含应用二进制与 `telegram-bot-api` 二进制。本地镜像前缀 `tgarchive` 加入 Cup exclude；`telegram-bot-api` 的版本随镜像构建 pin。
 
 ### .env（mode 600，台账存 Vaultwarden）
 
-- `TOKEN_ENC_KEY`：32 字节 hex，AES-256-GCM 主密钥，加密 bot token 与 userbot session
-- `TG_API_ID`、`TG_API_HASH`：my.telegram.org 申请，本地 Bot API 与 userbot 共用
-- `REQUIRE_FORWARD_AUTH=true`（默认 true，fail-safe）
-- `MEDIA_MAX_BYTES=0`（可选单文件上限，0 = 不限）
-- `BARK_NOTIFY_FILE=/run/bark/notify.json`（只读挂载 `/opt/app/bark/notify.json`）
+- `TOKEN_ENC_KEY`（必填）：32 字节 hex，AES-256-GCM 主密钥，加密 bot token、userbot session 与 `settings` 表中的 `api_id` / `api_hash`；缺失或格式错误启动即失败
+- `BARK_NOTIFY_FILE=/run/bark/notify.json`（可选，只读挂载 `/opt/app/bark/notify.json`；为空不推送）
+- `MEDIA_MAX_BYTES`（可选单文件上限，默认 0 = 不限）
+- `BOT_API_MANAGED`（可选，默认 `true`）
+- `REQUIRE_FORWARD_AUTH` 默认 `true`（fail-safe），生产不设置
+
+`api_id` / `api_hash`（my.telegram.org 申请，本地 Bot API 与 userbot 共用）不进 `.env`，在 WebUI 设置页填写。
 
 ### Caddy
 
 - 整站 `forward_auth` Authelia；`request_header -Remote-User -Remote-Groups -Remote-Name -Remote-Email` 剥入站伪造头
 - `import compress`，但 `/media/*` 不压缩（二进制 + Range）
 - `/api/events`（SSE）`flush_interval -1`
-- 应用侧在 `REQUIRE_FORWARD_AUTH=true` 时对所有 `/api/*`、`/media/*` 校验 `Remote-User` 存在，否则 401
+- 应用侧在 `REQUIRE_FORWARD_AUTH=true` 时对除 `/healthz` 外的所有请求校验 `Remote-User` 存在，否则 401
+- 应用侧 CSRF 兜底：GET/HEAD/OPTIONS 以外的请求，带 `Sec-Fetch-Site` 且不为 `same-origin` 时 403；POST/PUT/PATCH 带请求体而 `Content-Type` 不是 `application/json` 时 403
 
 ### 备份
 
-- R2（restic）：备份 `db/`、`avatars/` 与 stack；`media/`、`botapi/` 加入 `exclude.txt`
+- R2（restic）：备份 `db/`、`avatars/` 与 stack；`media/`、`botapi/`、`botapi-tmp/` 加入 `exclude.txt`
 - NAS：rclone 定期拉取 `media/`，方式同音乐库
 
 ### 通知
@@ -70,18 +78,24 @@
 ## 3. 架构
 
 ```
-Telegram ⇄ tgarchive-botapi (--local)          Telegram MTProto
-               │ getUpdates long polling             │
-               ▼                                     ▼
-┌──────────────────────── tgarchive (Go) ─────────────────────────┐
-│ collector  每 bot 一个 worker                                    │
-│ userbot    gotd/td 客户端 + 串行任务队列                          │
-│ convert    Bot API / MTProto → 统一内部消息模型                    │
-│ downloader 全局下载队列（并发 4）+ 重试状态机                       │
-│ receipt    reaction / 失败回复                                    │
-│ store      SQLite（modernc.org/sqlite）+ 迁移                     │
-│ api        /api/*、/api/admin/*、/api/events (SSE)、/media/*       │
-│ web        go:embed 的 Preact SPA                                 │
+Telegram Bot API                                Telegram MTProto
+      ⇅                                               │
+┌──────────────────────── tgarchive 容器 ─────────────┼────────────┐
+│ telegram-bot-api --local（子进程，127.0.0.1:8081）   │            │
+│      │ getUpdates long polling                       ▼            │
+│      ▼                                                            │
+│ ┌──────────────────────── tgarchive (Go) ──────────────────────┐ │
+│ │ botapiserver 托管 telegram-bot-api 子进程（崩溃退避重启）      │ │
+│ │ tgapp        api_id / api_hash 加密存取（settings 表）         │ │
+│ │ collector    每 bot 一个 worker                                │ │
+│ │ userbot      gotd/td 客户端 + 串行任务队列                     │ │
+│ │ convert      Bot API / MTProto → 统一内部消息模型               │ │
+│ │ downloader   全局下载队列（并发 4）+ 重试状态机                  │ │
+│ │ receipt      reaction / 失败回复                               │ │
+│ │ store        SQLite（modernc.org/sqlite）+ 迁移                │ │
+│ │ api          /api/*、/api/admin/*、/api/events (SSE)、/media/*  │ │
+│ │ web          go:embed 的 Preact SPA                            │ │
+│ └────────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -90,7 +104,10 @@ Telegram ⇄ tgarchive-botapi (--local)          Telegram MTProto
 | 包 | 职责 | 依赖 |
 |---|---|---|
 | `internal/store` | schema、迁移、全部 SQL 读写 | sqlite |
-| `internal/crypto` | AES-256-GCM 加解密 | — |
+| `internal/seal` | AES-256-GCM 加解密 | — |
+| `internal/tgapp` | `api_id` / `api_hash` 校验与加密存取（`settings` 表） | store, seal |
+| `internal/botapiserver` | 托管 `telegram-bot-api` 子进程：按凭据启动、换凭据重启、崩溃退避重启、状态上报 | tgapp |
+| `internal/tgbot` | 最小 Bot API HTTP 客户端，错误信息中 token 一律打码 | — |
 | `internal/model` | 统一消息模型（kind、text、entities、media 元数据、origin） | — |
 | `internal/convert/botapi` | Bot API Message → model | model |
 | `internal/convert/mtproto` | gotd tg.Message → model | model |
@@ -100,10 +117,10 @@ Telegram ⇄ tgarchive-botapi (--local)          Telegram MTProto
 | `internal/downloader` | 媒体下载队列、去重、落盘、引用计数、重试 | store |
 | `internal/receipt` | reaction 与失败回复 | — |
 | `internal/notify` | Bark 推送 | — |
-| `internal/httpapi` | HTTP 路由、鉴权中间件、SSE、媒体 Range 服务 | store, collector, userbot |
+| `internal/httpapi` | HTTP 路由、鉴权与 CSRF 中间件、SSE、媒体 Range 服务 | store, collector, userbot, tgapp, botapiserver |
 | `web/` | Preact SPA 源码 | — |
 
-Telegram Bot API 客户端使用 `github.com/go-telegram/bot`（`WithServerURL` 指向本地服务器）；MTProto 使用 `github.com/gotd/td`。
+Telegram Bot API 客户端为自写的 `internal/tgbot`（标准库 `net/http`，指向本地服务器）；MTProto 使用 `github.com/gotd/td`。
 
 ## 4. 数据模型（SQLite）
 
@@ -147,7 +164,7 @@ messages(
   raw_format TEXT,               -- botapi / mtproto
   raw_json TEXT,
   deleted_at INTEGER,
-  UNIQUE(chat_id, source, tg_message_id))
+  UNIQUE(chat_id, source, origin_chat_id, tg_message_id))  -- bot_update 的 origin_chat_id 为 0
 
 media(
   id INTEGER PK,
@@ -166,6 +183,9 @@ message_media(message_id INTEGER, media_id INTEGER, role TEXT,  -- main / thumb
 userbot(
   id INTEGER PK CHECK(id = 1), phone TEXT, tg_user_id INTEGER, name TEXT,
   session_enc BLOB, status TEXT, last_error TEXT, updated_at INTEGER)
+
+settings(                        -- 键值配置；telegram_app = 加密的 {api_id, api_hash}
+  key TEXT PK, value BLOB, updated_at INTEGER)
 ```
 
 说明：
@@ -185,7 +205,7 @@ userbot(
 2. 每个 update 在一个事务内处理完成后持久化 `update_offset = update_id + 1`
 3. 非私聊消息忽略；发送者不在白名单 → 写/更新 `rejected`，不回复，丢弃
 4. upsert `senders`、`chats`；转换为统一模型写 `messages`；为每个媒体（含视频缩略图）upsert `media` 并关联，新媒体 `state=pending`
-5. 若消息正文仅为一条可解析的消息链接且发送者 `can_fetch=1` → 交给 userbot 队列（见 §6），本条消息不作为普通文本存档
+5. 新消息（非编辑）先交给 `LinkHandler`（userbot 代取，见 §6）：返回 `handled=true` → 推进 offset，本条消息不作为普通文本存档；返回错误 → 不推进 offset，worker 从已持久化的 offset 重新拉取，同一 update 会再次投递
 6. 推 SSE 事件 `message.created`
 7. `edited_message`：更新 text/entities/edit_date/媒体，推 `message.updated`
 
@@ -206,20 +226,22 @@ userbot(
 | 任一媒体最终 `failed` | 保留 👀，回复「⚠️ 存档失败：<原因>」 |
 | 存在 `too_large` | 其余完成后设 👌，回复「文件超过存档上限，仅保存了消息记录」 |
 
-回执失败（如消息已被删）只记日志，不影响存档。
+失败原因中的 bot token（`<bot_id>:<secret>`，本地 Bot API 文件路径含此段）一律替换为 `<bot>` 后再写入 `media.error`、日志与回复。每次 reaction / 回复调用超时 30s。回执失败（如消息已被删）只记日志，不影响存档。
 
 ### 生命周期
 
 - 添加：`getMe`（对云端 api.telegram.org）校验 token → 云端 `logOut`（已登出视为成功）→ 存库 → 启动 worker；接口逐步返回结果，前端分步展示
 - 401 / 409 Conflict → 停止 worker，`status=error`，记录 `last_error`，Bark 推送，不自动重试
 - 网络错误 → 指数退避，最大 60s
-- 启停：仅控制 worker，不 logOut
+- 启停：仅控制 worker，不 logOut；切换后推 `bot.status`（`stopped`），重新启用的 worker 运行后再推 `running`
 - 删除：停止 worker，可选同时删除该机器人全部存档（默认保留）
 - 头像：机器人与发送者头像每日刷新一次（`getUserProfilePhotos` 取最新一张）
 
 ## 6. 受保护内容：userbot 链接代取
 
 ### 登录
+
+userbot 使用的 `api_id` / `api_hash` 从 `internal/tgapp`（`settings` 表）读取，与本地 Bot API 共用，不读环境变量；未配置时拒绝登录。
 
 管理页「用户账号」：手机号 → 验证码 → 二步验证密码（如有）。gotd session 序列化后用 `TOKEN_ENC_KEY` 加密存 `userbot.session_enc`。只支持一个账号；可登出（调用 `auth.logOut` 并清除 session）。
 
@@ -232,6 +254,8 @@ userbot(
 - 其他格式 → 回复「不支持的链接格式」
 
 ### 代取流程
+
+`LinkHandler.TryHandle(ctx, botID, sender, msg, canFetch) (handled bool, err error)`：不是可代取的链接或发送者无 `can_fetch` → `(false, nil)`，按普通消息存档；已接手 → `(true, nil)`；暂时无法接手 → 返回错误，该 update 会被重新投递。实现必须按 `(botID, msg.TgMessageID)` 幂等，重复投递不得重复入队或重复回复。
 
 1. 原链接消息设 👀，任务入 userbot 串行队列
 2. 解析 peer：
@@ -264,11 +288,15 @@ userbot 违反 Telegram 使用条款，存在账号受限风险。session 等同
 | DELETE | `/api/messages/:id` | 删除存档（软删 + 清理孤立媒体） |
 | POST | `/api/media/:id/retry` | 重试失败媒体 |
 | GET | `/api/events` | SSE：`message.created/updated/deleted`、`media.updated`、`bot.status` |
-| GET | `/media/:id`、`/media/:id/thumb` | Range + ETag，`Cache-Control: private, max-age=31536000, immutable` |
+| GET | `/media/:id`、`/media/:id/thumb` | Range + ETag，`Cache-Control: private, max-age=31536000, immutable`；见下方媒体安全头 |
 | GET/POST/PATCH/DELETE | `/api/admin/bots[...]` | 添加（分步结果）、启停、删除 |
 | GET/PUT/DELETE | `/api/admin/bots/:id/whitelist[...]` | 白名单与 `can_fetch` |
 | GET | `/api/admin/bots/:id/rejected` | 最近被拒绝的发送者 |
+| GET | `/api/admin/telegram-app` | `{configured, api_id, server: {managed, state, error}}`，不返回 `api_hash` |
+| PUT | `/api/admin/telegram-app` | 保存 `{api_id, api_hash}`（加密入 `settings`），托管模式下以新凭据重启 Bot API 子进程；成功 204，校验失败 400 |
 | POST | `/api/admin/userbot/{phone,code,password,logout}` | userbot 登录流程 |
+
+媒体安全头：`/media/*` 一律带 `X-Content-Type-Options: nosniff` 与 `Content-Security-Policy: default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox`。仅 `image/jpeg`、`image/png`、`image/gif`、`image/webp`、`video/*`、`audio/*`、`application/x-tgsticker` 内联返回；其余类型（含 SVG、HTML、XHTML、PDF、`text/*`）以 `application/octet-stream` + `Content-Disposition: attachment` 返回。
 
 ## 8. WebUI
 
