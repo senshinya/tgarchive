@@ -453,7 +453,11 @@ func (s *Service) Logout(ctx context.Context) error {
 	// Always nudge the connection loop so a pending clearAll (armed above) gets applied by
 	// detach() even if nothing was connected yet (e.g. a connection is mid-setup right now:
 	// its markReady will see logoutGen advance and revoke a stale "authorized" answer).
-	s.Reload()
+	// With nothing connected, the store is cleared first: a loop woken from its backoff by
+	// this Reload must not load the old session before it is gone.
+	if api != nil {
+		s.Reload()
+	}
 	if api == nil {
 		// Nothing was connected, so no detach() is coming to consume the clearAll armed above
 		// on our behalf. Clear directly, then disarm the flag ourselves — but only if still
@@ -467,6 +471,7 @@ func (s *Service) Logout(ctx context.Context) error {
 			s.clear = clearNone
 		}
 		s.mu.Unlock()
+		s.Reload()
 		return err
 	}
 	return nil
