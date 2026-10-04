@@ -1,0 +1,189 @@
+import { ArrowDown, Copy, Download, Trash2 } from 'lucide-preact';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { errorMessage, mediaUrl } from '../../api/client';
+import type { Message } from '../../api/types';
+import { senderName } from '../../lib/format';
+import { groupMessages } from '../../lib/grouping';
+import { useStore } from '../../state/store';
+import { ContextMenu, type MenuItem } from '../../ui/ContextMenu';
+import { ConfirmDialog } from '../../ui/Modal';
+import { Spinner } from '../../ui/Spinner';
+import { mainMedia } from '../media/util';
+import { MessageBubble } from './MessageBubble';
+import './message.scss';
+
+/** Load older history when the user scrolls within this many px of the top. */
+export const LOAD_OLDER_THRESHOLD = 400;
+const AT_BOTTOM_PX = 100;
+const SHOW_DOWN_PX = 300;
+
+function download(href: string) {
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+export function MessageList({ chatId }: { chatId: number }) {
+  const store = useStore();
+  const conv = store.conv(chatId);
+  const chat = store.chats.value.find((c) => c.id === chatId);
+  const sender = chat ? { name: senderName(chat.sender), peerId: chat.sender.tg_user_id } : { name: '', peerId: chatId };
+  const entries = useMemo(() => groupMessages(conv.items), [conv.items]);
+  const ref = useRef<HTMLDivElement>(null);
+  const snap = useRef({ firstId: 0, lastId: 0, height: 0, top: 0, atBottom: true });
+  const [showDown, setShowDown] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number; msg: Message } | null>(null);
+  const [confirm, setConfirm] = useState<Message | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    void store.refreshLatest(chatId);
+  }, [chatId]);
+
+  const record = () => {
+    const el = ref.current;
+    if (!el) return;
+    const items = store.conv(chatId).items;
+    snap.current = {
+      firstId: items[0]?.id ?? 0,
+      lastId: items[items.length - 1]?.id ?? 0,
+      height: el.scrollHeight,
+      top: el.scrollTop,
+      atBottom: el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX,
+    };
+  };
+
+  // Keep the viewport stable: bottom on first load, anchored when older pages are prepended,
+  // following new messages only when the user is already at the bottom.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const first = conv.items[0]?.id ?? 0;
+    const last = conv.items[conv.items.length - 1]?.id ?? 0;
+    const s = snap.current;
+    if (s.lastId === 0) el.scrollTop = el.scrollHeight;
+    else if (first < s.firstId && last === s.lastId) el.scrollTop = el.scrollHeight - s.height + s.top;
+    else if (last > s.lastId && s.atBottom) el.scrollTop = el.scrollHeight;
+    record();
+    // A first page shorter than the viewport never fires scroll events: keep filling.
+    if (conv.loaded && conv.hasMore && el.scrollHeight - el.clientHeight < LOAD_OLDER_THRESHOLD) void store.loadOlder(chatId);
+  }, [conv.items]);
+
+  const onScroll = () => {
+    const el = ref.current;
+    if (!el) return;
+    record();
+    setShowDown(el.scrollHeight - el.scrollTop - el.clientHeight > SHOW_DOWN_PX);
+    if (el.scrollTop < LOAD_OLDER_THRESHOLD) void store.loadOlder(chatId);
+  };
+
+  const menuItems = (msg: Message): MenuItem[] => {
+    const items: MenuItem[] = [];
+    const caption = msg.text || (msg.media_group_id ? conv.items.find((m) => m.media_group_id === msg.media_group_id && m.text)?.text : '');
+    if (caption) {
+      items.push({
+        label: '复制文本',
+        icon: <Copy size={20} />,
+        onSelect: () => {
+          if (!navigator.clipboard) {
+            store.showToast('复制失败');
+            return;
+          }
+          navigator.clipboard.writeText(caption).then(
+            () => store.showToast('已复制'),
+            () => store.showToast('复制失败'),
+          );
+        },
+      });
+    }
+    const md = mainMedia(msg);
+    if (md && md.state === 'done') {
+      items.push({ label: '下载', icon: <Download size={20} />, onSelect: () => download(mediaUrl(md.id, true)) });
+    }
+    items.push({ label: '删除存档', icon: <Trash2 size={20} />, danger: true, onSelect: () => setConfirm(msg) });
+    return items;
+  };
+
+  const doDelete = async () => {
+    if (!confirm) return;
+    setDeleting(true);
+    try {
+      await store.deleteMessage(confirm);
+      setConfirm(null);
+    } catch (e) {
+      store.showToast(`删除失败：${errorMessage(e)}`);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div class="MessageList-wrapper">
+      <div class="MessageList custom-scroll" ref={ref} onScroll={onScroll}>
+        <div class="messages-container">
+          {conv.loading && conv.items.length > 0 && (
+            <div class="history-loading">
+              <Spinner size={28} />
+            </div>
+          )}
+          {conv.error && (
+            <div class="history-notice">
+              <span>{conv.error}</span>
+              <button type="button" onClick={() => void (conv.loaded ? store.loadOlder(chatId) : store.refreshLatest(chatId))}>
+                重试
+              </button>
+            </div>
+          )}
+          {!conv.loaded && conv.loading && (
+            <div class="history-notice">
+              <Spinner size={32} />
+            </div>
+          )}
+          {conv.loaded && conv.items.length === 0 && (
+            <div class="history-notice">
+              <span>暂无消息</span>
+            </div>
+          )}
+          {entries.map((e) =>
+            e.kind === 'date' ? (
+              <div class="sticky-date" key={e.key}>
+                <span>{e.label}</span>
+              </div>
+            ) : (
+              <div class="message-group" key={e.key}>
+                {e.bubbles.map((b) => (
+                  <MessageBubble key={b.key} bubble={b} sender={sender} onMenu={(x, y, msg) => setMenu({ x, y, msg })} />
+                ))}
+              </div>
+            ),
+          )}
+        </div>
+      </div>
+      {showDown && (
+        <button
+          type="button"
+          class="ScrollDown"
+          aria-label="回到底部"
+          onClick={() => ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: 'smooth' })}
+        >
+          <ArrowDown size={24} />
+        </button>
+      )}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.msg)} onClose={() => setMenu(null)} />}
+      {confirm && (
+        <ConfirmDialog
+          title="删除存档"
+          text="将从存档中删除这条消息；没有其他消息引用的媒体文件会一并删除。此操作无法撤销。"
+          confirmLabel="删除"
+          danger
+          busy={deleting}
+          onConfirm={() => void doDelete()}
+          onClose={() => setConfirm(null)}
+        />
+      )}
+    </div>
+  );
+}
