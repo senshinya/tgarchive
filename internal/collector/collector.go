@@ -134,13 +134,22 @@ func (m *Manager) Running(botID int64) bool {
 }
 
 func (m *Manager) run(ctx context.Context, botID int64) {
-	cl, err := m.d.Clients.Get(ctx, botID)
+	bot, err := m.d.Store.GetBot(ctx, botID)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		m.fail(botID, err)
 		return
 	}
-	bot, err := m.d.Store.GetBot(ctx, botID)
+	if bot.Status == store.StatusRemoved || !bot.Enabled {
+		return
+	}
+	cl, err := m.d.Clients.Get(ctx, botID)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		m.fail(botID, err)
 		return
 	}

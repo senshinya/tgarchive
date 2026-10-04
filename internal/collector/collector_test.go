@@ -227,3 +227,52 @@ func TestStartAllAndStop(t *testing.T) {
 		t.Fatal("Stop must wait for the worker to exit")
 	}
 }
+
+// Regression: cancelling the worker ctx during startup (Store.GetBot / Clients.Get) must not be
+// mistaken for a fatal error. Looped to land on the startup race window.
+func TestStopDuringStartupNoFalseAlert(t *testing.T) {
+	e := setup(t, nil)
+	for i := 0; i < 20; i++ {
+		e.m.Start(e.bot)
+		e.m.Stop(e.bot)
+	}
+	if e.n.count() != 0 {
+		t.Fatalf("notifications = %v", e.n.msgs)
+	}
+	if b, _ := e.st.GetBot(bg, e.bot); b.Status == store.StatusError {
+		t.Fatalf("status = %s, last_error = %q", b.Status, b.LastError)
+	}
+}
+
+func TestRemovedBotWorkerExitsQuietly(t *testing.T) {
+	e := setup(t, nil)
+	if err := e.st.RemoveBot(bg, e.bot); err != nil {
+		t.Fatal(err)
+	}
+	e.m.Start(e.bot)
+	eventually(t, "worker exit", func() bool { return !e.m.Running(e.bot) })
+	if b, _ := e.st.GetBot(bg, e.bot); b.Status != store.StatusRemoved {
+		t.Fatalf("status = %s", b.Status)
+	}
+	if e.n.count() != 0 {
+		t.Fatalf("notifications = %v", e.n.msgs)
+	}
+	if len(e.fake.Calls("getUpdates")) != 0 {
+		t.Fatal("removed bot must never reach the Bot API client")
+	}
+}
+
+func TestDisabledBotWorkerExitsQuietly(t *testing.T) {
+	e := setup(t, nil)
+	if err := e.st.SetBotEnabled(bg, e.bot, false); err != nil {
+		t.Fatal(err)
+	}
+	e.m.Start(e.bot)
+	eventually(t, "worker exit", func() bool { return !e.m.Running(e.bot) })
+	if b, _ := e.st.GetBot(bg, e.bot); b.Status == store.StatusError {
+		t.Fatalf("status = %s", b.Status)
+	}
+	if e.n.count() != 0 {
+		t.Fatalf("notifications = %v", e.n.msgs)
+	}
+}
