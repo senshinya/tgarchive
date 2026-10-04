@@ -25,19 +25,19 @@ func (b *BotSource) Fetch(ctx context.Context, m *store.Media, dstBase string) (
 	}
 	f, err := cl.GetFile(ctx, m.SourceRef)
 	if err != nil {
-		return "", 0, err
+		return "", 0, cl.Redact(err)
 	}
 	local, err := b.Mapper.Map(f.FilePath)
 	if err != nil {
-		return "", 0, err
+		return "", 0, cl.Redact(err)
 	}
 	dst := dstBase + strings.ToLower(filepath.Ext(local))
 	if err := botapifs.LinkOrCopy(local, dst); err != nil {
-		return "", 0, err
+		return "", 0, cl.Redact(err)
 	}
 	st, err := os.Stat(dst)
 	if err != nil {
-		return "", 0, err
+		return "", 0, cl.Redact(err)
 	}
 	_ = os.Remove(local)
 	return dst, st.Size(), nil

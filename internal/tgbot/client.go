@@ -83,6 +83,14 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 	return json.Unmarshal(env.Result, out)
 }
 
+// Redact returns err with every occurrence of this client's token replaced. A nil err stays nil.
+func (c *Client) Redact(err error) error {
+	if err == nil {
+		return nil
+	}
+	return c.redact(err)
+}
+
 func (c *Client) redact(err error) error {
 	if c.token == "" {
 		return err

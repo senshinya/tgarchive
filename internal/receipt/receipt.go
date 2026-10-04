@@ -6,6 +6,7 @@ import (
 	"log"
 	"sync"
 
+	"tgarchive/internal/botapifs"
 	"tgarchive/internal/model"
 	"tgarchive/internal/store"
 )
@@ -80,7 +81,7 @@ func (e *Engine) Evaluate(ctx context.Context, messageID int64) {
 			if info.Receipt == store.ReceiptNone {
 				e.reactLogOnly(ctx, info, EmojiSeen)
 			}
-			if err := e.reply(ctx, info, textFailedPrefix+truncate(firstErr, 200)); err == nil {
+			if err := e.reply(ctx, info, textFailedPrefix+truncate(botapifs.RedactPath(firstErr), 200)); err == nil {
 				e.set(ctx, messageID, store.ReceiptFailed)
 			}
 		}

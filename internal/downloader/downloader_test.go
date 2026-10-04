@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -192,8 +193,25 @@ func TestBotSource(t *testing.T) {
 		t.Fatal("bot api cache file must be removed after archiving")
 	}
 	bad := &BotSource{Clients: reg.Get, Mapper: botapifs.Mapper{Remote: "/nowhere", Local: "/nowhere"}}
-	if _, _, err := bad.Fetch(ctx, m, dstBase); err == nil {
+	fake.AddFile("fid", []byte("img!"))
+	_, _, err = bad.Fetch(ctx, m, dstBase)
+	if err == nil {
 		t.Fatal("path outside the shared dir must fail")
+	}
+	if strings.Contains(err.Error(), "777:AAAA") || strings.Contains(err.Error(), "AAAAAAAA") {
+		t.Fatalf("Fetch error leaks the bot token: %v", err)
+	}
+}
+
+func TestFailureErrorIsRedacted(t *testing.T) {
+	f, _, m := setup(t, 4)
+	d := f.newDL(0)
+	tok := "777:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	d.Register("bot", &fakeSource{errs: []error{errors.New("open /var/lib/telegram-bot-api/" + tok + "/documents/file_1: no such file")}})
+	d.Process(ctx, m)
+	got, _ := f.st.GetMedia(ctx, m.ID)
+	if strings.Contains(got.Error, "AAAAAAAA") || !strings.Contains(got.Error, "<bot>/documents/file_1") {
+		t.Fatalf("stored error = %q", got.Error)
 	}
 }
 

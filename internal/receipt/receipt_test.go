@@ -42,9 +42,9 @@ func (r *rec) take() []string {
 }
 
 type failThenSucceed struct {
-	mu       sync.Mutex
-	fails    int // how many more times to fail
-	calls    []string
+	mu        sync.Mutex
+	fails     int // how many more times to fail
+	calls     []string
 	failReact bool
 }
 
@@ -236,5 +236,16 @@ func TestRetriesOnReplyFailure(t *testing.T) {
 	info, _ = v.st.GetReceiptInfo(ctx, id)
 	if info.Receipt != store.ReceiptFailed {
 		t.Fatalf("receipt should be failed, got %s", info.Receipt)
+	}
+}
+
+func TestFailureReplyRedactsToken(t *testing.T) {
+	v := newEnv(t)
+	_, mids := v.ingest(t, 10, model.SourceBotUpdate, "bot:a")
+	v.st.MarkMediaFailed(ctx, mids[0], 4, "open /x/777:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/documents/f: denied")
+	v.e.MediaSettled(ctx, mids[0])
+	got := v.tr.(*rec).take()
+	if len(got) != 2 || got[1] != "reply 42 10 ⚠️ 存档失败：open /x/<bot>/documents/f: denied" {
+		t.Fatalf("calls = %v", got)
 	}
 }

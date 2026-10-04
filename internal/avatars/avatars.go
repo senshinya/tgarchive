@@ -72,7 +72,7 @@ func (r *Refresher) fetch(ctx context.Context, botID, userID int64, rel string) 
 	}
 	ph, err := cl.GetUserProfilePhotos(ctx, userID, 1)
 	if err != nil {
-		log.Printf("avatars: profile photos of %d: %v", userID, err)
+		log.Printf("avatars: profile photos of %d: %v", userID, cl.Redact(err))
 		return false
 	}
 	if len(ph.Photos) == 0 || len(ph.Photos[0]) == 0 {
@@ -86,21 +86,21 @@ func (r *Refresher) fetch(ctx context.Context, botID, userID int64, rel string) 
 	}
 	f, err := cl.GetFile(ctx, pick.FileID)
 	if err != nil {
-		log.Printf("avatars: getFile for %d: %v", userID, err)
+		log.Printf("avatars: getFile for %d: %v", userID, cl.Redact(err))
 		return false
 	}
 	local, err := r.Mapper.Map(f.FilePath)
 	if err != nil {
-		log.Printf("avatars: %v", err)
+		log.Printf("avatars: %s", botapifs.RedactPath(cl.Redact(err).Error()))
 		return false
 	}
 	dst := filepath.Join(r.Dir, rel)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		log.Printf("avatars: %v", err)
+		log.Printf("avatars: %s", botapifs.RedactPath(err.Error()))
 		return false
 	}
 	if err := botapifs.LinkOrCopy(local, dst); err != nil {
-		log.Printf("avatars: store %s: %v", rel, err)
+		log.Printf("avatars: store %s: %s", rel, botapifs.RedactPath(cl.Redact(err).Error()))
 		return false
 	}
 	_ = os.Remove(local)

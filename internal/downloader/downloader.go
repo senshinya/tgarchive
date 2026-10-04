@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"tgarchive/internal/botapifs"
 	"tgarchive/internal/store"
 )
 
@@ -164,7 +165,7 @@ func (d *Downloader) Process(ctx context.Context, m *store.Media) {
 func (d *Downloader) retry(ctx context.Context, m *store.Media, cause error) {
 	n := m.Attempts + 1
 	if n > len(d.Delays) {
-		if err := d.st.MarkMediaFailed(ctx, m.ID, n, cause.Error()); err != nil {
+		if err := d.st.MarkMediaFailed(ctx, m.ID, n, botapifs.RedactPath(cause.Error())); err != nil {
 			log.Printf("downloader: mark media %d failed: %v", m.ID, err)
 			return
 		}
@@ -172,7 +173,7 @@ func (d *Downloader) retry(ctx context.Context, m *store.Media, cause error) {
 		return
 	}
 	next := d.Now().Add(d.Delays[n-1]).Unix()
-	if err := d.st.MarkMediaRetry(ctx, m.ID, n, next, cause.Error()); err != nil {
+	if err := d.st.MarkMediaRetry(ctx, m.ID, n, next, botapifs.RedactPath(cause.Error())); err != nil {
 		log.Printf("downloader: schedule retry for media %d: %v", m.ID, err)
 	}
 }

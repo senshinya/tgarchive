@@ -9,9 +9,35 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// tokenSegment matches a bot token ("<bot_id>:<secret>"), which the local Bot API server
+// uses as a directory name in every file path it returns.
+var tokenSegment = regexp.MustCompile(`\d+:[A-Za-z0-9_-]{30,}`)
+
+// RedactPath replaces every bot token in s with "<bot>".
+func RedactPath(s string) string {
+	return tokenSegment.ReplaceAllString(s, "<bot>")
+}
+
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.err }
+
+// redactErr keeps errors.Is/As working while its message never carries a bot token.
+func redactErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &redactedError{msg: RedactPath(err.Error()), err: err}
+}
 
 // Mapper translates paths returned by getFile (inside the Bot API container)
 // into paths inside this container.
@@ -22,11 +48,11 @@ type Mapper struct {
 
 func (m Mapper) Map(remote string) (string, error) {
 	if !filepath.IsAbs(remote) {
-		return "", fmt.Errorf("bot api file path %q is not absolute", remote)
+		return "", fmt.Errorf("bot api file path %q is not absolute", RedactPath(remote))
 	}
 	rel, err := filepath.Rel(m.Remote, filepath.Clean(remote))
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("bot api file path %q is outside %s", remote, m.Remote)
+		return "", fmt.Errorf("bot api file path %q is outside %s", RedactPath(remote), RedactPath(m.Remote))
 	}
 	return filepath.Join(m.Local, rel), nil
 }
@@ -57,7 +83,7 @@ func (m Mapper) CleanOlderThan(age time.Duration, now time.Time) (int, error) {
 		if now.Sub(info.ModTime()) > age {
 			if rmErr := os.Remove(p); rmErr != nil {
 				if !errors.Is(rmErr, fs.ErrNotExist) {
-					log.Printf("botapifs: remove %s: %v", p, rmErr)
+					log.Printf("botapifs: remove %s: %v", RedactPath(p), RedactPath(rmErr.Error()))
 					rmErrs = append(rmErrs, rmErr)
 				}
 			} else {
@@ -67,10 +93,10 @@ func (m Mapper) CleanOlderThan(age time.Duration, now time.Time) (int, error) {
 		return nil
 	})
 	if err != nil {
-		return n, err
+		return n, redactErr(err)
 	}
 	if len(rmErrs) > 0 {
-		return n, errors.Join(rmErrs...)
+		return n, redactErr(errors.Join(rmErrs...))
 	}
 	return n, nil
 }
@@ -78,6 +104,10 @@ func (m Mapper) CleanOlderThan(age time.Duration, now time.Time) (int, error) {
 // LinkOrCopy places src at dst, replacing dst. A hard link is tried first (same filesystem),
 // falling back to copy-then-rename so dst is never observed half-written.
 func LinkOrCopy(src, dst string) error {
+	return redactErr(linkOrCopy(src, dst))
+}
+
+func linkOrCopy(src, dst string) error {
 	if err := os.Remove(dst); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}

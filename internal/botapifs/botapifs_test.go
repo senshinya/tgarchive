@@ -3,6 +3,7 @@ package botapifs
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,5 +87,30 @@ func TestCleanOlderThanPermissionDenied(t *testing.T) {
 	}
 	if _, e := os.Stat(file); e != nil {
 		t.Fatal("old file should still exist after failed removal")
+	}
+}
+
+func TestRedactPath(t *testing.T) {
+	tok := "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	in := "open /var/lib/telegram-bot-api/" + tok + "/documents/file_1: no such file"
+	got := RedactPath(in)
+	if got != "open /var/lib/telegram-bot-api/<bot>/documents/file_1: no such file" {
+		t.Fatalf("RedactPath = %q", got)
+	}
+	if RedactPath("1:tok/photos") != "1:tok/photos" {
+		t.Fatal("short non-token segments must be left alone")
+	}
+}
+
+func TestErrorsRedactToken(t *testing.T) {
+	tok := "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	_, err := Mapper{Remote: "/elsewhere", Local: "/x"}.Map("/var/lib/telegram-bot-api/" + tok + "/documents/f")
+	if err == nil || strings.Contains(err.Error(), "AAAAAAAA") {
+		t.Fatalf("Map error leaks token: %v", err)
+	}
+	dir := t.TempDir()
+	err = LinkOrCopy(filepath.Join(dir, tok, "missing"), filepath.Join(dir, "dst"))
+	if err == nil || strings.Contains(err.Error(), "AAAAAAAA") {
+		t.Fatalf("LinkOrCopy error leaks token: %v", err)
 	}
 }
