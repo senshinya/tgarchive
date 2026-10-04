@@ -46,6 +46,15 @@ func (s *Server) addBot(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "token 格式不正确")
 		return
 	}
+	if s.BotAPI != nil {
+		if _, err := s.TgApp.Load(r.Context()); errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusConflict, "请先在设置中填写 api_id / api_hash")
+			return
+		} else if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	steps := []step{}

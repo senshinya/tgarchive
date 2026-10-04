@@ -16,10 +16,10 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Listen != ":8080" || c.DataDir != "/data" || c.BotAPIURL != "http://tgarchive-botapi:8081" || c.CloudAPIURL != "https://api.telegram.org" {
+	if c.Listen != ":8080" || c.DataDir != "/data" || c.BotAPIURL != "http://127.0.0.1:8081" || c.CloudAPIURL != "https://api.telegram.org" {
 		t.Fatalf("unexpected defaults: %+v", c)
 	}
-	if c.BotAPIDirRemote != "/var/lib/telegram-bot-api" || c.BotAPIDirLocal != "/data/botapi" {
+	if c.BotAPIDirRemote != "/data/botapi" || c.BotAPIDirLocal != "/data/botapi" {
 		t.Fatalf("unexpected dirs: %+v", c)
 	}
 	if !c.RequireForwardAuth {
@@ -27,6 +27,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if c.MediaMaxBytes != 0 || c.PollTimeoutSec != 50 || len(c.TokenEncKey) != 32 {
 		t.Fatalf("unexpected values: %+v", c)
+	}
+	if !c.ManageBotAPI || c.BotAPIBinary != "telegram-bot-api" {
+		t.Fatalf("unexpected bot api management defaults: %+v", c)
 	}
 }
 
@@ -52,6 +55,7 @@ func TestLoadRejects(t *testing.T) {
 		"short key":          {"TOKEN_ENC_KEY": "abcd"},
 		"non-hex key":        {"TOKEN_ENC_KEY": strings.Repeat("zz", 32)},
 		"bad forward auth":   {"TOKEN_ENC_KEY": validKey, "REQUIRE_FORWARD_AUTH": "yes"},
+		"bad managed":        {"TOKEN_ENC_KEY": validKey, "BOT_API_MANAGED": "yes"},
 		"quoted max bytes":   {"TOKEN_ENC_KEY": validKey, "MEDIA_MAX_BYTES": `"100"`},
 		"negative max bytes": {"TOKEN_ENC_KEY": validKey, "MEDIA_MAX_BYTES": "-1"},
 	}

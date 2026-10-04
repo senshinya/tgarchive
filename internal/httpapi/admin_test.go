@@ -20,6 +20,7 @@ import (
 	"tgarchive/internal/receipt"
 	"tgarchive/internal/seal"
 	"tgarchive/internal/store"
+	"tgarchive/internal/tgapp"
 	"tgarchive/internal/tgtest"
 )
 
@@ -50,6 +51,7 @@ func newAdminEnv(t *testing.T) *adminEnv {
 	srv := &Server{
 		Cfg:   &config.Config{RequireForwardAuth: true, BotAPIURL: fake.URL(), CloudAPIURL: fake.URL()},
 		Store: st, Box: box, Clients: reg, Manager: mgr, Downloader: dl, Hub: hub,
+		TgApp:    tgapp.New(st, box),
 		MediaDir: mediaDir, AvatarDir: t.TempDir(), Now: time.Now,
 	}
 	return &adminEnv{h: srv.Handler(), st: st, fake: fake, mgr: mgr}

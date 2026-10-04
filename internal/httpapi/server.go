@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"tgarchive/internal/avatars"
+	"tgarchive/internal/botapiserver"
 	"tgarchive/internal/botclients"
 	"tgarchive/internal/collector"
 	"tgarchive/internal/config"
@@ -19,6 +20,7 @@ import (
 	"tgarchive/internal/events"
 	"tgarchive/internal/seal"
 	"tgarchive/internal/store"
+	"tgarchive/internal/tgapp"
 )
 
 type Server struct {
@@ -30,6 +32,8 @@ type Server struct {
 	Downloader *downloader.Downloader
 	Hub        *events.Hub
 	Avatars    *avatars.Refresher
+	TgApp      *tgapp.Store
+	BotAPI     *botapiserver.Supervisor // nil when the Bot API server is not managed by this process
 	Web        fs.FS
 	MediaDir   string
 	AvatarDir  string
@@ -50,6 +54,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /media/{id}", s.serveMedia)
 	mux.HandleFunc("GET /avatars/{kind}/{id}", s.serveAvatar)
 	s.adminRoutes(mux)
+	s.settingsRoutes(mux)
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) { writeErr(w, http.StatusNotFound, "not found") })
 	mux.Handle("GET /", s.spa())
 	return s.auth(mux)

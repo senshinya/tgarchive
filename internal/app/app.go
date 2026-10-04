@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"tgarchive/internal/avatars"
 	"tgarchive/internal/botapifs"
+	"tgarchive/internal/botapiserver"
 	"tgarchive/internal/botclients"
 	"tgarchive/internal/collector"
 	"tgarchive/internal/config"
@@ -22,6 +24,7 @@ import (
 	"tgarchive/internal/receipt"
 	"tgarchive/internal/seal"
 	"tgarchive/internal/store"
+	"tgarchive/internal/tgapp"
 	"tgarchive/web"
 )
 
@@ -35,6 +38,8 @@ type App struct {
 	dl     *downloader.Downloader
 	av     *avatars.Refresher
 	mapper botapifs.Mapper
+	tg     *tgapp.Store
+	sup    *botapiserver.Supervisor
 	wg     sync.WaitGroup
 }
 
@@ -73,17 +78,31 @@ func New(parent context.Context, cfg *config.Config) (*App, error) {
 		Notifier: &notify.Bark{File: cfg.BarkNotifyFile}, Avatars: av,
 		MediaDir: mediaDir, PollTimeoutSec: cfg.PollTimeoutSec,
 	})
+	tg := tgapp.New(st, box)
+	var sup *botapiserver.Supervisor
+	if cfg.ManageBotAPI {
+		sup = botapiserver.New(cfg.BotAPIBinary, cfg.BotAPIDirLocal, filepath.Join(cfg.DataDir, "botapi-tmp"), 8081)
+	}
 	srv := &httpapi.Server{
 		Cfg: cfg, Store: st, Box: box, Clients: clients, Manager: mgr, Downloader: dl, Hub: hub, Avatars: av,
+		TgApp: tg, BotAPI: sup,
 		Web: web.FS(), MediaDir: mediaDir, AvatarDir: avatarDir, HTTP: hc, Now: time.Now,
 	}
-	return &App{Handler: srv.Handler(), ctx: ctx, cancel: cancel, st: st, mgr: mgr, dl: dl, av: av, mapper: mapper}, nil
+	return &App{Handler: srv.Handler(), ctx: ctx, cancel: cancel, st: st, mgr: mgr, dl: dl, av: av, mapper: mapper, tg: tg, sup: sup}, nil
 }
 
 func (a *App) Start() error {
 	a.wg.Add(2)
 	go func() { defer a.wg.Done(); a.dl.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.maintain() }()
+	if a.sup != nil {
+		creds, err := a.tg.Load(a.ctx)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		a.wg.Add(1)
+		go func() { defer a.wg.Done(); a.sup.Run(a.ctx, creds) }()
+	}
 	return a.mgr.StartAll(a.ctx)
 }
 
