@@ -145,6 +145,7 @@ func (s *Supervisor) start(c tgapp.Credentials) (*exec.Cmd, <-chan error, error)
 		"TELEGRAM_API_HASH=" + c.APIHash,
 	}, s.Env...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	setPdeathsig(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, nil, err
 	}
