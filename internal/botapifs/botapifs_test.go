@@ -64,3 +64,27 @@ func TestLinkOrCopy(t *testing.T) {
 		t.Fatalf("dst = %q", b)
 	}
 }
+
+func TestCleanOlderThanPermissionDenied(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, permissions are ignored")
+	}
+	root := t.TempDir()
+	now := time.Now()
+	old := now.Add(-48 * time.Hour)
+	dir := filepath.Join(root, "1:tok", "photos")
+	os.MkdirAll(dir, 0o755)
+	file := filepath.Join(dir, "old.jpg")
+	write(t, file, old)
+	os.Chmod(dir, 0o555)
+	t.Cleanup(func() {
+		os.Chmod(dir, 0o755)
+	})
+	_, err := Mapper{Local: root}.CleanOlderThan(24*time.Hour, now)
+	if err == nil {
+		t.Fatal("CleanOlderThan must return error on permission denied")
+	}
+	if _, e := os.Stat(file); e != nil {
+		t.Fatal("old file should still exist after failed removal")
+	}
+}

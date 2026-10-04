@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,7 @@ func (m Mapper) CleanOlderThan(age time.Duration, now time.Time) (int, error) {
 		return 0, nil
 	}
 	n := 0
+	var rmErrs []error
 	err := filepath.WalkDir(m.Local, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -52,12 +54,25 @@ func (m Mapper) CleanOlderThan(age time.Duration, now time.Time) (int, error) {
 		if err != nil {
 			return nil
 		}
-		if now.Sub(info.ModTime()) > age && os.Remove(p) == nil {
-			n++
+		if now.Sub(info.ModTime()) > age {
+			if rmErr := os.Remove(p); rmErr != nil {
+				if !errors.Is(rmErr, fs.ErrNotExist) {
+					log.Printf("botapifs: remove %s: %v", p, rmErr)
+					rmErrs = append(rmErrs, rmErr)
+				}
+			} else {
+				n++
+			}
 		}
 		return nil
 	})
-	return n, err
+	if err != nil {
+		return n, err
+	}
+	if len(rmErrs) > 0 {
+		return n, errors.Join(rmErrs...)
+	}
+	return n, nil
 }
 
 // LinkOrCopy places src at dst, replacing dst. A hard link is tried first (same filesystem),
