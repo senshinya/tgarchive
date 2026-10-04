@@ -141,7 +141,7 @@ func TestUnauthorizedMarksErrorAndNotifiesOnce(t *testing.T) {
 	// attach() has run. Racing it straight after "session dropped" would intermittently observe
 	// the brief in-between window where s.auth is nil and get ErrNotConnected.
 	eventually(t, "reconnected", func() bool {
-		_, state, err := e.svc.loginClient()
+		_, state, _, err := e.svc.loginClient()
 		return err == nil && state == StateError
 	})
 	// Re-login is allowed from the error state.
@@ -295,7 +295,7 @@ func TestLogoutWhileDisconnectedDoesNotWipeFutureLogin(t *testing.T) {
 	// set that same state directly before Run() even started, so checking state alone would be
 	// satisfied instantly and wouldn't actually wait for attach().
 	eventually(t, "connected and logged_out", func() bool {
-		_, state, err := svc.loginClient()
+		_, state, _, err := svc.loginClient()
 		return err == nil && state == StateLoggedOut
 	})
 
@@ -382,5 +382,150 @@ func TestSessionStoreEncrypts(t *testing.T) {
 	got, err := ss.LoadSession(ctx)
 	if err != nil || string(got) != `{"auth":"secret"}` {
 		t.Fatalf("load = %q, %v", got, err)
+	}
+}
+
+// TestLogoutDuringSignInRevokesStaleLogin: Logout lands while auth.signIn is in flight, and
+// Telegram processes the logOut before the signIn (so the signIn re-authorizes the key). The
+// stale success must not mark the account ready; it must be revoked and the logout must stick.
+func TestLogoutDuringSignInRevokesStaleLogin(t *testing.T) {
+	f := newFakeTG()
+	e := newSvcWith(t, &keyedDialer{tg: f})
+	e.start(t)
+	e.waitState(t, StateLoggedOut)
+	eventually(t, "code sent", func() bool { return e.svc.SendCode(ctx, "+8613800000000") == nil })
+	var once sync.Once
+	f.set(func(f *fakeTG) {
+		f.before = func(req bin.Encoder) {
+			if _, ok := req.(*tg.AuthSignInRequest); ok {
+				once.Do(func() {
+					if err := e.svc.Logout(ctx); err != nil {
+						t.Errorf("Logout = %v", err)
+					}
+				})
+			}
+		}
+	})
+	if _, err := e.svc.SignIn(ctx, "12345"); !errors.Is(err, ErrBadState) {
+		t.Fatalf("stale SignIn err = %v, want ErrBadState", err)
+	}
+	eventually(t, "logged out for good", func() bool {
+		u, _ := e.st.GetUserbot(ctx)
+		return e.svc.Status(ctx).State == StateLoggedOut && u.Status == store.UserbotLoggedOut && u.TgUserID == 0
+	})
+	time.Sleep(100 * time.Millisecond)
+	u, _ := e.st.GetUserbot(ctx)
+	if st := e.svc.Status(ctx).State; st != StateLoggedOut || u.Status != store.UserbotLoggedOut || u.TgUserID != 0 {
+		t.Fatalf("logout undone: state=%s db=%+v", st, u)
+	}
+	if e.n.count() != 0 {
+		t.Fatalf("notifications = %d, want 0", e.n.count())
+	}
+	f.mu.Lock()
+	authorized := f.authorized
+	f.mu.Unlock()
+	if authorized {
+		t.Fatal("stale authorization was left live on Telegram")
+	}
+}
+
+// TestLogoutDuringDialDoesNotResurrectSession: Logout lands after gotd loaded the stored session
+// but before the connection is up. The connection must not re-save the key Logout just cleared,
+// and the stale "authorized" status must be revoked rather than marked ready.
+func TestLogoutDuringDialDoesNotResurrectSession(t *testing.T) {
+	f := newFakeTG()
+	f.authorized = true
+	loaded, release := make(chan struct{}), make(chan struct{})
+	d := &keyedDialer{tg: f, hold: func() { close(loaded); <-release }}
+	e := newSvcWith(t, d)
+	if err := e.st.SetUserbotAccount(ctx, "+100", 99, "Me", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.sess.StoreSession(ctx, []byte("old-key")); err != nil {
+		t.Fatal(err)
+	}
+	e.start(t)
+	<-loaded
+	if err := e.svc.Logout(ctx); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	eventually(t, "logged out and session gone", func() bool {
+		u, _ := e.st.GetUserbot(ctx)
+		return e.svc.Status(ctx).State == StateLoggedOut && u.Status == store.UserbotLoggedOut && u.TgUserID == 0 &&
+			f.called("*tg.AuthLogOutRequest") >= 1
+	})
+	time.Sleep(100 * time.Millisecond)
+	u, _ := e.st.GetUserbot(ctx)
+	if st := e.svc.Status(ctx).State; st != StateLoggedOut || u.Status != store.UserbotLoggedOut || u.TgUserID != 0 {
+		t.Fatalf("logout undone: state=%s db=%+v", st, u)
+	}
+	if string(u.SessionEnc) != "" {
+		if plain, err := e.box.Open(u.SessionEnc); err == nil && string(plain) == "old-key" {
+			t.Fatal("cleared session key was re-saved by the connection")
+		}
+	}
+	if f.called("*tg.AuthLogOutRequest") == 0 {
+		t.Fatal("stale authorization was not revoked")
+	}
+	if e.n.count() != 0 {
+		t.Fatalf("notifications = %d, want 0", e.n.count())
+	}
+}
+
+// TestLogoutDuringWithDoesNotAlert: Logout revokes the key while a long With() (e.g. a media
+// download) is in flight; the 401 that call then gets is the logout's doing, not a revocation.
+func TestLogoutDuringWithDoesNotAlert(t *testing.T) {
+	f := newFakeTG()
+	f.authorized = true
+	e := newSvcEnv(t, f, true)
+	e.waitState(t, StateReady)
+	started, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- e.svc.With(ctx, func(*tg.Client) error {
+			close(started)
+			<-release
+			return unauthorizedErr()
+		})
+	}()
+	<-started
+	if err := e.svc.Logout(ctx); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-done; !errors.Is(err, ErrNotReady) {
+		t.Fatalf("With err = %v", err)
+	}
+	eventually(t, "account cleared", func() bool {
+		u, _ := e.st.GetUserbot(ctx)
+		return u.Status == store.UserbotLoggedOut && u.TgUserID == 0
+	})
+	time.Sleep(100 * time.Millisecond)
+	if st := e.svc.Status(ctx).State; st != StateLoggedOut {
+		t.Fatalf("state = %s, want logged_out", st)
+	}
+	if u, _ := e.st.GetUserbot(ctx); u.Status != store.UserbotLoggedOut {
+		t.Fatalf("db = %+v", u)
+	}
+	if e.n.count() != 0 {
+		t.Fatalf("notifications = %d, want 0 (false 代取账号失效 alert)", e.n.count())
+	}
+}
+
+// TestReconnectKeepsPhoneWhenUserHasNone: an authorized reconnect whose self user carries no
+// phone (privacy) must not blank the phone recorded at login.
+func TestReconnectKeepsPhoneWhenUserHasNone(t *testing.T) {
+	f := newFakeTG()
+	f.authorized = true
+	f.user.Phone = ""
+	e := newSvcWith(t, &fakeDialer{tg: f})
+	if err := e.st.SetUserbotAccount(ctx, "+8613800000000", 99, "Me Self", 1); err != nil {
+		t.Fatal(err)
+	}
+	e.start(t)
+	e.waitState(t, StateReady)
+	if u, _ := e.st.GetUserbot(ctx); u.Phone != "+8613800000000" {
+		t.Fatalf("phone = %q, want kept", u.Phone)
 	}
 }

@@ -3,6 +3,7 @@ package userbot
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -30,6 +31,9 @@ type fakeTG struct {
 	user       *tg.User
 	calls      []string
 	extra      func(req bin.Encoder) (bin.Encoder, error)
+	// before, when set, runs ahead of every request without f.mu held, so it may itself drive
+	// the Service (including RPCs that come back through handle).
+	before func(req bin.Encoder)
 }
 
 func newFakeTG() *fakeTG {
@@ -59,6 +63,12 @@ func (f *fakeTG) called(typ string) int {
 }
 
 func (f *fakeTG) handle(req bin.Encoder) (bin.Encoder, error) {
+	f.mu.Lock()
+	before := f.before
+	f.mu.Unlock()
+	if before != nil {
+		before(req)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, fmt.Sprintf("%T", req))
@@ -92,6 +102,65 @@ type fakeDialer struct{ tg *fakeTG }
 
 func (d *fakeDialer) Dial(ctx context.Context, _ tgapp.Credentials, _ session.Storage, fn func(context.Context, *tg.Client) error) error {
 	return fn(ctx, tg.NewClient(tgmock.Invoker(d.tg.handle)))
+}
+
+// keyedDialer models auth keys the way gotd does: a connection with no stored session starts a
+// brand-new, unauthorized key (and persists it); one with a stored session reuses it, keeping
+// whatever authorization that key has. hold, when set, is called once on the first Dial after the
+// session has been loaded and before it is re-saved — the window gotd's own session load/save
+// happens in during connection setup.
+type keyedDialer struct {
+	tg   *fakeTG
+	mu   sync.Mutex
+	hold func()
+}
+
+func (d *keyedDialer) Dial(ctx context.Context, _ tgapp.Credentials, sess session.Storage, fn func(context.Context, *tg.Client) error) error {
+	data, err := sess.LoadSession(ctx)
+	if err != nil && !errors.Is(err, session.ErrNotFound) {
+		return err
+	}
+	d.mu.Lock()
+	hold := d.hold
+	d.hold = nil
+	d.mu.Unlock()
+	if hold != nil {
+		hold()
+	}
+	if len(data) == 0 {
+		d.tg.set(func(f *fakeTG) { f.authorized = false })
+		data = []byte("fresh-key")
+	}
+	if err := sess.StoreSession(ctx, data); err != nil {
+		return err
+	}
+	return fn(ctx, tg.NewClient(tgmock.Invoker(d.tg.handle)))
+}
+
+// newSvcWith runs a Service over its own store with the given dialer (configured credentials).
+func newSvcWith(t *testing.T, d Dialer) *svcEnv {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	box, _ := seal.New(bytes.Repeat([]byte{2}, 32))
+	creds := tgapp.New(st, box)
+	if err := creds.Save(ctx, tgapp.Credentials{APIID: 1, APIHash: "0123456789abcdef0123456789abcdef"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	n := &countNotifier{}
+	return &svcEnv{svc: New(st, box, creds, d, n), st: st, box: box, creds: creds, n: n}
+}
+
+// start runs the service loop until the test ends.
+func (e *svcEnv) start(t *testing.T) {
+	t.Helper()
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { e.svc.Run(runCtx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
 }
 
 type countNotifier struct {

@@ -127,9 +127,15 @@ func (s *Service) Run(ctx context.Context) {
 			continue
 		}
 		s.setState(StateConnecting, "")
+		// gen pins this connection to the logout generation current before dialing: gotd loads
+		// (and re-saves) the session inside Dial, so a Logout landing anywhere from here on must
+		// be able to tell this connection's work apart from that of a post-logout one.
+		s.mu.Lock()
+		gen := s.logoutGen
+		s.mu.Unlock()
 		attached := false
-		err = s.dialer.Dial(ctx, *creds, s.sess, func(cctx context.Context, api *tg.Client) error {
-			if err := s.attach(cctx, api, creds); err != nil {
+		err = s.dialer.Dial(ctx, *creds, &connSession{s: s, gen: gen}, func(cctx context.Context, api *tg.Client) error {
+			if err := s.attach(cctx, api, creds, gen); err != nil {
 				return err
 			}
 			attached = true
@@ -167,10 +173,8 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 
-func (s *Service) attach(ctx context.Context, api *tg.Client, creds *tgapp.Credentials) error {
-	s.mu.Lock()
-	gen := s.logoutGen
-	s.mu.Unlock()
+// attach adopts a fresh connection. gen is the logout generation captured before dialing it.
+func (s *Service) attach(ctx context.Context, api *tg.Client, creds *tgapp.Credentials, gen uint64) error {
 	a := auth.NewClient(api, rand.Reader, creds.APIID, creds.APIHash)
 	st, err := a.Status(ctx)
 	if err != nil {
@@ -178,19 +182,16 @@ func (s *Service) attach(ctx context.Context, api *tg.Client, creds *tgapp.Crede
 	}
 	s.mu.Lock()
 	s.api, s.auth = api, a
-	loggedOutMeanwhile := s.logoutGen != gen
 	s.mu.Unlock()
 	if st.Authorized {
-		if loggedOutMeanwhile {
-			// Logout() ran while auth.Status was still in flight: at that point s.api/s.auth
-			// were still nil, so Logout took the "not connected" branch (direct ClearUserbot)
-			// and armed clearAll. A stale "authorized" answer from the RPC that was already
-			// in flight must not resurrect the account; stay logged out and let detach()
-			// apply the pending clearAll once this connection is torn down.
+		err := s.markReady(ctx, gen, st.User, "")
+		if errors.Is(err, ErrBadState) {
+			// Logout() ran since this connection was dialed: markReady has revoked the stale
+			// authorization and armed clearAll for detach(); stay logged out.
 			s.setState(StateLoggedOut, "")
 			return nil
 		}
-		return s.markReady(ctx, st.User, "")
+		return err
 	}
 	u, err := s.st.GetUserbot(ctx)
 	if err != nil {
@@ -198,7 +199,7 @@ func (s *Service) attach(ctx context.Context, api *tg.Client, creds *tgapp.Crede
 	}
 	switch u.Status {
 	case store.UserbotReady:
-		s.unauthorized(ctx) // the session was revoked while we were offline
+		s.unauthorized(ctx, gen) // the session was revoked while we were offline
 	case store.UserbotError:
 		s.setState(StateError, u.LastError)
 	default:
@@ -226,20 +227,47 @@ func (s *Service) detach(ctx context.Context) {
 	}
 }
 
-func (s *Service) markReady(ctx context.Context, u *tg.User, phone string) error {
+// markReady records a successful authorization obtained under logout generation gen. If a
+// Logout() has happened since (gen is stale), the authorization is revoked instead and
+// ErrBadState is returned: the user asked to be logged out, and Telegram may have re-authorized
+// the key anyway (e.g. auth.logOut processed before an in-flight auth.signIn).
+func (s *Service) markReady(ctx context.Context, gen uint64, u *tg.User, phone string) error {
 	if u.Phone != "" {
 		phone = "+" + strings.TrimPrefix(u.Phone, "+")
+	} else if phone == "" {
+		// The self user may hide its phone; keep the one recorded at login.
+		if cur, err := s.st.GetUserbot(ctx); err == nil {
+			phone = cur.Phone
+		}
 	}
 	name := strings.TrimSpace(u.FirstName + " " + u.LastName)
+
+	s.mu.Lock()
+	if s.logoutGen != gen {
+		api := s.api
+		if api != nil {
+			s.clear = clearAll // a detach() is still coming on this connection
+		}
+		s.mu.Unlock()
+		if api != nil {
+			if _, err := api.AuthLogOut(ctx); err != nil {
+				log.Printf("userbot: auth.logOut (stale login): %v", err)
+			}
+			s.Reload()
+		}
+		return ErrBadState
+	}
+	// mu is held across the write so a concurrent Logout() is ordered strictly before (gen
+	// check above) or after it (its ClearUserbot then wins). No path holds the single DB
+	// connection while waiting for mu, so this cannot deadlock.
+	defer s.mu.Unlock()
 	if err := s.st.SetUserbotAccount(ctx, phone, u.ID, name, s.Now().Unix()); err != nil {
 		return err
 	}
-	s.mu.Lock()
 	// Defense in depth: a fresh successful login must never be undone by a stale pending
 	// clear armed by an earlier logout/revocation that never got consumed by a detach()
 	// (see Logout's api == nil branch, which is the normal way this gets disarmed).
 	s.state, s.lastErr, s.phone, s.codeHash, s.clear = StateReady, "", "", "", clearNone
-	s.mu.Unlock()
 	return nil
 }
 
@@ -249,9 +277,12 @@ func (s *Service) markReady(ctx context.Context, u *tg.User, phone string) error
 // (e.g. two in-flight With() calls) can't both pass the check before either sets the in-memory
 // state: only the first to acquire the lock proceeds past it. The DB write below is still the
 // persisted source of truth for status/last_error observed across reconnects and restarts.
-func (s *Service) unauthorized(ctx context.Context) {
+//
+// gen is the logout generation the failing call ran under: a 401 caused by our own Logout()
+// (which revokes the key mid-call) is not a revocation and must not overwrite logged_out.
+func (s *Service) unauthorized(ctx context.Context, gen uint64) {
 	s.mu.Lock()
-	if s.state == StateError {
+	if s.logoutGen != gen || s.state == StateError {
 		s.mu.Unlock()
 		return
 	}
@@ -289,14 +320,14 @@ func (s *Service) Status(ctx context.Context) Info {
 // With runs fn against the logged-in account. A 401 from Telegram marks the session revoked.
 func (s *Service) With(ctx context.Context, fn func(api *tg.Client) error) error {
 	s.mu.Lock()
-	api, state := s.api, s.state
+	api, state, gen := s.api, s.state, s.logoutGen
 	s.mu.Unlock()
 	if api == nil || state != StateReady {
 		return ErrNotReady
 	}
 	err := fn(api)
 	if err != nil && auth.IsUnauthorized(err) {
-		s.unauthorized(context.WithoutCancel(ctx))
+		s.unauthorized(context.WithoutCancel(ctx), gen)
 		return ErrNotReady
 	}
 	return err
@@ -323,20 +354,22 @@ func (s *Service) WaitReady(ctx context.Context, max time.Duration) bool {
 	}
 }
 
-func (s *Service) loginClient() (*auth.Client, string, error) {
+// loginClient returns the connection's auth client, the current state and the logout generation
+// the login step runs under.
+func (s *Service) loginClient() (*auth.Client, string, uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.state == StateUnconfigured {
-		return nil, "", ErrNotConfigured
+		return nil, "", 0, ErrNotConfigured
 	}
 	if s.auth == nil {
-		return nil, "", ErrNotConnected
+		return nil, "", 0, ErrNotConnected
 	}
-	return s.auth, s.state, nil
+	return s.auth, s.state, s.logoutGen, nil
 }
 
 func (s *Service) SendCode(ctx context.Context, phone string) error {
-	a, state, err := s.loginClient()
+	a, state, _, err := s.loginClient()
 	if err != nil {
 		return err
 	}
@@ -358,7 +391,7 @@ func (s *Service) SendCode(ctx context.Context, phone string) error {
 }
 
 func (s *Service) SignIn(ctx context.Context, code string) (string, error) {
-	a, state, err := s.loginClient()
+	a, state, gen, err := s.loginClient()
 	if err != nil {
 		return "", err
 	}
@@ -376,11 +409,11 @@ func (s *Service) SignIn(ctx context.Context, code string) (string, error) {
 	if err != nil {
 		return "", inputErr(err)
 	}
-	return StateReady, s.finish(ctx, authz, phone)
+	return StateReady, s.finish(ctx, gen, authz, phone)
 }
 
 func (s *Service) Password(ctx context.Context, password string) error {
-	a, state, err := s.loginClient()
+	a, state, gen, err := s.loginClient()
 	if err != nil {
 		return err
 	}
@@ -394,15 +427,15 @@ func (s *Service) Password(ctx context.Context, password string) error {
 	s.mu.Lock()
 	phone := s.phone
 	s.mu.Unlock()
-	return s.finish(ctx, authz, phone)
+	return s.finish(ctx, gen, authz, phone)
 }
 
-func (s *Service) finish(ctx context.Context, authz *tg.AuthAuthorization, phone string) error {
+func (s *Service) finish(ctx context.Context, gen uint64, authz *tg.AuthAuthorization, phone string) error {
 	u, ok := authz.User.(*tg.User)
 	if !ok {
 		return fmt.Errorf("unexpected user type %T", authz.User)
 	}
-	return s.markReady(ctx, u, phone)
+	return s.markReady(ctx, gen, u, phone)
 }
 
 func (s *Service) Logout(ctx context.Context) error {
@@ -418,19 +451,21 @@ func (s *Service) Logout(ctx context.Context) error {
 		}
 	}
 	// Always nudge the connection loop so a pending clearAll (armed above) gets applied by
-	// detach() even if nothing was connected yet (e.g. attach() is mid-setup right now: it
-	// will see logoutGen advance and refuse to markReady a stale "authorized" answer).
+	// detach() even if nothing was connected yet (e.g. a connection is mid-setup right now:
+	// its markReady will see logoutGen advance and revoke a stale "authorized" answer).
 	s.Reload()
 	if api == nil {
-		// Nothing is connected right now, so no detach() is coming to consume the clearAll
-		// just armed above — that flag exists only to protect an attach() that might be
-		// mid-setup this instant, and the logoutGen check in attach() already covers that
-		// race on its own. Clear directly and disarm the flag ourselves; otherwise it would
-		// sit there and wipe a completely unrelated *future* login's account and session the
-		// next time any disconnect (or shutdown) reaches detach().
+		// Nothing was connected, so no detach() is coming to consume the clearAll armed above
+		// on our behalf. Clear directly, then disarm the flag ourselves — but only if still
+		// nothing is connected: a connection that attached meanwhile may have armed clearAll
+		// for its own (stale-login) clean-up, which its detach() must still apply. Left armed
+		// with nothing attached, it would instead wipe an unrelated *future* login the next
+		// time any disconnect (or shutdown) reaches detach().
 		err := s.st.ClearUserbot(ctx, s.Now().Unix())
 		s.mu.Lock()
-		s.clear = clearNone
+		if s.api == nil {
+			s.clear = clearNone
+		}
 		s.mu.Unlock()
 		return err
 	}
