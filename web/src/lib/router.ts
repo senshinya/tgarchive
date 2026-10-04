@@ -48,10 +48,20 @@ export function isSettings(r: Route): boolean {
 
 export const route = signal<Route>(parseRoute(typeof location === 'undefined' ? '/' : location.pathname));
 
-export function navigate(to: Route, replace = false): void {
+export interface NavigateOptions {
+  /** Replaces the current history entry instead of pushing a new one. */
+  replace?: boolean;
+  /** Marks this entry as reached from the chat list, so the chat header's back button can use
+   * `history.back()` instead of pushing a fresh "/" entry (keeps Android's hardware back in sync
+   * with the in-app back button instead of requiring an extra press to leave the app). */
+  fromList?: boolean;
+}
+
+export function navigate(to: Route, opts: NavigateOptions = {}): void {
   const path = routePath(to);
-  if (replace) history.replaceState(null, '', path);
-  else history.pushState(null, '', path);
+  const state = { fromList: !!opts.fromList };
+  if (opts.replace) history.replaceState(state, '', path);
+  else history.pushState(state, '', path);
   route.value = to;
 }
 

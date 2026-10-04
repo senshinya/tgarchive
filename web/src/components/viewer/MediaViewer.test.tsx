@@ -1,0 +1,84 @@
+import { act, fireEvent, screen } from '@testing-library/preact';
+import { describe, expect, it, vi } from 'vitest';
+import { fakeApi, makeMedia, makeMessage } from '../../test/fixtures';
+import { renderWithStore } from '../../test/render';
+import { MediaViewer } from './MediaViewer';
+
+function photoMsg(id: number, mediaId: number) {
+  return makeMessage({ id, chat_id: 10, kind: 'photo', media: [makeMedia({ id: mediaId, role: 'main', kind: 'photo' })] });
+}
+
+async function setup() {
+  const api = fakeApi({
+    chatMedia: vi.fn(async () => [photoMsg(1, 101), photoMsg(2, 102), photoMsg(3, 103)]),
+  });
+  const r = renderWithStore(<MediaViewer />, api);
+  act(() => {
+    r.store.viewer.value = { chatId: 10, messageId: 2, mediaId: 102 };
+  });
+  await screen.findByRole('dialog', { name: '媒体查看器' });
+  return r;
+}
+
+/** Fires a pointerdown at `from`, then a pointerup at `to` (the same gesture a touch swipe produces). */
+function swipe(el: Element, from: { x: number; y: number }, to: { x: number; y: number }) {
+  fireEvent.pointerDown(el, { clientX: from.x, clientY: from.y, pointerId: 1 });
+  fireEvent.pointerUp(el, { clientX: to.x, clientY: to.y, pointerId: 1 });
+}
+
+describe('MediaViewer swipe gestures', () => {
+  it('swiping left (dx < -50, mostly horizontal) goes to the next item', async () => {
+    const { container } = await setup();
+    const content = container.querySelector('.MediaViewer-content')!;
+    swipe(content, { x: 300, y: 300 }, { x: 200, y: 300 });
+    expect(container.querySelector('img')!.getAttribute('src')).toBe('/media/103');
+  });
+
+  it('swiping right (dx > 50, mostly horizontal) goes to the previous item', async () => {
+    const { container } = await setup();
+    const content = container.querySelector('.MediaViewer-content')!;
+    swipe(content, { x: 200, y: 300 }, { x: 300, y: 300 });
+    expect(container.querySelector('img')!.getAttribute('src')).toBe('/media/101');
+  });
+
+  it('a drag under the 50px horizontal threshold does not navigate', async () => {
+    const { container } = await setup();
+    const content = container.querySelector('.MediaViewer-content')!;
+    swipe(content, { x: 300, y: 300 }, { x: 270, y: 300 }); // dx = -30
+    expect(container.querySelector('img')!.getAttribute('src')).toBe('/media/102');
+  });
+
+  it('swiping down more than 80px closes the viewer', async () => {
+    const { container, store } = await setup();
+    const content = container.querySelector('.MediaViewer-content')!;
+    swipe(content, { x: 300, y: 200 }, { x: 300, y: 290 }); // dy = +90
+    expect(store.viewer.value).toBeNull();
+  });
+
+  it('a downward drag under the 80px threshold does not close', async () => {
+    const { container, store } = await setup();
+    const content = container.querySelector('.MediaViewer-content')!;
+    swipe(content, { x: 300, y: 200 }, { x: 300, y: 260 }); // dy = +60
+    expect(store.viewer.value).not.toBeNull();
+    expect(container.querySelector('img')!.getAttribute('src')).toBe('/media/102');
+  });
+
+  it('a diagonal drag where the vertical delta dominates neither navigates nor closes below 80px', async () => {
+    const { container, store } = await setup();
+    const content = container.querySelector('.MediaViewer-content')!;
+    swipe(content, { x: 300, y: 200 }, { x: 260, y: 270 }); // dx = -40, dy = +70, |dy| > |dx|, dy <= 80
+    expect(store.viewer.value).not.toBeNull();
+    expect(container.querySelector('img')!.getAttribute('src')).toBe('/media/102');
+  });
+
+  it('does not navigate while zoomed in — the same drag pans the image instead', async () => {
+    const { container, store } = await setup();
+    const img = container.querySelector('img')!;
+    fireEvent.dblClick(img); // zoom 1 -> 2 (existing double-tap-to-zoom behaviour)
+    expect(container.querySelector('img')!.classList.contains('zoomed')).toBe(true);
+    const content = container.querySelector('.MediaViewer-content')!;
+    swipe(content, { x: 300, y: 300 }, { x: 200, y: 300 }); // would be "next" at zoom 1
+    expect(container.querySelector('img')!.getAttribute('src')).toBe('/media/102');
+    expect(store.viewer.value).not.toBeNull();
+  });
+});
