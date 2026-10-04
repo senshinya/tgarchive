@@ -6,16 +6,25 @@ import './RichText.scss';
 
 function Spoiler({ children }: { children: ComponentChildren }) {
   const [revealed, setRevealed] = useState(false);
+  const reveal = () => setRevealed(true);
   return (
     <span
       class={`text-entity-spoiler${revealed ? ' revealed' : ''}`}
       role={revealed ? undefined : 'button'}
+      tabIndex={revealed ? undefined : 0}
       aria-label={revealed ? undefined : '显示剧透内容'}
       onClick={(e) => {
         if (!revealed) {
           e.preventDefault();
           e.stopPropagation();
-          setRevealed(true);
+          reveal();
+        }
+      }}
+      onKeyDown={(e) => {
+        if (!revealed && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          e.stopPropagation();
+          reveal();
         }
       }}
     >

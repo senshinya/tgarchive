@@ -1,4 +1,4 @@
-import { useRef } from 'preact/hooks';
+import { useEffect, useRef } from 'preact/hooks';
 import type { Message } from '../../api/types';
 import { fitMedia, layoutAlbum } from '../../lib/album';
 import { peerColor } from '../../lib/format';
@@ -24,6 +24,9 @@ interface Props {
 
 const NO_BUBBLE = ['sticker', 'video_note', 'dice'];
 const LONG_PRESS_MS = 500;
+// Mobile browsers often fire a native `contextmenu` right after the long-press that already
+// opened our menu; swallow it for a bit so the menu doesn't get asked to reopen/reposition.
+const CONTEXTMENU_SUPPRESS_MS = 800;
 
 /** Width the bubble takes when it shows a photo/video/album, so captions wrap to the media. */
 function visualWidth(msgs: Message[], album: boolean): number {
@@ -35,6 +38,8 @@ function visualWidth(msgs: Message[], album: boolean): number {
 export function MessageBubble({ bubble, sender, onMenu }: Props) {
   const store = useStore();
   const press = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const suppressContextMenuUntil = useRef(0);
+  useEffect(() => () => clearTimeout(press.current), []);
   const album = bubble.kind === 'album';
   const msgs = album ? bubble.msgs : [bubble.msg];
   const head = msgs[0];
@@ -91,12 +96,16 @@ export function MessageBubble({ bubble, sender, onMenu }: Props) {
         }}
         onContextMenu={(e) => {
           e.preventDefault();
+          if (Date.now() < suppressContextMenuUntil.current) return;
           onMenu(e.clientX, e.clientY, pick(e.target));
         }}
         onTouchStart={(e) => {
           const t = e.touches[0];
           const target = e.target;
-          press.current = setTimeout(() => onMenu(t.clientX, t.clientY, pick(target)), LONG_PRESS_MS);
+          press.current = setTimeout(() => {
+            suppressContextMenuUntil.current = Date.now() + CONTEXTMENU_SUPPRESS_MS;
+            onMenu(t.clientX, t.clientY, pick(target));
+          }, LONG_PRESS_MS);
         }}
         onTouchEnd={() => clearTimeout(press.current)}
         onTouchMove={() => clearTimeout(press.current)}

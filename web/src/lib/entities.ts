@@ -16,16 +16,20 @@ function byStart(a: Entity, b: Entity): number {
   return a.offset - b.offset || b.length - a.length || rank(a.type) - rank(b.type);
 }
 
+/** Drops malformed entities (non-finite, negative, empty) and clamps length to the text bound. */
+function clampEntities(text: string, entities: Entity[]): Entity[] {
+  return entities
+    .filter((e) => Number.isFinite(e.offset) && Number.isFinite(e.length) && e.length > 0 && e.offset >= 0)
+    .map((e) => ({ ...e, length: Math.min(e.length, text.length - e.offset) }))
+    .filter((e) => e.length > 0);
+}
+
 /**
  * Turns Telegram text + entities (UTF-16 offsets, which match JS string indexing) into a
  * properly nested tree. Entities that partially overlap are split at the outer boundary.
  */
 export function buildTree(text: string, entities: Entity[]): RichNode[] {
-  const clean = entities
-    .filter((e) => Number.isFinite(e.offset) && Number.isFinite(e.length) && e.length > 0 && e.offset >= 0)
-    .map((e) => ({ ...e, length: Math.min(e.length, text.length - e.offset) }))
-    .filter((e) => e.length > 0);
-  return build(text, 0, text.length, clean.sort(byStart));
+  return build(text, 0, text.length, clampEntities(text, entities).sort(byStart));
 }
 
 function build(text: string, start: number, end: number, sorted: Entity[]): RichNode[] {
@@ -53,7 +57,9 @@ function build(text: string, start: number, end: number, sorted: Entity[]): Rich
       kind: 'entity',
       entity: head,
       text: text.slice(head.offset, headEnd),
-      children: build(text, head.offset, headEnd, inner),
+      // A split can leave `inner` out of order relative to the (possibly truncated) lengths
+      // that decide nesting for ties, so re-sort before recursing.
+      children: build(text, head.offset, headEnd, inner.sort(byStart)),
     });
     pos = headEnd;
     queue = rest.sort(byStart);
@@ -81,7 +87,7 @@ export function safeHref(raw: string): string | null {
 export function extractLinks(text: string, entities: Entity[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const e of [...entities].sort(byStart)) {
+  for (const e of clampEntities(text, entities).sort(byStart)) {
     let href: string | null = null;
     if (e.type === 'url') href = safeHref(text.slice(e.offset, e.offset + e.length));
     else if (e.type === 'text_link' && e.url) href = safeHref(e.url);

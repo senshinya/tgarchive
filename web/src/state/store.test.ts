@@ -68,6 +68,16 @@ describe('store', () => {
     expect(ids(s.conv(10).items)).toEqual(ids(page(300, 349)));
   });
 
+  it('drops messages deleted while disconnected that fall within the refreshed overlap', async () => {
+    let latest = page(90, 100);
+    const s = createStore(fakeApi({ messages: vi.fn(async () => latest) }));
+    await s.refreshLatest(10);
+    // Server now omits id 95 (deleted while we were away); the rest of the window is unchanged.
+    latest = [...page(90, 94), ...page(96, 100)];
+    await s.refreshLatest(10);
+    expect(ids(s.conv(10).items)).toEqual(ids([...page(90, 94), ...page(96, 100)]));
+  });
+
   it('records a load error on the conversation', async () => {
     const s = createStore(fakeApi({ messages: vi.fn(async () => Promise.reject(new ApiError(500, 'boom', null))) }));
     await s.refreshLatest(10);
@@ -119,6 +129,20 @@ describe('store', () => {
     await s.refreshLatest(10);
     await s.handleEvent({ type: 'message.updated', data: { chat_id: 10, message_id: 7 } });
     expect(s.conv(10).items[0].id).toBe(51);
+  });
+
+  it('logs non-404 refreshMessage errors instead of swallowing them', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const api = fakeApi({
+      messages: vi.fn(async () => page(1, 3)),
+      message: vi.fn(async () => Promise.reject(new ApiError(500, 'boom', null))),
+    });
+    const s = createStore(api);
+    await s.refreshLatest(10);
+    await s.handleEvent({ type: 'message.updated', data: { chat_id: 10, message_id: 3 } });
+    expect(spy).toHaveBeenCalled();
+    expect(ids(s.conv(10).items)).toEqual([1, 2, 3]); // a non-404 error must not remove the message
+    spy.mockRestore();
   });
 
   it('applies bot.status and reloads bots it does not know', async () => {

@@ -60,6 +60,14 @@ describe('RichText', () => {
     expect(c.querySelector('.text-entity-spoiler')?.classList.contains('revealed')).toBe(true);
   });
 
+  it('is keyboard-focusable and reveals a spoiler with Enter or Space', () => {
+    const c = html('secret', [e('spoiler', 0, 6)]);
+    const sp = screen.getByRole('button', { name: '显示剧透内容' });
+    expect(sp.getAttribute('tabindex')).toBe('0');
+    fireEvent.keyDown(sp, { key: 'Enter' });
+    expect(c.querySelector('.text-entity-spoiler')?.classList.contains('revealed')).toBe(true);
+  });
+
   it('renders quotes, expandable quotes and custom emoji fallbacks', () => {
     const c = html('quote long 😀', [e('blockquote', 0, 5), e('expandable_blockquote', 6, 4), e('custom_emoji', 11, 2, { custom_emoji_id: '99' })]);
     expect(c.querySelector('blockquote.text-entity-quote:not(.expandable)')?.textContent).toBe('quote');

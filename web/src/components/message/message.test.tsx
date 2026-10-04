@@ -88,6 +88,33 @@ describe('MessageBubble', () => {
     expect(container.querySelector('.has-solid-background')).toBeNull();
   });
 
+  it('clears the long-press timer on unmount so it never fires afterwards', () => {
+    vi.useFakeTimers();
+    const onMenu = vi.fn();
+    const { container, unmount } = bubble(single(makeMessage({ id: 1 })), onMenu);
+    fireEvent.touchStart(container.querySelector('.message-content')!, { touches: [{ clientX: 1, clientY: 2 }] });
+    unmount();
+    vi.advanceTimersByTime(600);
+    expect(onMenu).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('suppresses the native contextmenu briefly after a long-press already opened the menu', () => {
+    vi.useFakeTimers();
+    const onMenu = vi.fn();
+    const { container } = bubble(single(makeMessage({ id: 1 })), onMenu);
+    const content = container.querySelector('.message-content')!;
+    fireEvent.touchStart(content, { touches: [{ clientX: 1, clientY: 2 }] });
+    vi.advanceTimersByTime(500);
+    expect(onMenu).toHaveBeenCalledTimes(1);
+    fireEvent.contextMenu(content); // the mobile browser's own contextmenu, right after
+    expect(onMenu).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(800);
+    fireEvent.contextMenu(content); // a later, unrelated right-click still works
+    expect(onMenu).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it('renders an album with its caption and reports the right-clicked tile', () => {
     const msgs = [1, 2].map((id) =>
       makeMessage({ id, kind: 'photo', media_group_id: 'g', text: id === 1 ? 'trip' : '', media: [makeMedia({ id: 100 + id })] }),

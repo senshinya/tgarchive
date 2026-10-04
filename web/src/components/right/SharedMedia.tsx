@@ -35,6 +35,7 @@ function MediaTile({ msg }: { msg: Message }) {
   const thumb = readyThumb(msg);
   if (!main) return null;
   const done = main.state === 'done';
+  const spoiler = msg.extra?.spoiler === true;
   const src = main.kind === 'photo' && done ? mediaUrl(main.id) : thumb ? mediaUrl(thumb.id) : null;
   return (
     <button
@@ -47,9 +48,9 @@ function MediaTile({ msg }: { msg: Message }) {
       }}
     >
       {src ? (
-        <img src={src} alt="" loading="lazy" decoding="async" />
+        <img src={src} alt="" loading="lazy" decoding="async" class={spoiler ? 'media-spoiler-blur' : ''} />
       ) : done ? (
-        <video src={`${mediaUrl(main.id)}#t=0.1`} preload="metadata" muted playsInline />
+        <video src={`${mediaUrl(main.id)}#t=0.1`} preload="metadata" muted playsInline class={spoiler ? 'media-spoiler-blur' : ''} />
       ) : (
         <span class="SharedMedia-tile-state">{main.state === 'pending' ? '下载中' : '不可用'}</span>
       )}
@@ -144,7 +145,17 @@ export function SharedMedia({ chatId }: { chatId: number }) {
         </IconButton>
         <h3 class="right-header-title">共享媒体</h3>
       </div>
-      <Tabs class="SharedMedia-tabs" items={TABS.map((t) => ({ key: t.key, label: t.label }))} active={tab} onChange={setTab} />
+      <Tabs
+        class="SharedMedia-tabs"
+        items={TABS.map((t) => ({ key: t.key, label: t.label }))}
+        active={tab}
+        onChange={(t) => {
+          // Clear synchronously with the tab switch so a render never pairs the new tab with
+          // the previous tab's (differently-shaped) items before the reload effect catches up.
+          setList(INITIAL);
+          setTab(t);
+        }}
+      />
       <div class="SharedMedia-content custom-scroll" onScroll={onScroll}>
         {groups.map((g) => (
           <section key={g.key} class="SharedMedia-month">

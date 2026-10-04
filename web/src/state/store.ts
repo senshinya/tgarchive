@@ -97,8 +97,16 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
       const c = conv(chatId);
       const newestKnown = c.items.length ? c.items[c.items.length - 1].id : 0;
       const overlaps = c.loaded && page.length > 0 && page[0].id <= newestKnown;
-      if (overlaps) setConv(chatId, { items: mergeById(c.items, page), loading: false, loaded: true });
-      else setConv(chatId, { items: page, hasMore: page.length >= PAGE_SIZE, loading: false, loaded: true });
+      if (overlaps) {
+        // Within the refreshed window [page[0].id, newest], the server is authoritative: drop
+        // anything we had there that it no longer returns (deleted while disconnected). Items
+        // older than the window are untouched.
+        const pageIds = new Set(page.map((m) => m.id));
+        const kept = c.items.filter((m) => m.id < page[0].id || pageIds.has(m.id));
+        setConv(chatId, { items: mergeById(kept, page), loading: false, loaded: true });
+      } else {
+        setConv(chatId, { items: page, hasMore: page.length >= PAGE_SIZE, loading: false, loaded: true });
+      }
     } catch (e) {
       setConv(chatId, { loading: false, error: errorMessage(e) });
     }
@@ -145,6 +153,8 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
       if (e instanceof ApiError && e.status === 404) {
         const chatId = chatHint ?? chatOfMessage(messageId);
         if (chatId) removeMessage(chatId, messageId);
+      } else {
+        console.error('refreshMessage failed', messageId, e);
       }
     }
   }

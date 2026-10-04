@@ -46,6 +46,15 @@ describe('buildTree', () => {
     const tree = buildTree('abc', [e('bold', 1, 0), e('italic', -1, 2), e('underline', 2, 50)]);
     expect(show(tree)).toBe('abunderline(c)');
   });
+
+  it('sorts entities split by an enclosing block so nesting rank still applies to the remainder', () => {
+    // blockquote[0,4) truncates both url (would run to 8) and text_link (would run to 5) at 4;
+    // both fragments end up at the same [2,4) range, so nesting must fall back to type rank
+    // (text_link outranks url) rather than the pre-split iteration order.
+    const text = 'abcdefgh';
+    const tree = buildTree(text, [e('blockquote', 0, 4), e('url', 2, 10), e('text_link', 2, 3, { url: 'https://y.dev' })]);
+    expect(show(tree)).toBe('blockquote(abtext_link(url(cd)))url(text_link(e)fgh)');
+  });
 });
 
 describe('links', () => {
@@ -71,5 +80,9 @@ describe('links', () => {
       e('text_link', 0, 3, { url: 'javascript:1' }),
     ]);
     expect(links).toEqual(['https://x.dev/', 'https://y.dev/']);
+  });
+
+  it('ignores entities with negative offsets, which slice() would otherwise count from the end', () => {
+    expect(extractLinks('ab', [e('url', -1, 5)])).toEqual([]);
   });
 });

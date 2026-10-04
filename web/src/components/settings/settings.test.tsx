@@ -63,6 +63,11 @@ describe('AddBot', () => {
     expect(api.addBot).not.toHaveBeenCalled();
   });
 
+  it('masks the bot token field like a password', () => {
+    renderWithStore(<AddBot />);
+    expect(screen.getByLabelText('Bot Token').getAttribute('type')).toBe('password');
+  });
+
   it('shows each step after adding', async () => {
     const api = fakeApi({
       addBot: vi.fn(async () => ({
@@ -191,6 +196,12 @@ describe('TelegramAppSettings', () => {
       fireEvent.click(screen.getByText('保存'));
     });
     expect(api.saveTelegramApp).toHaveBeenCalledWith(4242, '0123456789abcdef0123456789ABCDEF');
+  });
+
+  it('marks api_hash as a new-password field so browsers do not offer to autofill a saved one', async () => {
+    renderWithStore(<TelegramAppSettings />);
+    const field = await screen.findByLabelText('api_hash（已保存，修改时重新输入）');
+    expect(field.getAttribute('autocomplete')).toBe('new-password');
   });
 });
 

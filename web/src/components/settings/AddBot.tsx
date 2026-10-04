@@ -75,7 +75,7 @@ export function AddBot() {
           在 @BotFather 创建机器人并复制 token。添加后机器人会从云端 Bot API 登出，改由本服务的本地 Bot API 接收消息。
         </Description>
         <form class="settings-form" onSubmit={(e) => void submit(e)}>
-          <InputField label="Bot Token" value={token} onInput={setToken} error={error} autoComplete="off" disabled={busy} />
+          <InputField label="Bot Token" value={token} onInput={setToken} error={error} type="password" autoComplete="off" disabled={busy} />
           <Button type="submit" loading={busy}>
             添加
           </Button>

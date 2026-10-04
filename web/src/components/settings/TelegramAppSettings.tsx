@@ -72,7 +72,7 @@ export function TelegramAppSettings() {
             value={apiHash}
             onInput={setApiHash}
             type="password"
-            autoComplete="off"
+            autoComplete="new-password"
             error={errors.hash}
           />
           <Button type="submit" loading={busy}>
