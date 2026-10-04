@@ -95,6 +95,39 @@ func TestIngestEditReplacesMedia(t *testing.T) {
 	}
 }
 
+func TestEditOfDeletedMessageIgnored(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	r := ingest(t, s, bot, photoMsg(1, "bot:a"))
+	if _, _, err := s.DeleteMessage(ctx, r.MessageID, 9000); err != nil {
+		t.Fatal(err)
+	}
+	var textBefore string
+	s.db.QueryRow("SELECT text FROM messages WHERE id = ?", r.MessageID).Scan(&textBefore)
+
+	edit := photoMsg(1, "bot:b")
+	edit.Text, edit.EditDate = "new caption", 2000
+	res2, err := s.Ingest(ctx, IngestInput{BotID: bot, Sender: alice, Msg: edit, Offset: 9, Now: 5000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.Created || res2.MessageID != r.MessageID || res2.OrphanPaths != nil {
+		t.Fatalf("edit of deleted message = %+v", res2)
+	}
+	if due, _ := s.DueMedia(ctx, 0, 10); len(due) != 0 {
+		t.Fatalf("no media row for bot:b must be created: %+v", due)
+	}
+	var text string
+	var deletedAt int64
+	s.db.QueryRow("SELECT text, deleted_at FROM messages WHERE id = ?", r.MessageID).Scan(&text, &deletedAt)
+	if text != textBefore || deletedAt == 0 {
+		t.Fatalf("message must be unchanged and still deleted: text=%q deletedAt=%d", text, deletedAt)
+	}
+	if b, _ := s.GetBot(ctx, bot); b.UpdateOffset != 9 {
+		t.Fatalf("offset must still advance: %d", b.UpdateOffset)
+	}
+}
+
 func TestDedupeAndOrphanCleanup(t *testing.T) {
 	s := newStore(t)
 	bot := seedBot(t, s, 777)

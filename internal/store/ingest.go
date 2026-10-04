@@ -65,9 +65,9 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 			return err
 		}
 
-		var existing int64
-		err = tx.QueryRowContext(ctx, "SELECT id FROM messages WHERE chat_id = ? AND source = ? AND tg_message_id = ?",
-			res.ChatID, m.Source, m.TgMessageID).Scan(&existing)
+		var existing, existingDeletedAt int64
+		err = tx.QueryRowContext(ctx, "SELECT id, deleted_at FROM messages WHERE chat_id = ? AND source = ? AND tg_message_id = ?",
+			res.ChatID, m.Source, m.TgMessageID).Scan(&existing, &existingDeletedAt)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			if err := tx.QueryRowContext(ctx, `
@@ -82,6 +82,16 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 			res.Created = true
 		case err != nil:
 			return err
+		case existingDeletedAt != 0:
+			// Edit of a message already soft-deleted via DeleteMessage: ignore the edit entirely
+			// (no text/kind/media changes, no re-link), but still advance the offset below.
+			res.MessageID = existing
+			if in.Offset > 0 {
+				if _, err := tx.ExecContext(ctx, "UPDATE bots SET update_offset = ? WHERE id = ? AND update_offset < ?", in.Offset, in.BotID, in.Offset); err != nil {
+					return err
+				}
+			}
+			return nil
 		default:
 			res.MessageID = existing
 			if _, err := tx.ExecContext(ctx, `
