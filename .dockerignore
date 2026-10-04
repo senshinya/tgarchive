@@ -1,0 +1,10 @@
+.git
+.github
+.superpowers
+docs
+*.md
+.env
+/tgarchive
+**/.DS_Store
+web/node_modules
+web/dist
