@@ -234,7 +234,9 @@ userbot(
 ### 代取流程
 
 1. 原链接消息设 👀，任务入 userbot 串行队列
-2. 解析 peer：username → `contacts.resolveUsername`；`c/<id>` → 查 gotd peer 存储取 access_hash，缺失则调用一次 `messages.getDialogs` 刷新后再查；仍无 → 失败「账号不在该群/频道中」
+2. 解析 peer：
+   - 公开链接（username）→ `contacts.resolveUsername` 直接取得 access_hash，**无需加入**（等同客户端预览）
+   - 私有链接（`c/<id>`）→ 链接只含数字 ID，access_hash 只能从账号自己的对话中取得，**必须是成员**：查 gotd peer 存储，缺失则调用一次 `messages.getDialogs` 刷新后再查；仍无 → 失败「私有群/频道，代取账号未加入」
 3. `channels.getMessages`（私聊/普通群链接不适用，链接格式只覆盖频道与超级群）取消息；若带 `grouped_id` 且未指定 `?single`，再取 `[msg-10, msg+10]`，筛出同组消息
 4. 经 `convert/mtproto` 转换，`source=userbot_fetch`，写入「发送者 × 该机器人」会话，`origin_chat_id/title/link` 填写，`tg_message_id` 为原群消息 ID
 5. 媒体经 `upload.getFile` 分块流式写入归档路径，单文件上限按账号（普通 2GB / Premium 4GB），复用下载队列的状态机与去重（`dedupe_key = mt:<id>`）
