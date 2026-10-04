@@ -114,6 +114,8 @@ jobs:
             type=semver,pattern={{version}}
             type=ref,event=branch
             type=sha,prefix=sha-,enable=${{ github.ref == 'refs/heads/main' }}
+          flavor: |
+            latest=false
 
       - name: Create multi-arch manifest
         working-directory: ${{ runner.temp }}/digests
