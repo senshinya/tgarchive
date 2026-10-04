@@ -1,0 +1,238 @@
+package httpapi
+
+import (
+	"fmt"
+	"mime"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"tgarchive/internal/downloader"
+	"tgarchive/internal/events"
+	"tgarchive/internal/store"
+)
+
+type BotView struct {
+	ID        int64  `json:"id"`
+	TgBotID   int64  `json:"tg_bot_id"`
+	Username  string `json:"username"`
+	Name      string `json:"name"`
+	HasAvatar bool   `json:"has_avatar"`
+	Enabled   bool   `json:"enabled"`
+	Status    string `json:"status"`
+	LastError string `json:"last_error"`
+}
+
+func botView(b *store.Bot) BotView {
+	return BotView{ID: b.ID, TgBotID: b.TgBotID, Username: b.Username, Name: b.Name, HasAvatar: b.AvatarPath != "",
+		Enabled: b.Enabled, Status: b.Status, LastError: b.LastError}
+}
+
+func (s *Server) listBots(w http.ResponseWriter, r *http.Request) {
+	bots, err := s.Store.ListBots(r.Context())
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	out := make([]BotView, 0, len(bots))
+	for i := range bots {
+		out = append(out, botView(&bots[i]))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) listChats(w http.ResponseWriter, r *http.Request) {
+	botID, ok := queryInt(r, "bot_id", 0, 0, 1<<62)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad bot_id")
+		return
+	}
+	chats, err := s.Store.ListChats(r.Context(), botID)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, chats)
+}
+
+func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
+	chatID, ok := pathID(r, "id")
+	before, ok2 := queryInt(r, "before", 0, 0, 1<<62)
+	limit, ok3 := queryInt(r, "limit", 50, 1, 100)
+	if !ok || !ok2 || !ok3 {
+		writeErr(w, http.StatusBadRequest, "bad chat id, before or limit")
+		return
+	}
+	msgs, err := s.Store.ListMessages(r.Context(), chatID, before, int(limit))
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
+func (s *Server) listChatMedia(w http.ResponseWriter, r *http.Request) {
+	chatID, ok := pathID(r, "id")
+	before, ok2 := queryInt(r, "before", 0, 0, 1<<62)
+	limit, ok3 := queryInt(r, "limit", 50, 1, 100)
+	if !ok || !ok2 || !ok3 {
+		writeErr(w, http.StatusBadRequest, "bad chat id, before or limit")
+		return
+	}
+	msgs, err := s.Store.ListChatMedia(r.Context(), chatID, r.URL.Query().Get("type"), before, int(limit))
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
+func (s *Server) deleteMessage(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r, "id")
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad message id")
+		return
+	}
+	chatID, orphans, err := s.Store.DeleteMessage(r.Context(), id, s.Now().Unix())
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	downloader.RemoveFiles(s.MediaDir, orphans)
+	s.Hub.Publish(events.Event{Type: "message.deleted", Data: map[string]int64{"chat_id": chatID, "message_id": id}})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) retryMedia(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r, "id")
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad media id")
+		return
+	}
+	if err := s.Store.ResetMedia(r.Context(), id); err != nil {
+		if err == store.ErrNotFound {
+			writeErr(w, http.StatusConflict, "media is not in failed state")
+			return
+		}
+		storeErr(w, err)
+		return
+	}
+	s.Downloader.Wake()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) events(w http.ResponseWriter, r *http.Request) {
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	ch, cancel := s.Hub.Subscribe()
+	defer cancel()
+	fmt.Fprint(w, ": ok\n\n")
+	fl.Flush()
+	ping := time.NewTicker(25 * time.Second)
+	defer ping.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case e := <-ch:
+			data, err := jsonMarshal(e.Data)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.Type, data)
+			fl.Flush()
+		case <-ping.C:
+			fmt.Fprint(w, ": ping\n\n")
+			fl.Flush()
+		}
+	}
+}
+
+func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r, "id")
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad media id")
+		return
+	}
+	m, err := s.Store.GetMedia(r.Context(), id)
+	if err != nil || m.State != store.StateDone {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	p, ok := within(s.MediaDir, m.Path)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	ct := m.Mime
+	if ct == "" {
+		ct = mime.TypeByExtension(filepath.Ext(p))
+	}
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("ETag", fmt.Sprintf(`"m%d"`, m.ID))
+	if r.URL.Query().Get("download") == "1" {
+		name := m.FileName
+		if name == "" {
+			name = filepath.Base(p)
+		}
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+	}
+	http.ServeContent(w, r, "", st.ModTime(), f)
+}
+
+func (s *Server) serveAvatar(w http.ResponseWriter, r *http.Request) {
+	kind := r.PathValue("kind")
+	id, ok := pathID(r, "id")
+	if !ok || (kind != "bots" && kind != "senders") {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	p := filepath.Join(s.AvatarDir, kind, fmt.Sprintf("%d.jpg", id))
+	f, err := os.Open(p)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	http.ServeContent(w, r, "", st.ModTime(), f)
+}
+
+// within joins rel onto base and refuses results that escape base.
+func within(base, rel string) (string, bool) {
+	p := filepath.Join(base, rel)
+	r, err := filepath.Rel(base, p)
+	if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return p, true
+}

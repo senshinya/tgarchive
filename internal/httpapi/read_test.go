@@ -1,0 +1,224 @@
+package httpapi
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"testing/fstest"
+	"time"
+
+	"tgarchive/internal/config"
+	"tgarchive/internal/downloader"
+	"tgarchive/internal/events"
+	"tgarchive/internal/model"
+	"tgarchive/internal/store"
+)
+
+var bg = context.Background()
+
+type readEnv struct {
+	srv      *Server
+	h        http.Handler
+	st       *store.Store
+	hub      *events.Hub
+	chat     int64
+	photoMsg int64
+	media    int64
+}
+
+func newReadEnv(t *testing.T) *readEnv {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	mediaDir, avatarDir := t.TempDir(), t.TempDir()
+	hub := events.NewHub()
+	srv := &Server{
+		Cfg: &config.Config{RequireForwardAuth: true}, Store: st, Hub: hub,
+		Downloader: downloader.New(st, mediaDir, 0, nil),
+		Web:        fstest.MapFS{"index.html": {Data: []byte("<html>app</html>")}, "assets/app.js": {Data: []byte("js!")}},
+		MediaDir:   mediaDir, AvatarDir: avatarDir, Now: time.Now,
+	}
+	bot, _ := st.UpsertBot(bg, &store.Bot{TgBotID: 777, Username: "archive_bot", TokenEnc: []byte("SECRET-TOKEN-BYTES"), CreatedAt: 1})
+	photo := &model.Message{TgMessageID: 1, Source: model.SourceBotUpdate, Date: 1, Kind: model.KindPhoto, RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`),
+		Media: []model.Media{{DedupeKey: "bot:p", Kind: "photo", Mime: "image/jpeg", Role: model.RoleMain}}}
+	r1, _ := st.Ingest(bg, store.IngestInput{BotID: bot, Sender: model.Sender{TgUserID: 42, FirstName: "Alice"}, Msg: photo, Now: 1})
+	link := &model.Message{TgMessageID: 2, Source: model.SourceBotUpdate, Date: 2, Kind: model.KindText, Text: "see https://x.dev", RawFormat: model.RawBotAPI,
+		Raw: json.RawMessage(`{}`), Entities: []model.Entity{{Type: "url", Offset: 4, Length: 13}}}
+	st.Ingest(bg, store.IngestInput{BotID: bot, Sender: model.Sender{TgUserID: 42, FirstName: "Alice"}, Msg: link, Now: 2})
+	due, _ := st.DueMedia(bg, 0, 10)
+	os.MkdirAll(filepath.Join(mediaDir, "1"), 0o755)
+	os.WriteFile(filepath.Join(mediaDir, "1", "p.jpg"), []byte("photo-bytes"), 0o644)
+	st.MarkMediaDone(bg, due[0].ID, "1/p.jpg", 11)
+	return &readEnv{srv: srv, h: srv.Handler(), st: st, hub: hub, chat: r1.ChatID, photoMsg: r1.MessageID, media: due[0].ID}
+}
+
+func do(h http.Handler, method, path string, hdr map[string]string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, nil)
+	req.Header.Set("Remote-User", "shinya")
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+func TestAuth(t *testing.T) {
+	e := newReadEnv(t)
+	for _, p := range []string{"/api/bots", "/", "/media/1"} {
+		w := httptest.NewRecorder()
+		e.h.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
+		if w.Code != 401 {
+			t.Fatalf("%s without Remote-User = %d", p, w.Code)
+		}
+	}
+	w := httptest.NewRecorder()
+	e.h.ServeHTTP(w, httptest.NewRequest("GET", "/healthz", nil))
+	if w.Code != 200 {
+		t.Fatalf("healthz = %d", w.Code)
+	}
+	e.srv.Cfg.RequireForwardAuth = false
+	w = httptest.NewRecorder()
+	e.srv.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/api/bots", nil))
+	if w.Code != 200 {
+		t.Fatalf("auth disabled = %d", w.Code)
+	}
+}
+
+func TestReadEndpoints(t *testing.T) {
+	e := newReadEnv(t)
+	w := do(e.h, "GET", "/api/bots", nil)
+	if w.Code != 200 || strings.Contains(w.Body.String(), "SECRET") || !strings.Contains(w.Body.String(), `"username":"archive_bot"`) {
+		t.Fatalf("bots = %d %s", w.Code, w.Body)
+	}
+	var chats []store.ChatView
+	json.Unmarshal(do(e.h, "GET", "/api/chats", nil).Body.Bytes(), &chats)
+	if len(chats) != 1 || chats[0].Sender.FirstName != "Alice" {
+		t.Fatalf("chats = %+v", chats)
+	}
+	var msgs []store.MessageView
+	json.Unmarshal(do(e.h, "GET", fmt.Sprintf("/api/chats/%d/messages?limit=10", e.chat), nil).Body.Bytes(), &msgs)
+	if len(msgs) != 2 || msgs[0].Media[0].State != "done" {
+		t.Fatalf("messages = %+v", msgs)
+	}
+	json.Unmarshal(do(e.h, "GET", fmt.Sprintf("/api/chats/%d/media?type=link", e.chat), nil).Body.Bytes(), &msgs)
+	if len(msgs) != 1 || msgs[0].TgMessageID != 2 {
+		t.Fatalf("links = %+v", msgs)
+	}
+	for _, p := range []string{
+		fmt.Sprintf("/api/chats/%d/media?type=bogus", e.chat),
+		fmt.Sprintf("/api/chats/%d/messages?limit=abc", e.chat),
+		"/api/chats/abc/messages",
+	} {
+		if w := do(e.h, "GET", p, nil); w.Code != 400 || !strings.Contains(w.Body.String(), `"error"`) {
+			t.Fatalf("%s = %d %s", p, w.Code, w.Body)
+		}
+	}
+}
+
+func TestServeMedia(t *testing.T) {
+	e := newReadEnv(t)
+	p := fmt.Sprintf("/media/%d", e.media)
+	w := do(e.h, "GET", p, nil)
+	if w.Code != 200 || w.Body.String() != "photo-bytes" || w.Header().Get("ETag") == "" || !strings.Contains(w.Header().Get("Cache-Control"), "private") {
+		t.Fatalf("media = %d %q %v", w.Code, w.Body, w.Header())
+	}
+	if w := do(e.h, "GET", p, map[string]string{"Range": "bytes=0-4"}); w.Code != 206 || w.Body.String() != "photo" {
+		t.Fatalf("range = %d %q", w.Code, w.Body)
+	}
+	if w := do(e.h, "GET", p, map[string]string{"If-None-Match": w.Header().Get("ETag")}); w.Code != 304 {
+		t.Fatalf("conditional = %d", w.Code)
+	}
+	if w := do(e.h, "GET", p+"?download=1", nil); !strings.HasPrefix(w.Header().Get("Content-Disposition"), "attachment") {
+		t.Fatalf("download header = %q", w.Header().Get("Content-Disposition"))
+	}
+	os.Remove(filepath.Join(e.srv.MediaDir, "1", "p.jpg"))
+	if w := do(e.h, "GET", p, nil); w.Code != 404 {
+		t.Fatalf("missing file = %d", w.Code)
+	}
+	if w := do(e.h, "GET", "/media/99999", nil); w.Code != 404 {
+		t.Fatalf("unknown media = %d", w.Code)
+	}
+}
+
+func TestDeleteAndRetry(t *testing.T) {
+	e := newReadEnv(t)
+	ch, unsub := e.hub.Subscribe()
+	defer unsub()
+	if w := do(e.h, "POST", fmt.Sprintf("/api/media/%d/retry", e.media), nil); w.Code != 409 {
+		t.Fatalf("retry of done media = %d", w.Code)
+	}
+	if w := do(e.h, "DELETE", fmt.Sprintf("/api/messages/%d", e.photoMsg), nil); w.Code != 204 {
+		t.Fatalf("delete = %d %s", w.Code, w.Body)
+	}
+	if _, err := os.Stat(filepath.Join(e.srv.MediaDir, "1", "p.jpg")); err == nil {
+		t.Fatal("orphaned file must be removed")
+	}
+	if ev := <-ch; ev.Type != "message.deleted" {
+		t.Fatalf("event = %+v", ev)
+	}
+	if w := do(e.h, "DELETE", fmt.Sprintf("/api/messages/%d", e.photoMsg), nil); w.Code != 404 {
+		t.Fatalf("second delete = %d", w.Code)
+	}
+}
+
+func TestSPAFallback(t *testing.T) {
+	e := newReadEnv(t)
+	if w := do(e.h, "GET", "/chats/5", nil); w.Code != 200 || w.Body.String() != "<html>app</html>" {
+		t.Fatalf("spa route = %d %q", w.Code, w.Body)
+	}
+	if w := do(e.h, "GET", "/assets/app.js", nil); w.Code != 200 || w.Body.String() != "js!" {
+		t.Fatalf("asset = %d %q", w.Code, w.Body)
+	}
+	if w := do(e.h, "GET", "/api/nope", nil); w.Code != 404 || !strings.Contains(w.Body.String(), `"error"`) {
+		t.Fatalf("unknown api = %d %q", w.Code, w.Body)
+	}
+}
+
+func TestSSE(t *testing.T) {
+	e := newReadEnv(t)
+	ts := httptest.NewServer(e.h)
+	defer ts.Close()
+	req, _ := http.NewRequest("GET", ts.URL+"/api/events", nil)
+	req.Header.Set("Remote-User", "shinya")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content-type = %q", ct)
+	}
+	rd := bufio.NewReader(resp.Body)
+	rd.ReadString('\n') // ": ok"
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		e.hub.Publish(events.Event{Type: "message.created", Data: map[string]int64{"chat_id": 1, "message_id": 2}})
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		line, err := rd.ReadString('\n')
+		if err == io.EOF {
+			break
+		}
+		if strings.HasPrefix(line, "event: message.created") {
+			data, _ := rd.ReadString('\n')
+			if !strings.Contains(data, `"message_id":2`) {
+				t.Fatalf("data line = %q", data)
+			}
+			return
+		}
+	}
+	t.Fatal("event not received")
+}
