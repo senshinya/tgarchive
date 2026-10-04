@@ -1,0 +1,77 @@
+# tgarchive
+
+集中管理多个 Telegram 机器人，把白名单用户私聊发给机器人的消息（文本与全部媒体）存档到服务器，用仿 Telegram Web A 的只读 WebUI 浏览；受保护群组 / 频道的内容可以贴消息链接，由用户账号（userbot）代取。设计见 [`docs/superpowers/specs/2026-10-04-tgarchive-design.md`](docs/superpowers/specs/2026-10-04-tgarchive-design.md)。
+
+单个 Go 二进制内嵌 Preact 前端，并以子进程托管官方 [telegram-bot-api](https://github.com/tdlib/telegram-bot-api) 本地服务器（`--local`，只监听 127.0.0.1:8081）。
+
+## 开发
+
+依赖：Go 1.26+、Node ≥ 22.12。
+
+```bash
+cd web && npm ci && npm test && npm run build && cd ..   # 产物进 web/dist，供 go:embed
+go test ./...
+```
+
+本机运行（不经认证网关；不托管子进程，连一个已有的 Bot API 服务器）：
+
+```bash
+TOKEN_ENC_KEY=$(openssl rand -hex 32) DATA_DIR=./tmp REQUIRE_FORWARD_AUTH=false \
+  BOT_API_MANAGED=false BOT_API_URL=http://127.0.0.1:8081 go run ./cmd/tgarchive
+cd web && npm run dev   # Vite 开发服务器，/api、/media、/avatars 代理到 127.0.0.1:8080
+```
+
+## 环境变量
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `TOKEN_ENC_KEY` | 必填 | 64 位 hex（32 字节），AES-256-GCM 主密钥，加密 bot token、userbot session 与 `api_id` / `api_hash`；丢失后这些都无法解密 |
+| `LISTEN` | `:8080` | HTTP 监听地址 |
+| `DATA_DIR` | `/data` | 数据根目录（`db/`、`media/`、`avatars/`、`botapi/`、`botapi-tmp/`） |
+| `REQUIRE_FORWARD_AUTH` | `true` | 除 `/healthz` 外要求请求带 `Remote-User`，否则 401 |
+| `BARK_NOTIFY_FILE` | 空 | Bark 配置（`endpoint` + `device_keys`），机器人或 userbot 出错时推送；空则不推 |
+| `MEDIA_MAX_BYTES` | `0` | 单文件存档上限，0 为不限 |
+| `BOT_API_MANAGED` | `true` | 是否托管 `telegram-bot-api` 子进程 |
+| `BOT_API_BINARY` | `telegram-bot-api` | 子进程可执行文件 |
+| `BOT_API_URL` | `http://127.0.0.1:8081` | Bot API 服务器地址 |
+| `BOT_API_DIR_LOCAL` / `BOT_API_DIR_REMOTE` | `$DATA_DIR/botapi` | 本容器内 / Bot API 服务器内的同一目录（外部服务器时用于路径映射） |
+| `CLOUD_API_URL` | `https://api.telegram.org` | 云端 Bot API，只用于添加机器人时的 `getMe` 与 `logOut` |
+
+机器人 token、`api_id` / `api_hash` 与 userbot 登录都在 WebUI「管理」页设置并加密入库，不经过环境变量。
+
+## 镜像与发布
+
+镜像 `ghcr.io/senshinya/tgarchive`，GitHub Actions 在 amd64 / arm64 原生 runner 上构建，Dockerfile 内会跑前端测试与 `go test ./...`：
+
+- 推送 `vX.Y.Z` tag → `X.Y.Z`
+- 推送 `main` → `main`、`sha-<7 位>`
+- PR 与手动运行只构建不推送
+
+发布：
+
+```bash
+git tag -a v0.1.1 -m v0.1.1 && git push origin v0.1.1
+gh release create v0.1.1 --verify-tag --generate-notes
+```
+
+## 部署
+
+```yaml
+services:
+  tgarchive:
+    image: ghcr.io/senshinya/tgarchive:0.1.0
+    restart: unless-stopped
+    init: true               # docker-init 回收子进程
+    stop_grace_period: 30s
+    env_file: .env           # TOKEN_ENC_KEY
+    volumes:
+      - ./data:/data         # chown -R 10001:10001
+```
+
+- 容器以 UID/GID 10001 运行，镜像自带健康检查 `GET /healthz`
+- 前面必须有反代做认证并写入 `Remote-User`，且先剥掉客户端自带的 `Remote-*` 头；SSE 路径 `/api/events` 不要缓冲
+- 首次使用：管理 → API 凭据填 [my.telegram.org](https://my.telegram.org) 的 `api_id` / `api_hash` → 添加机器人并设置白名单 →（可选）用户账号登录
+
+## 许可
+
+GPL-3.0，见 [LICENSE](LICENSE)。镜像内的 telegram-bot-api 以 BSL-1.0 发布。

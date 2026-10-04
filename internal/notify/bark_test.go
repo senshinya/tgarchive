@@ -32,3 +32,19 @@ func TestBarkDisabledWithoutFile(t *testing.T) {
 	(&Bark{}).Notify(context.Background(), "t", "b") // must be a no-op
 	(&Bark{File: "/nonexistent/notify.json"}).Notify(context.Background(), "t", "b")
 }
+
+func TestBarkSendsNonDefaultUserAgent(t *testing.T) {
+	// bark.shinya.click sits behind Cloudflare, whose Browser Integrity Check rejects default client UAs.
+	var ua string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.UserAgent()
+		w.Write([]byte(`{"code":200}`))
+	}))
+	defer srv.Close()
+	cfg := filepath.Join(t.TempDir(), "notify.json")
+	os.WriteFile(cfg, []byte(`{"endpoint":"`+srv.URL+`/push","device_keys":["k1"]}`), 0o600)
+	(&Bark{File: cfg}).Notify(context.Background(), "t", "b")
+	if ua != "tgarchive-notify/1.0" {
+		t.Fatalf("User-Agent = %q", ua)
+	}
+}

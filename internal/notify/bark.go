@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// userAgent replaces Go's default UA, which Cloudflare's Browser Integrity Check may reject (error 1010).
+const userAgent = "tgarchive-notify/1.0"
+
 type Notifier interface {
 	Notify(ctx context.Context, title, body string)
 }
@@ -51,6 +54,7 @@ func (b *Bark) Notify(ctx context.Context, title, body string) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := hc.Do(req)
 	if err != nil {
 		log.Printf("notify: push failed: %v", err)

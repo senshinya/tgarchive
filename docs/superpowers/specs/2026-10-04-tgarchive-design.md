@@ -29,51 +29,64 @@
 | 项 | 值 |
 |---|---|
 | 域名 | `tg.shinya.click`，CF SaaS + 华为四线解析 |
-| 源码 | `git@ssh.git.shinya.click:shinya/tgarchive.git`，本地 `~/Downloads/tgarchive` |
-| Stack | `/opt/stacks/tgarchive`，compose `build: .` |
-| 数据 | `/opt/app/tgarchive/{db,media,botapi,avatars}` |
-| 许可 | GPL-3.0（移植了 Telegram Web A 的样式与组件代码） |
+| 源码 | GitHub 公开仓库 [senshinya/tgarchive](https://github.com/senshinya/tgarchive)（`git@github.com:senshinya/tgarchive.git`，默认分支 `main`），本地 `~/Downloads/tgarchive` |
+| 镜像 | `ghcr.io/senshinya/tgarchive`（公开），GitHub Actions 构建 `linux/amd64` + `linux/arm64` |
+| Stack | `/opt/stacks/tgarchive`，compose 固定镜像的 semver tag（如 `0.1.0`），不用 `main` / `sha-*` |
+| 数据 | `/opt/app/tgarchive/{db,media,avatars,botapi,botapi-tmp}`，属主 10001:10001 |
+| 许可 | GPL-3.0 |
 
 ### 容器
 
-单容器 `tgarchive`：自建镜像，接 `web`，监听 8080，挂 `/opt/app/tgarchive` 到 `/data`。
+单容器 `tgarchive`：接 `web`，监听 8080，挂 `/opt/app/tgarchive` 到 `/data`，以 UID/GID 10001:10001（非 root）运行。compose 设 `init: true`（docker-init 作为 PID 1 回收僵尸进程）与 `stop_grace_period: 30s`（应用关停 HTTP ≤10s、停子进程 ≤10s）；镜像内置健康检查 `GET /healthz`。
 
 - 应用进程托管 Telegram 官方 `telegram-bot-api` 本地服务器作为子进程（`internal/botapiserver`）：参数 `--local --dir=/data/botapi --temp-dir=/data/botapi-tmp --http-ip-address=127.0.0.1 --http-port=8081`，只监听回环地址，不对外暴露
 - 子进程所需的 `api_id` / `api_hash` 在 WebUI 设置页填写，加密存入 `settings` 表；未配置时子进程不启动，状态为 `unconfigured`，添加机器人接口返回 409。保存新凭据后子进程以新凭据重启；子进程异常退出按 1s 起指数退避重启，上限 30s
+- Linux 下子进程设置 `Pdeathsig=SIGTERM`，并在一个锁定的 OS 线程上启动与回收：应用被 SIGKILL、OOM 或崩溃时内核立即向子进程发 SIGTERM，不会留下占用 8081 端口与 binlog 的孤儿
 - 子进程环境不继承应用环境变量，看不到 `TOKEN_ENC_KEY`
-- 子进程与应用共用 `/data/botapi`，`getFile` 返回的绝对路径可直接读取
+- 子进程与应用共用 `/data/botapi`，`getFile` 返回的绝对路径可直接读取；归档文件统一设为 0644（TDLib 下载的文件为 0600，硬链接共用 inode）
 - `BOT_API_MANAGED=false` 时不托管子进程，改连 `BOT_API_URL` 指向的外部 Bot API 服务器（开发与测试用）
 
 ### 镜像构建
 
-多阶段 Dockerfile：Node 阶段构建前端 → Go 阶段 `go test ./...` + 构建（`go:embed` 前端产物，`CGO_ENABLED=0`）→ 运行阶段同时包含应用二进制与 `telegram-bot-api` 二进制。本地镜像前缀 `tgarchive` 加入 Cup exclude；`telegram-bot-api` 的版本随镜像构建 pin。
+多阶段 Dockerfile：Node 阶段 `npm ci` + `npm test` + 构建前端 → Go 阶段 `go test ./...` + 构建（`go:embed` 前端产物，`CGO_ENABLED=0`）→ 运行阶段 `alpine:3.24`，包含应用二进制与从 `aiogram/telegram-bot-api` 镜像复制的官方 `telegram-bot-api` 二进制（10.3），其动态库（OpenSSL 3、zlib、libstdc++、libgcc）由 alpine 自身仓库安装。全部基础镜像以 tag@digest 固定。
+
+GitHub Actions（`.github/workflows/docker.yml`）：amd64 在 `ubuntu-24.04`、arm64 在 `ubuntu-24.04-arm` 原生构建，不用 QEMU；各自按 digest 推送，再由 merge 作业合并成多架构清单。推送 `v*` tag → 镜像 tag `X.Y.Z`；推送 `main` → `main` 与 `sha-<7 位>`；PR 与手动运行只构建不推送。发布版本同时创建 GitHub Release。
+
+服务器上的镜像由 Cup 按 semver 正常监控，与 Ignis、blog-comment 等自有 Actions 镜像一致，不加入 Cup exclude。
 
 ### .env（mode 600，台账存 Vaultwarden）
 
-- `TOKEN_ENC_KEY`（必填）：32 字节 hex，AES-256-GCM 主密钥，加密 bot token、userbot session 与 `settings` 表中的 `api_id` / `api_hash`；缺失或格式错误启动即失败
-- `BARK_NOTIFY_FILE=/run/bark/notify.json`（可选，只读挂载 `/opt/app/bark/notify.json`；为空不推送）
-- `MEDIA_MAX_BYTES`（可选单文件上限，默认 0 = 不限）
-- `BOT_API_MANAGED`（可选，默认 `true`）
-- `REQUIRE_FORWARD_AUTH` 默认 `true`（fail-safe），生产不设置
+只有一项：`TOKEN_ENC_KEY`（必填）：32 字节 hex，AES-256-GCM 主密钥，加密 bot token、userbot session 与 `settings` 表中的 `api_id` / `api_hash`；缺失或格式错误启动即失败。
 
-`api_id` / `api_hash`（my.telegram.org 申请，本地 Bot API 与 userbot 共用）不进 `.env`，在 WebUI 设置页填写。
+compose `environment` 中的非机密配置：
+
+- `TZ=Asia/Shanghai`
+- `BARK_NOTIFY_FILE=/run/bark/notify.json`：单文件只读挂载 `/opt/app/bark/notify.json`；该文件为 root 600，以 POSIX ACL 授予 UID 10001 只读
+- `MEDIA_MAX_BYTES`、`BOT_API_MANAGED`、`REQUIRE_FORWARD_AUTH` 等其余变量生产不设置，取默认值
+
+机器人 token、`api_id` / `api_hash`（my.telegram.org 申请，本地 Bot API 与 userbot 共用）与 userbot 登录全部在 WebUI 完成，加密入库，不经过环境变量。
 
 ### Caddy
 
-- 整站 `forward_auth` Authelia；`request_header -Remote-User -Remote-Groups -Remote-Name -Remote-Email` 剥入站伪造头
-- `import compress`，但 `/media/*` 不压缩（二进制 + Range）
-- `/api/events`（SSE）`flush_interval -1`
+站点块整体包在一个 `route` 里以固定执行顺序（Caddy 默认把 `forward_auth` 排在 `request_header` 之前，写在 `route` 外会把认证写入的头一并删掉）：
+
+1. `request_header -Remote-User` / `-Remote-Groups` / `-Remote-Name` / `-Remote-Email` 剥入站伪造头
+2. `import authelia`：整站 `forward_auth`
+3. `/media/*`：直接反代，不压缩（二进制 + Range）
+4. `/api/events`（SSE）：`flush_interval -1`，不压缩
+5. 其余路径：`import compress` 后反代
+
 - 应用侧在 `REQUIRE_FORWARD_AUTH=true` 时对除 `/healthz` 外的所有请求校验 `Remote-User` 存在，否则 401
 - 应用侧 CSRF 兜底：GET/HEAD/OPTIONS 以外的请求，带 `Sec-Fetch-Site` 且不为 `same-origin` 时 403；POST/PUT/PATCH 带请求体而 `Content-Type` 不是 `application/json` 时 403
 
 ### 备份
 
-- R2（restic）：备份 `db/`、`avatars/` 与 stack；`media/`、`botapi/`、`botapi-tmp/` 加入 `exclude.txt`
-- NAS：rclone 定期拉取 `media/`，方式同音乐库
+- R2（restic）：备份 `db/`（SQLite stage）、`avatars/` 与 stack；`media/`、`botapi/`、`botapi-tmp/` 加入 `exclude.txt`，并同时加入备份脚本的 `SQLITE_SKIP`（用户可能把 `.db` / `.sqlite` 当文档存档，它们落在 SQLite 扫描深度内）
+- NAS：OpenList 以只读本机存储 `/tgarchive-media` 暴露 `media/`，NAS 用 rclone 经 `drive-dav` 每日拉取（`copy`），方式同音乐库
 
 ### 通知
 
-机器人或 userbot 进入 `error` 状态时推送 Bark `docker` 分组（timeSensitive），凭据读 `notify.json`。
+机器人或 userbot 进入 `error` 状态时推送 Bark `docker` 分组（timeSensitive），凭据读 `notify.json`；请求带 `User-Agent: tgarchive-notify/1.0`，避开 CF Browser Integrity Check 对默认 UA 的拦截。
 
 ## 3. 架构
 
@@ -382,7 +395,9 @@ userbot 违反 Telegram 使用条款，存在账号受限风险。session 等同
 
 ## 12. 基础设施文档变更（上线时）
 
-- CLAUDE.md 服务清单新增 `tg.shinya.click` 行，补凭据指针（`.env` 三项、userbot session 敏感级）
-- gotchas.md：`logOut` 与 10 分钟切换限制、409 Conflict、my.telegram.org 申请报错、userbot 风险与破窗（session 失效重登）
-- backup.md：`media/`、`botapi/` exclude 与 NAS 拉取
-- Cup exclude 增加 `tgarchive` 前缀
+- CLAUDE.md：服务清单新增 `tg.shinya.click` 行；凭据指针补 `.env` 的 `TOKEN_ENC_KEY`、userbot session 敏感级与 `notify.json` ACL；OpenList 补只读存储 `/tgarchive-media`；容器数、域名数与 `import compress` 引用数
+- gotchas.md：新增 TGArchive 段（镜像与升级、子进程与停机、Caddy 顺序、`notify.json` ACL 与 inode、`logOut` 与 10 分钟切换限制、409 Conflict、my.telegram.org 申请报错、userbot 风险与破窗、`TOKEN_ENC_KEY`）
+- backup.md：`media/`、`botapi/`、`botapi-tmp/` 的 exclude 与 `SQLITE_SKIP`，NAS 拉取
+- dns.md、current-state.md：SaaS 子域清单与计数
+- sso.md、bark.md、inspection.md、disaster-recovery.md：接入方式、通知调用方、NAS 心跳与对账、恢复速查
+- Cup 不加 exclude：`ghcr.io/senshinya/tgarchive` 按 semver 监控

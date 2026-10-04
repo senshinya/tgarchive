@@ -16,24 +16,58 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("FAKE_PARENT") == "1" {
+		runFakeParent()
+	}
 	if os.Getenv("FAKE_BOTAPI") == "1" {
 		f, _ := os.OpenFile(os.Getenv("FAKE_RECORD"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		fmt.Fprintf(f, "%s %s %s token=%q\n", os.Getenv("TELEGRAM_API_ID"), os.Getenv("TELEGRAM_API_HASH"), strings.Join(os.Args[1:], " "), os.Getenv("TOKEN_ENC_KEY"))
 		f.Close()
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGTERM)
+		markTerm := func() {}
+		if p := os.Getenv("FAKE_TERM_RECORD"); p != "" {
+			appendLine(p, fmt.Sprintf("start %d", os.Getpid()))
+			markTerm = func() { appendLine(p, "term") }
+		}
 		if ms, err := strconv.Atoi(os.Getenv("FAKE_EXIT_AFTER_MS")); err == nil {
 			select {
 			case <-sig:
+				markTerm()
 				os.Exit(0)
 			case <-time.After(time.Duration(ms) * time.Millisecond):
 				os.Exit(1)
 			}
 		}
 		<-sig
+		markTerm()
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+func appendLine(path, line string) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	fmt.Fprintln(f, line)
+	f.Close()
+}
+
+// runFakeParent stands in for the tgarchive process in the parent-death test: it supervises a fake
+// child and then idles until the test SIGKILLs it.
+func runFakeParent() {
+	dir := os.Getenv("FAKE_DIR")
+	s := New(os.Args[0], filepath.Join(dir, "botapi"), filepath.Join(dir, "tmp"), 18082)
+	s.Env = []string{
+		"FAKE_BOTAPI=1",
+		"FAKE_RECORD=" + os.Getenv("FAKE_RECORD"),
+		"FAKE_TERM_RECORD=" + os.Getenv("FAKE_TERM_RECORD"),
+	}
+	go s.Run(context.Background(), &tgapp.Credentials{APIID: 1, APIHash: hash1})
+	time.Sleep(time.Hour)
+	os.Exit(0)
 }
 
 const hash1 = "11111111111111111111111111111111"

@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -145,11 +146,24 @@ func (s *Supervisor) start(c tgapp.Credentials) (*exec.Cmd, <-chan error, error)
 		"TELEGRAM_API_HASH=" + c.APIHash,
 	}, s.Env...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Start(); err != nil {
+	setPdeathsig(cmd)
+	// Pdeathsig follows the forking OS thread, not the process. Start and reap the child on one locked
+	// thread that does nothing else, so the runtime can never retire that thread under a live child.
+	started := make(chan error, 1)
+	done := make(chan error, 1)
+	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		if err := cmd.Start(); err != nil {
+			started <- err
+			return
+		}
+		started <- nil
+		done <- cmd.Wait()
+	}()
+	if err := <-started; err != nil {
 		return nil, nil, err
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
 	return cmd, done, nil
 }
 
