@@ -3,14 +3,20 @@
 package botapiserver
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
+
+	"tgarchive/internal/tgapp"
 )
 
 func TestSetPdeathsig(t *testing.T) {
@@ -53,4 +59,32 @@ func TestChildTerminatedWhenParentDies(t *testing.T) {
 	eventually(t, "child got SIGTERM after its parent died", func() bool {
 		return slices.Contains(lines(term), "term")
 	})
+}
+
+// The runtime terminates the OS thread of a goroutine that exits while locked to it. If that is the
+// thread which forked the child, Pdeathsig fires and the healthy child is killed.
+func TestChildSurvivesOSThreadChurn(t *testing.T) {
+	s, record := newSup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx, &tgapp.Credentials{APIID: 1, APIHash: hash1})
+	eventually(t, "running", func() bool {
+		st, _ := s.Status()
+		return st == StateRunning && len(lines(record)) == 1
+	})
+	for i := 0; i < 200; i++ {
+		var wg sync.WaitGroup
+		for j := 0; j < 8; j++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				runtime.LockOSThread() // exits still locked: the runtime retires this OS thread
+			}()
+		}
+		wg.Wait()
+	}
+	time.Sleep(300 * time.Millisecond)
+	if n := len(lines(record)); n != 1 {
+		t.Fatalf("child was restarted %d time(s) during OS thread churn", n-1)
+	}
 }
