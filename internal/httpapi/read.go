@@ -190,17 +190,41 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request) {
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
-	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
-	w.Header().Set("ETag", fmt.Sprintf(`"m%d"`, m.ID))
-	if r.URL.Query().Get("download") == "1" {
+	inline := inlineSafe(ct)
+	if !inline {
+		ct = "application/octet-stream"
+	}
+	h := w.Header()
+	h.Set("Content-Type", ct)
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", mediaCSP)
+	h.Set("Cache-Control", "private, max-age=31536000, immutable")
+	h.Set("ETag", fmt.Sprintf(`"m%d"`, m.ID))
+	if !inline || r.URL.Query().Get("download") == "1" {
 		name := m.FileName
 		if name == "" {
 			name = filepath.Base(p)
 		}
-		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+		h.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	}
 	http.ServeContent(w, r, "", st.ModTime(), f)
+}
+
+// mediaCSP keeps archived files from running script even if a browser renders them.
+const mediaCSP = "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox"
+
+// inlineSafe reports whether a stored media type may be rendered by the browser. Anything else
+// (SVG, HTML, XHTML, PDF, text, ...) could carry script and is served as an opaque download.
+func inlineSafe(ct string) bool {
+	mt, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return false
+	}
+	switch mt {
+	case "image/jpeg", "image/png", "image/gif", "image/webp", "application/x-tgsticker":
+		return true
+	}
+	return strings.HasPrefix(mt, "video/") || strings.HasPrefix(mt, "audio/")
 }
 
 func (s *Server) serveAvatar(w http.ResponseWriter, r *http.Request) {

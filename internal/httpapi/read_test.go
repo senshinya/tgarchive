@@ -222,3 +222,30 @@ func TestSSE(t *testing.T) {
 	}
 	t.Fatal("event not received")
 }
+
+func TestServeMediaContentSafety(t *testing.T) {
+	e := newReadEnv(t)
+	const csp = "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox"
+	w := do(e.h, "GET", fmt.Sprintf("/media/%d", e.media), nil)
+	if w.Code != 200 || w.Header().Get("Content-Type") != "image/jpeg" || w.Header().Get("Content-Disposition") != "" ||
+		w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("Content-Security-Policy") != csp {
+		t.Fatalf("jpeg = %d %v", w.Code, w.Header())
+	}
+
+	bot, _ := e.st.UpsertBot(bg, &store.Bot{TgBotID: 777, TokenEnc: []byte("x"), CreatedAt: 1})
+	doc := &model.Message{TgMessageID: 3, Source: model.SourceBotUpdate, Date: 3, Kind: model.KindDocument, RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`),
+		Media: []model.Media{{DedupeKey: "bot:html", Kind: "document", Mime: "text/html", FileName: "evil.html", Role: model.RoleMain}}}
+	e.st.Ingest(bg, store.IngestInput{BotID: bot, Sender: model.Sender{TgUserID: 42}, Msg: doc, Now: 3})
+	due, _ := e.st.DueMedia(bg, 0, 10)
+	if len(due) != 1 {
+		t.Fatalf("due = %+v", due)
+	}
+	os.WriteFile(filepath.Join(e.srv.MediaDir, "1", "h.html"), []byte("<script>alert(1)</script>"), 0o644)
+	e.st.MarkMediaDone(bg, due[0].ID, "1/h.html", 25)
+	w = do(e.h, "GET", fmt.Sprintf("/media/%d", due[0].ID), nil)
+	if w.Code != 200 || w.Header().Get("Content-Type") != "application/octet-stream" ||
+		!strings.HasPrefix(w.Header().Get("Content-Disposition"), "attachment") || !strings.Contains(w.Header().Get("Content-Disposition"), "evil.html") ||
+		w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("Content-Security-Policy") != csp {
+		t.Fatalf("html = %d %v", w.Code, w.Header())
+	}
+}
