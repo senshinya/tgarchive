@@ -1,0 +1,173 @@
+// Design tokens. Values restate the documented Telegram Web A visual facts
+// (.superpowers/research/webA-design.md); no Web A source is copied.
+
+@mixin light-theme {
+  color-scheme: light;
+  --color-primary: #3390ec;
+  --color-primary-shade: #2a7fd6;
+  --color-primary-tint: rgba(51, 144, 236, 0.08);
+  --color-background: #ffffff;
+  --color-background-secondary: #f4f4f5;
+  --color-background-secondary-accent: #e4e4e5;
+  --color-background-selected: #f4f4f5;
+  --color-chat-hover: #f4f4f5;
+  --color-chat-active: #3390ec;
+  --color-item-hover: #f4f4f5;
+  --color-item-active: #ededed;
+  --color-text: #000000;
+  --color-text-secondary: #707579;
+  --color-text-meta: #686c72;
+  --color-text-green: #4fae4e;
+  --color-borders: #dadce0;
+  --color-borders-input: #dadce0;
+  --color-dividers: #c8c6cc;
+  --color-links: #3390ec;
+  --color-placeholders: #a2acb4;
+  --color-gray: #c4c9cc;
+  --color-active: #00c73e;
+  --color-code: #4a729a;
+  --color-code-bg: rgba(112, 117, 121, 0.08);
+  --color-chat-username: #3c7eb0;
+  --color-default-shadow: #72727240;
+  --color-toast-background: #202020cc;
+  --color-interactive-element-hover: rgba(112, 117, 121, 0.08);
+  --wallpaper-1: #bdcd8c;
+  --wallpaper-2: #8eba89;
+  --wallpaper-3: #83b28f;
+  --wallpaper-4: #c5d3b0;
+  --action-message-bg: #4a8e3a8c;
+}
+
+@mixin dark-theme {
+  color-scheme: dark;
+  --color-primary: #8774e1;
+  --color-primary-shade: #7b67db;
+  --color-primary-tint: rgba(135, 116, 225, 0.12);
+  --color-background: #212121;
+  --color-background-secondary: #0f0f0f;
+  --color-background-secondary-accent: #191919;
+  --color-background-selected: #2c2c2c;
+  --color-chat-hover: #2c2c2c;
+  --color-chat-active: #766ac8;
+  --color-item-hover: #2c2c2c;
+  --color-item-active: #292929;
+  --color-text: #ffffff;
+  --color-text-secondary: #aaaaaa;
+  --color-borders: #303030;
+  --color-borders-input: #5b5b5a;
+  --color-dividers: #3b3b3d;
+  --color-links: #8774e1;
+  --color-gray: #717579;
+  --color-active: #8774e1;
+  --color-code: #8774e1;
+  --color-code-bg: #00000080;
+  --color-chat-username: #e9eef4;
+  --color-default-shadow: #1010109c;
+  --color-toast-background: #000000cc;
+  --color-interactive-element-hover: rgba(170, 170, 170, 0.08);
+  --wallpaper-1: #4f5bd5;
+  --wallpaper-2: #962fbf;
+  --wallpaper-3: #dd6cb9;
+  --wallpaper-4: #fec496;
+  --action-message-bg: #48576166;
+}
+
+:root {
+  --font-family: "Roboto", -apple-system, BlinkMacSystemFont, "Apple Color Emoji", "Segoe UI", Oxygen, Ubuntu,
+    Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+  --font-family-monospace: "Cascadia Mono", "Roboto Mono", "Droid Sans Mono", "SF Mono", "Menlo", "Ubuntu Mono",
+    "Consolas", monospace;
+  --font-family-rounded: "Nunito", "Roboto", "Helvetica Neue", sans-serif;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 500;
+  --message-text-size: 1rem;
+
+  --color-error: #e53935;
+  --color-warning: #fb8c00;
+  --color-green: #00c73e;
+  --color-white: #ffffff;
+  --color-scrollbar: rgba(90, 90, 90, 0.3);
+  --color-scrollbar-code: rgba(200, 200, 200, 0.3);
+  --color-deleted-account: #9eaab5;
+
+  --peer-0: #d45246;
+  --peer-1: #f68136;
+  --peer-2: #6c61df;
+  --peer-3: #46ba43;
+  --peer-4: #5caffa;
+  --peer-5: #408acf;
+  --peer-6: #d95574;
+
+  --border-radius-button: 28px;
+  --border-radius-button-tiny: 18px;
+  --border-radius-modal: 32px;
+  --border-radius-toast: 16px;
+  --border-radius-island: 24px;
+  --border-radius-default: 16px;
+  --border-radius-default-small: 10px;
+  --border-radius-default-tiny: 6px;
+  --border-radius-messages: 15px;
+  --border-radius-messages-small: 6px;
+
+  --shadow-island: 0 1px 4px 0 #0000000d;
+  --shadow-pane: 0 1px 5px -1px rgba(0, 0, 0, 0.21);
+  --shadow-chat-list-panel: 0 1px 8px 0 rgba(0, 0, 0, 0.1);
+  --shadow-bubble: 0 1px 2px var(--color-default-shadow);
+
+  --layer-transition: 300ms cubic-bezier(0.33, 1, 0.68, 1);
+  --slide-transition: 300ms cubic-bezier(0.25, 1, 0.5, 1);
+  --select-transition: 200ms ease-out;
+  --chat-transform-transition: 0.2s ease-out;
+
+  --column-header-height: 4rem;
+  --middle-header-height: 3rem;
+  --middle-panel-inline-padding: 1rem;
+  --messages-container-width: 47.5rem;
+  --right-column-width: 26.5rem;
+
+  @include light-theme;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    @include dark-theme;
+  }
+}
+
+html.is-apple {
+  --font-family: system-ui, -apple-system, BlinkMacSystemFont, "Roboto", "Apple Color Emoji", "Helvetica Neue",
+    sans-serif;
+  --font-weight-semibold: 600;
+  --color-text-secondary: #8e8e92;
+}
+
+@media (prefers-color-scheme: dark) {
+  html.is-apple {
+    --color-text-secondary: #aaaaaa;
+  }
+}
+
+html.is-ios {
+  --border-radius-messages: 16px;
+  --border-radius-messages-small: 8px;
+  --message-text-size: 1.0625rem;
+}
+
+@media (max-width: 600px) {
+  :root {
+    --middle-panel-inline-padding: 0.5rem;
+  }
+}
+
+@media (min-width: 1276px) and (max-width: 1920px) {
+  :root {
+    --right-column-width: 25vw;
+  }
+}
+
+@media (min-width: 1921px) {
+  :root {
+    --messages-container-width: 50vw;
+  }
+}

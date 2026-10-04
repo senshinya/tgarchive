@@ -1,4 +1,4 @@
-// Package web embeds the built SPA. Plan 3 replaces dist/ with the Preact build output.
+// Package web embeds the built SPA: web/dist is produced by `npm run build` (only dist/.gitkeep is tracked).
 package web
 
 import (
