@@ -168,7 +168,7 @@ messages(
 
 media(
   id INTEGER PK,
-  dedupe_key TEXT,               -- bot:<file_unique_id> 或 mt:<photo/document id>
+  dedupe_key TEXT,               -- bot:<file_unique_id>；mt:photo:<id>[:<size>]、mt:doc:<id>[:thumb]
   kind TEXT, mime TEXT, file_name TEXT, size INTEGER,
   width INTEGER, height INTEGER, duration INTEGER,
   waveform BLOB,                 -- 语音波形（5-bit packed，与 TG 一致）
@@ -186,6 +186,17 @@ userbot(
 
 settings(                        -- 键值配置；telegram_app = 加密的 {api_id, api_hash}
   key TEXT PK, value BLOB, updated_at INTEGER)
+
+userbot_peers(                   -- 账号可见频道的 access_hash 缓存（私有链接用）
+  channel_id INTEGER PK, access_hash INTEGER, username TEXT, title TEXT, updated_at INTEGER)
+
+fetch_jobs(                      -- 代取任务；一条链接消息一个任务
+  id INTEGER PK, bot_id INTEGER, sender_id INTEGER, link_tg_message_id INTEGER, link TEXT,
+  state TEXT,                    -- queued / fetching / fetched / failed / unsupported
+  error TEXT, receipt TEXT, created_at INTEGER, updated_at INTEGER,
+  UNIQUE(bot_id, sender_id, link_tg_message_id))
+
+fetch_job_messages(job_id INTEGER, message_id INTEGER, PRIMARY KEY(job_id, message_id))
 ```
 
 说明：
@@ -195,7 +206,7 @@ settings(                        -- 键值配置；telegram_app = 加密的 {api
 - `raw_json` 全量保存，供日后补充渲染器；未识别类型 `kind=other`，前端显示「不支持的消息类型」气泡
 - 迁移：内嵌 SQL 文件，启动时按 `PRAGMA user_version` 顺序执行；WAL 模式
 
-媒体路径：`media/<bot_id>/<yyyy>/<mm>/<sha1(dedupe_key)>.<ext>`；缩略图同目录 `.thumb.jpg`。头像：`avatars/{bots,senders}/<tg_id>.jpg`。
+媒体路径：`media/<bot_id>/<yyyy>/<mm>/<sha1(dedupe_key)>.<ext>`；缩略图同目录 `.thumb.jpg`。头像：`avatars/{bots,senders}/<tg_id>.jpg`。userbot 代取的媒体在 `media/mt/<yyyy>/<mm>/`。代取消息的 `date` 为原帖时间，会话排序（`last_message_at`）取入库时间。
 
 ## 5. Bot 采集流程
 
@@ -251,20 +262,20 @@ userbot 使用的 `api_id` / `api_hash` 从 `internal/tgapp`（`settings` 表）
 - `https://t.me/c/<channel_id>/<msg>`
 - `https://t.me/c/<channel_id>/<topic>/<msg>`、`https://t.me/<username>/<topic>/<msg>`
 - 以上均可带 `?single`，`telegram.me` 与无 scheme 形式等价
-- 其他格式 → 回复「不支持的链接格式」
+- 其他 t.me 链接 → 回复「⚠️ 代取失败：不支持的链接格式」，并按普通消息存档（只回复一次）
 
 ### 代取流程
 
 `LinkHandler.TryHandle(ctx, botID, sender, msg, canFetch) (handled bool, err error)`：不是可代取的链接或发送者无 `can_fetch` → `(false, nil)`，按普通消息存档；已接手 → `(true, nil)`；暂时无法接手 → 返回错误，该 update 会被重新投递。实现必须按 `(botID, msg.TgMessageID)` 幂等，重复投递不得重复入队或重复回复。
 
-1. 原链接消息设 👀，任务入 userbot 串行队列
+1. 写入 `fetch_jobs`（唯一键保证重投不重复入队）并在原链接消息设 👀，由串行队列处理；进程重启时 `fetching` 的任务重新排队
 2. 解析 peer：
    - 公开链接（username）→ `contacts.resolveUsername` 直接取得 access_hash，**无需加入**（等同客户端预览）
-   - 私有链接（`c/<id>`）→ 链接只含数字 ID，access_hash 只能从账号自己的对话中取得，**必须是成员**：查 gotd peer 存储，缺失则调用一次 `messages.getDialogs` 刷新后再查；仍无 → 失败「私有群/频道，代取账号未加入」
+   - 私有链接（`c/<id>`）→ 链接只含数字 ID，access_hash 只能从账号自己的对话中取得，**必须是成员**：查 `userbot_peers` 缓存，缺失则遍历一次 `messages.getDialogs`（找到即停）并缓存见到的频道后再查；仍无 → 失败「私有群/频道，代取账号未加入」
 3. `channels.getMessages`（私聊/普通群链接不适用，链接格式只覆盖频道与超级群）取消息；若带 `grouped_id` 且未指定 `?single`，再取 `[msg-10, msg+10]`，筛出同组消息
 4. 经 `convert/mtproto` 转换，`source=userbot_fetch`，写入「发送者 × 该机器人」会话，`origin_chat_id/title/link` 填写，`tg_message_id` 为原群消息 ID
-5. 媒体经 `upload.getFile` 分块流式写入归档路径，单文件上限按账号（普通 2GB / Premium 4GB），复用下载队列的状态机与去重（`dedupe_key = mt:<id>`）
-6. 完成设 👌；失败回复原因
+5. 媒体经 `upload.getFile` 分块流式写入归档路径，复用下载队列的状态机与去重（`dedupe_key` 见 §4）；file reference 过期时重取原消息刷新后重试
+6. 全部代取消息的主媒体落定后设 👌；代取失败回复「⚠️ 代取失败：<原因>」；媒体最终失败回复「⚠️ 存档失败：<原因>」
 
 ### 限流与失效
 
@@ -288,13 +299,14 @@ userbot 违反 Telegram 使用条款，存在账号受限风险。session 等同
 | DELETE | `/api/messages/:id` | 删除存档（软删 + 清理孤立媒体） |
 | POST | `/api/media/:id/retry` | 重试失败媒体 |
 | GET | `/api/events` | SSE：`message.created/updated/deleted`、`media.updated`、`bot.status` |
-| GET | `/media/:id`、`/media/:id/thumb` | Range + ETag，`Cache-Control: private, max-age=31536000, immutable`；见下方媒体安全头 |
+| GET | `/media/:id` | Range + ETag，`Cache-Control: private, max-age=31536000, immutable`；见下方媒体安全头 |
 | GET/POST/PATCH/DELETE | `/api/admin/bots[...]` | 添加（分步结果）、启停、删除 |
 | GET/PUT/DELETE | `/api/admin/bots/:id/whitelist[...]` | 白名单与 `can_fetch` |
 | GET | `/api/admin/bots/:id/rejected` | 最近被拒绝的发送者 |
 | GET | `/api/admin/telegram-app` | `{configured, api_id, server: {managed, state, error}}`，不返回 `api_hash` |
 | PUT | `/api/admin/telegram-app` | 保存 `{api_id, api_hash}`（加密入 `settings`），托管模式下以新凭据重启 Bot API 子进程；成功 204，校验失败 400 |
-| POST | `/api/admin/userbot/{phone,code,password,logout}` | userbot 登录流程 |
+| GET | `/api/admin/userbot` | `{state, phone, name, tg_user_id, error}`；state ∈ unconfigured / connecting / logged_out / code_sent / password_needed / ready / error |
+| POST | `/api/admin/userbot/{phone,code,password,logout}` | 登录流程：`{phone}` → `{code}` → `{password}`（如需）；返回最新状态；输入错误 400、步骤错误或未配置 409、未连接 503；logout 204 |
 
 媒体安全头：`/media/*` 一律带 `X-Content-Type-Options: nosniff` 与 `Content-Security-Policy: default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox`。仅 `image/jpeg`、`image/png`、`image/gif`、`image/webp`、`video/*`、`audio/*`、`application/x-tgsticker` 内联返回；其余类型（含 SVG、HTML、XHTML、PDF、`text/*`）以 `application/octet-stream` + `Content-Disposition: attachment` 返回。
 
