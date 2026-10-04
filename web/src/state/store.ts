@@ -46,8 +46,11 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
 
   const botsById = computed(() => new Map(bots.value.map((b) => [b.id, b])));
+  // Falls back to "全部" when the selected bot was purged from `bots` but the reload that
+  // should reset `botFilter` to 0 hasn't landed yet (or a future consumer forgets to reset it).
+  const effectiveBotFilter = computed(() => (botFilter.value && botsById.value.has(botFilter.value) ? botFilter.value : 0));
   const visibleChats = computed(() =>
-    botFilter.value ? chats.value.filter((c) => c.bot_id === botFilter.value) : chats.value,
+    effectiveBotFilter.value ? chats.value.filter((c) => c.bot_id === effectiveBotFilter.value) : chats.value,
   );
 
   function showToast(text: string) {
@@ -65,6 +68,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
   async function loadBots() {
     try {
       bots.value = await api.bots();
+      if (botFilter.value && !botsById.value.has(botFilter.value)) botFilter.value = 0;
     } catch (e) {
       showToast(errorMessage(e));
     }
@@ -215,6 +219,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
     chats,
     chatsLoaded,
     botFilter,
+    effectiveBotFilter,
     conversations,
     toast,
     viewer,

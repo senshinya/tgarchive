@@ -1,10 +1,11 @@
-import { useEffect } from 'preact/hooks';
+import { useEffect, useRef } from 'preact/hooks';
+import { NETWORK_ERROR } from './api/client';
 import { ChatsPanel } from './components/left/ChatsPanel';
 import { MiddleColumn } from './components/middle/MiddleColumn';
 import { SharedMedia } from './components/right/SharedMedia';
 import { SettingsPanel } from './components/settings/SettingsPanel';
 import { MediaViewer } from './components/viewer/MediaViewer';
-import { isSettings, route, startRouter } from './lib/router';
+import { isSettings, navigate, route, startRouter } from './lib/router';
 import { connectEvents, type EventSourceFactory } from './lib/sse';
 import { StoreContext, type Store } from './state/store';
 import { Toast } from './ui/Toast';
@@ -25,6 +26,7 @@ export function App({ store, eventSource }: Props) {
       (ev) => void store.handleEvent(ev),
       () => void store.resync(),
       eventSource,
+      () => store.showToast(NETWORK_ERROR),
     );
     return () => {
       stopRouter();
@@ -37,13 +39,37 @@ export function App({ store, eventSource }: Props) {
   const rightOpen = chatId > 0 && store.sharedMediaOpen.value;
   const cls = [!chatId && 'left-column-open', rightOpen && 'right-column-open'].filter(Boolean).join(' ');
 
+  // Remembers the chat that was open before navigating away (e.g. into settings), so the
+  // ≤925px left-overlay scrim can offer a way back to it. Updated during render, not an
+  // effect: the value must be ready for the SAME render that may show the scrim.
+  const lastChatId = useRef(0);
+  if (chatId > 0) lastChatId.current = chatId;
+  const showScrim = !chatId && lastChatId.current > 0;
+
+  // Closing the viewer / shared-media panel on navigation keeps them from outliving the
+  // content they were opened for (browser back, switching chats, etc).
+  useEffect(() => {
+    store.viewer.value = null;
+  }, [r]);
+  useEffect(() => {
+    store.sharedMediaOpen.value = false;
+  }, [chatId]);
+
   return (
     <StoreContext.Provider value={store}>
       <div id="Main" class={cls}>
         <div id="LeftColumn">{isSettings(r) ? <SettingsPanel route={r} /> : <ChatsPanel />}</div>
+        {showScrim && (
+          <button
+            type="button"
+            id="LeftScrim"
+            aria-label="返回会话"
+            onClick={() => navigate({ name: 'chat', chatId: lastChatId.current })}
+          />
+        )}
         <MiddleColumn chatId={chatId} />
         <div id="RightColumn" aria-hidden={!rightOpen}>
-          {rightOpen && <SharedMedia chatId={chatId} />}
+          {rightOpen && <SharedMedia key={chatId} chatId={chatId} />}
         </div>
       </div>
       <MediaViewer />

@@ -87,6 +87,23 @@
   }
 }
 
+// Dims the content behind the left overlay at tablet widths and offers a tap-back to the chat
+// that's underneath. Not shown at ≤600px (single-column, no overlay-over-content to dim) or
+// ≥926px (left column sits beside the rest, not over it).
+#LeftScrim {
+  display: none;
+}
+
+@media (min-width: 601px) and (max-width: 925px) {
+  #Main.left-column-open #LeftScrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: rgba(0, 0, 0, 0.25);
+  }
+}
+
 @media (max-width: 600px) {
   #LeftColumn {
     z-index: 2;

@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from 'lucide-preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { mediaUrl } from '../../api/client';
+import { errorMessage, mediaUrl } from '../../api/client';
 import type { Media, Message } from '../../api/types';
 import { formatFullDate, senderName } from '../../lib/format';
 import { useStore, type ViewerTarget } from '../../state/store';
@@ -57,8 +57,10 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
       const list = toViewerItems(all);
       if (list.some((it) => it.media.id === target.mediaId)) setItems(list);
       else if (seed.length === 0) close();
-    })().catch(() => {
-      if (!cancelled && seed.length === 0) close();
+    })().catch((err) => {
+      if (cancelled) return;
+      if (seed.length > 0) store.showToast(errorMessage(err));
+      else close();
     });
     return () => {
       cancelled = true;

@@ -29,7 +29,7 @@ function BotTabs() {
     <Tabs
       class="BotTabs"
       items={items}
-      active={store.botFilter.value}
+      active={store.effectiveBotFilter.value}
       onChange={(k) => {
         store.botFilter.value = k;
       }}
@@ -74,7 +74,7 @@ export function ChatsPanel() {
   const r = route.value;
   const selectedId = r.name === 'chat' ? r.chatId : 0;
   const chats = store.visibleChats.value;
-  const showBot = store.botFilter.value === 0 && store.bots.value.length > 1;
+  const showBot = store.effectiveBotFilter.value === 0 && store.bots.value.length > 1;
   return (
     <div class="ChatsPanel">
       <div class="left-header">

@@ -62,6 +62,22 @@ describe('ChatsPanel', () => {
     expect(container.querySelectorAll('.ChatItem')[1].classList.contains('selected')).toBe(true);
   });
 
+  it('shows all chats again, instead of staying stuck empty, after the filtered bot is purged', async () => {
+    const { container, store, api } = await setup();
+    fireEvent.click(screen.getByRole('tab', { name: 'Beta' }));
+    expect(container.querySelectorAll('.ChatItem')).toHaveLength(1);
+
+    // Bot 2 gets purged; the chats panel reloads (as BotSettings.remove() does).
+    api.bots = vi.fn(async () => [makeBot({ id: 1, name: 'Alpha' })]);
+    api.chats = vi.fn(async () => [makeChat({ id: 10, bot_id: 1 })]);
+    await act(async () => {
+      await store.loadBots();
+      await store.loadChats();
+    });
+    expect(container.querySelectorAll('.ChatItem')).toHaveLength(1);
+    expect(container.querySelectorAll('.ChatItem')[0].textContent).toContain('Alice');
+  });
+
   it('shows the empty state and opens settings from the gear', async () => {
     const r = renderWithStore(<ChatsPanel />);
     await act(async () => {

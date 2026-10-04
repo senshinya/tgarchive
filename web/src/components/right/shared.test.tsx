@@ -1,5 +1,6 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/preact';
 import { describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client';
 import type { Message } from '../../api/types';
 import { fakeApi, makeMedia, makeMessage } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
@@ -112,5 +113,21 @@ describe('MediaViewer', () => {
       store.viewer.value = { chatId: 10, messageId: 9, mediaId: 99 };
     });
     await waitFor(() => expect(store.viewer.value).toBeNull());
+  });
+
+  it('toasts a background refresh error but keeps the viewer open when content was already seeded', async () => {
+    const api = fakeApi({
+      messages: vi.fn(async () => [makeMessage({ id: 3, kind: 'photo', media: [makeMedia({ id: 30 })] })]),
+      chatMedia: vi.fn(async () => Promise.reject(new ApiError(500, 'boom', null))),
+    });
+    const { store } = renderWithStore(<MediaViewer />, api);
+    await act(async () => {
+      await store.refreshLatest(10);
+    });
+    act(() => {
+      store.viewer.value = { chatId: 10, messageId: 3, mediaId: 30 };
+    });
+    await waitFor(() => expect(store.toast.value?.text).toBe('boom'));
+    expect(store.viewer.value).not.toBeNull();
   });
 });

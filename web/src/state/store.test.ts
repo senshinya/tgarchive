@@ -11,12 +11,36 @@ const ids = (ms: Message[]) => ms.map((m) => m.id);
 
 describe('store', () => {
   it('filters chats by the selected bot', async () => {
-    const api = fakeApi({ chats: vi.fn(async () => [makeChat({ id: 1, bot_id: 1 }), makeChat({ id: 2, bot_id: 2 })]) });
+    const api = fakeApi({
+      bots: vi.fn(async () => [makeBot({ id: 1 }), makeBot({ id: 2 })]),
+      chats: vi.fn(async () => [makeChat({ id: 1, bot_id: 1 }), makeChat({ id: 2, bot_id: 2 })]),
+    });
     const s = createStore(api);
+    await s.loadBots();
     await s.loadChats();
     expect(s.visibleChats.value.map((c) => c.id)).toEqual([1, 2]);
     s.botFilter.value = 2;
     expect(s.visibleChats.value.map((c) => c.id)).toEqual([2]);
+  });
+
+  it('falls back to showing all chats, and resets the filter, once the filtered bot is gone', async () => {
+    const api = fakeApi({
+      bots: vi.fn(async () => [makeBot({ id: 1 }), makeBot({ id: 2 })]),
+      chats: vi.fn(async () => [makeChat({ id: 10, bot_id: 1 }), makeChat({ id: 11, bot_id: 2 })]),
+    });
+    const s = createStore(api);
+    await s.loadBots();
+    await s.loadChats();
+    s.botFilter.value = 2;
+    expect(s.visibleChats.value.map((c) => c.id)).toEqual([11]);
+
+    // Bot 2 gets purged: a reload no longer returns it or its chats.
+    api.bots = vi.fn(async () => [makeBot({ id: 1 })]);
+    api.chats = vi.fn(async () => [makeChat({ id: 10, bot_id: 1 })]);
+    await s.loadBots();
+    await s.loadChats();
+    expect(s.botFilter.value).toBe(0);
+    expect(s.visibleChats.value.map((c) => c.id)).toEqual([10]);
   });
 
   it('loads the latest page and then older pages until exhausted', async () => {

@@ -73,4 +73,35 @@ describe('connectEvents', () => {
     stop();
     expect(FakeES.all[1].closed).toBe(true);
   });
+
+  it('calls onDown once per outage, not once per failed retry, and rearms once it reopens', () => {
+    vi.useFakeTimers();
+    const onDown = vi.fn();
+    const stop = connectEvents(() => {}, () => {}, (u) => new FakeES(u), onDown);
+    FakeES.all[0].readyState = 2;
+    FakeES.all[0].onerror?.(new Event('error'));
+    expect(onDown).toHaveBeenCalledTimes(1);
+
+    // The retry itself also fails to connect: still the same outage, must not notify again.
+    vi.advanceTimersByTime(RETRY_MS);
+    FakeES.all[1].readyState = 2;
+    FakeES.all[1].onerror?.(new Event('error'));
+    expect(onDown).toHaveBeenCalledTimes(1);
+
+    // It recovers, then drops again later: that is a new outage.
+    FakeES.all[1].onopen?.(new Event('open'));
+    FakeES.all[1].readyState = 2;
+    FakeES.all[1].onerror?.(new Event('error'));
+    expect(onDown).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it('does not call onDown for a transient CONNECTING error the browser retries itself', () => {
+    const onDown = vi.fn();
+    connectEvents(() => {}, () => {}, (u) => new FakeES(u), onDown);
+    const es = FakeES.all[0];
+    es.readyState = 0;
+    es.onerror?.(new Event('error'));
+    expect(onDown).not.toHaveBeenCalled();
+  });
 });
