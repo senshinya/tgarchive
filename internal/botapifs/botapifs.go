@@ -101,8 +101,13 @@ func (m Mapper) CleanOlderThan(age time.Duration, now time.Time) (int, error) {
 	return n, nil
 }
 
+// archiveMode is the mode of every archived file. The local Bot API server creates downloads 0600
+// and a hard link shares that inode, so it is widened here: the NAS pull reads media/ through
+// OpenList, which runs as a different UID.
+const archiveMode fs.FileMode = 0o644
+
 // LinkOrCopy places src at dst, replacing dst. A hard link is tried first (same filesystem),
-// falling back to copy-then-rename so dst is never observed half-written.
+// falling back to copy-then-rename so dst is never observed half-written. dst ends up archiveMode.
 func LinkOrCopy(src, dst string) error {
 	return redactErr(linkOrCopy(src, dst))
 }
@@ -112,7 +117,7 @@ func linkOrCopy(src, dst string) error {
 		return err
 	}
 	if err := os.Link(src, dst); err == nil {
-		return nil
+		return os.Chmod(dst, archiveMode)
 	}
 	in, err := os.Open(src)
 	if err != nil {
@@ -120,11 +125,16 @@ func linkOrCopy(src, dst string) error {
 	}
 	defer in.Close()
 	tmp := dst + ".part"
-	out, err := os.Create(tmp)
+	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, archiveMode)
 	if err != nil {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := out.Chmod(archiveMode); err != nil { // OpenFile's mode is filtered by the umask
 		out.Close()
 		os.Remove(tmp)
 		return err

@@ -114,3 +114,25 @@ func TestErrorsRedactToken(t *testing.T) {
 		t.Fatalf("LinkOrCopy error leaks token: %v", err)
 	}
 }
+
+func TestLinkOrCopyMakesArchiveWorldReadable(t *testing.T) {
+	// The local Bot API server (TDLib) creates downloads 0600, and a hard link shares that inode.
+	dir := t.TempDir()
+	src, dst := filepath.Join(dir, "a"), filepath.Join(dir, "b")
+	if err := os.WriteFile(src, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := LinkOrCopy(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Mode().Perm(); got != 0o644 {
+		t.Fatalf("archived file mode = %o, want 644", got)
+	}
+}
