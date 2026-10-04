@@ -24,25 +24,28 @@ export function Video({ msg, onOpen, fill }: Props) {
   const size = fitMedia({ width: main.width, height: main.height });
   const style = fill ? undefined : { width: `${size.width}px`, aspectRatio: `${size.width} / ${size.height}` };
   const done = main.state === 'done';
+  if (!done) {
+    return (
+      <div class={`media-inner Video${fill ? ' fill' : ''}`} style={style}>
+        <MediaStatus msg={msg} media={main} thumb={thumb} />
+      </div>
+    );
+  }
   return (
     <div class={`media-inner Video${fill ? ' fill' : ''}`} style={style}>
       {thumb ? (
         <img src={mediaUrl(thumb.id)} alt="" loading="lazy" class={spoiler ? 'media-spoiler-blur' : ''} />
-      ) : done ? (
-        <video src={`${mediaUrl(main.id)}#t=0.1`} preload="metadata" muted playsInline class={spoiler ? 'media-spoiler-blur' : ''} />
-      ) : null}
-      {done ? (
-        <button
-          type="button"
-          class="media-play"
-          aria-label="播放视频"
-          onClick={() => (spoiler ? setRevealed(true) : onOpen())}
-        >
-          <Play size={28} fill="currentColor" />
-        </button>
       ) : (
-        <MediaStatus msg={msg} media={main} />
+        <video src={`${mediaUrl(main.id)}#t=0.1`} preload="metadata" muted playsInline class={spoiler ? 'media-spoiler-blur' : ''} />
       )}
+      <button
+        type="button"
+        class="media-play"
+        aria-label="播放视频"
+        onClick={() => (spoiler ? setRevealed(true) : onOpen())}
+      >
+        <Play size={28} fill="currentColor" />
+      </button>
       <span class="MediaBadge">{formatDuration(main.duration)}</span>
     </div>
   );

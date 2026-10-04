@@ -68,6 +68,31 @@ describe('Video', () => {
     fireEvent.click(screen.getByRole('button', { name: '播放视频' }));
     expect(onOpen).toHaveBeenCalled();
   });
+
+  it('shows the pending status when the thumbnail is ready but the main file is not', () => {
+    const msg = makeMessage({
+      kind: 'video',
+      media: [makeMedia({ id: 5, kind: 'video', duration: 75, state: 'pending' }), makeMedia({ id: 6, role: 'thumb' })],
+    });
+    renderWithStore(<Video msg={msg} onOpen={() => {}} />);
+    expect(screen.getByText('正在下载…')).toBeTruthy();
+  });
+
+  it('shows a retry button for failed media that calls the store', async () => {
+    const api = fakeApi();
+    const msg = makeMessage({
+      kind: 'video',
+      media: [
+        makeMedia({ id: 5, kind: 'video', duration: 75, state: 'failed', error: 'timeout' }),
+        makeMedia({ id: 6, role: 'thumb' }),
+      ],
+    });
+    renderWithStore(<Video msg={msg} onOpen={() => {}} />, api);
+    await act(async () => {
+      fireEvent.click(screen.getByText('重试'));
+    });
+    expect(api.retryMedia).toHaveBeenCalledWith(5);
+  });
 });
 
 describe('Document', () => {

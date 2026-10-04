@@ -9,7 +9,7 @@ export function TgsSticker({ src, fallback }: { src: string; fallback: string })
     let cancelled = false;
     let destroy: (() => void) | undefined;
     (async () => {
-      const res = await fetch(src);
+      const res = await fetch(src, { redirect: 'error' });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       const json = await new Response(res.body.pipeThrough(new DecompressionStream('gzip'))).json();
       const { default: lottie } = await import('lottie-web/build/player/lottie_light');
