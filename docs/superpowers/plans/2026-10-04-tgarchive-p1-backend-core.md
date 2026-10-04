@@ -7169,8 +7169,745 @@ git commit -m "feat: app wiring, entrypoint and end-to-end tests"
 
 ---
 
+### Task 17: 托管本地 Bot API 服务器，api_id / api_hash 改为 Web 设置
+
+> 用户追加需求（2026-10-04）：`api_id` / `api_hash` 不走环境变量，在 Web 上设置。因此应用托管 `telegram-bot-api` 子进程（计划 4 的镜像内置该二进制），凭据加密存库。
+
+**Files:**
+- Create: `internal/store/migrations/0002_settings.sql`, `internal/store/settings.go`, `internal/store/settings_test.go`, `internal/tgapp/tgapp.go`, `internal/tgapp/tgapp_test.go`, `internal/botapiserver/supervisor.go`, `internal/botapiserver/supervisor_test.go`, `internal/httpapi/settings.go`, `internal/httpapi/settings_test.go`
+- Modify: `internal/config/config.go`、`internal/config/config_test.go`（默认值与 `ManageBotAPI`）、`internal/httpapi/server.go`（Server 新字段、注册路由）、`internal/httpapi/admin.go`（addBot 前置检查）、`internal/httpapi/admin_test.go`（newAdminEnv 填 TgApp）、`internal/app/app.go`（装配与启动 supervisor）、`internal/store/store_test.go`（`TestMigrateIdempotent` 期望 user_version = 2）
+
+**Interfaces:**
+- Consumes: `store.Store.withTx/affected`、`seal.Box`、`httpapi.Server`、`app.App`
+- Produces:
+  - `store`：`GetSetting(ctx, key string) ([]byte, error)`（不存在为 `ErrNotFound`）、`PutSetting(ctx, key string, value []byte, now int64) error`
+  - `tgapp.Credentials{APIID int "api_id"; APIHash string "api_hash"}`；`tgapp.Validate(c Credentials) error`（`APIID > 0`，`APIHash` 为 32 位十六进制）；`tgapp.New(st *store.Store, box *seal.Box) *tgapp.Store`；`(*tgapp.Store).Load(ctx) (*Credentials, error)`（未设置为 `store.ErrNotFound`）；`(*tgapp.Store).Save(ctx, c Credentials, now int64) error`（先 Validate；存储键 `telegram_app`，值为 JSON 后 `box.Seal`）
+  - `botapiserver.New(binary, dir, tempDir string, port int) *botapiserver.Supervisor`；字段 `Env []string`（附加给子进程的环境，测试用）、`MinBackoff`/`MaxBackoff`；方法 `Run(ctx, initial *tgapp.Credentials)`（阻塞至 ctx 结束）、`Apply(c tgapp.Credentials)`、`Status() (state, lastErr string)`；状态常量 `StateUnconfigured = "unconfigured"`、`StateRunning = "running"`、`StateRestarting = "restarting"`
+  - `config.Config` 新字段 `ManageBotAPI bool`（env `BOT_API_MANAGED`，默认 true，`false` 关闭；其他值 fail-fast）、`BotAPIBinary string`（env `BOT_API_BINARY`，默认 `telegram-bot-api`）；默认值改为 `BotAPIURL = "http://127.0.0.1:8081"`、`BotAPIDirRemote = BotAPIDirLocal = <DATA_DIR>/botapi`
+  - `httpapi.Server` 新字段 `TgApp *tgapp.Store`、`BotAPI *botapiserver.Supervisor`（nil 表示不托管）
+  - API（计划 3 依赖）：
+    - `GET /api/admin/telegram-app` → `{"configured": bool, "api_id": int, "server": {"managed": bool, "state": string, "error": string}}`（**永不返回 api_hash**）
+    - `PUT /api/admin/telegram-app` body `{"api_id": int, "api_hash": string}` → 校验失败 400；成功 204，并对 supervisor `Apply`
+    - `POST /api/admin/bots`：当 `BotAPI != nil` 且凭据未设置时，返回 409 `{"error": "请先在设置中填写 api_id / api_hash"}`
+
+子进程规则：参数 `--local --dir=<Dir> --temp-dir=<TempDir> --http-port=<Port> --http-ip-address=127.0.0.1`；环境**只有** `PATH=/usr/local/bin:/usr/bin:/bin`、`TELEGRAM_API_ID`、`TELEGRAM_API_HASH` 加上 `Env` 字段（不继承本进程环境，避免把 `TOKEN_ENC_KEY` 传给子进程）。凭据变更 → SIGTERM（10 秒未退出则 SIGKILL）后用新凭据重启。意外退出 → 退避重启（`MinBackoff` 起翻倍，上限 `MaxBackoff`，默认 1s / 30s；稳定运行超过 1 分钟后退避复位）。
+
+- [ ] **Step 1: 迁移与 settings 存取**
+
+`internal/store/migrations/0002_settings.sql`
+
+```sql
+CREATE TABLE settings (
+  key        TEXT    PRIMARY KEY,
+  value      BLOB    NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+```
+
+`internal/store/settings_test.go`
+
+```go
+package store
+
+import (
+	"errors"
+	"testing"
+)
+
+func TestSettings(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.GetSetting(ctx, "k"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing setting err = %v", err)
+	}
+	if err := s.PutSetting(ctx, "k", []byte("v1"), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutSetting(ctx, "k", []byte("v2"), 2); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.GetSetting(ctx, "k")
+	if err != nil || string(v) != "v2" {
+		t.Fatalf("GetSetting = %q, %v", v, err)
+	}
+}
+```
+
+把 `store_test.go` 中 `TestMigrateIdempotent` 的 `v != 1` 改为 `v != 2`。
+
+`internal/store/settings.go`
+
+```go
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+)
+
+func (s *Store) GetSetting(ctx context.Context, key string) ([]byte, error) {
+	var v []byte
+	err := s.db.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = ?", key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return v, err
+}
+
+func (s *Store) PutSetting(ctx context.Context, key string, value []byte, now int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, key, value, now)
+	return err
+}
+```
+
+Run: `go test ./internal/store/` → 先 FAIL（未定义），实现后 PASS。
+
+- [ ] **Step 2: tgapp 凭据存取**
+
+`internal/tgapp/tgapp_test.go`
+
+```go
+package tgapp
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"tgarchive/internal/seal"
+	"tgarchive/internal/store"
+)
+
+const hash = "0123456789abcdef0123456789abcdef"
+
+func TestValidate(t *testing.T) {
+	if err := Validate(Credentials{APIID: 123, APIHash: hash}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []Credentials{{0, hash}, {-1, hash}, {1, "short"}, {1, strings.Repeat("z", 32)}, {1, ""}} {
+		if Validate(c) == nil {
+			t.Fatalf("%+v must be invalid", c)
+		}
+	}
+}
+
+func TestSaveLoad(t *testing.T) {
+	ctx := context.Background()
+	st, _ := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer st.Close()
+	box, _ := seal.New(bytes.Repeat([]byte{1}, 32))
+	s := New(st, box)
+	if _, err := s.Load(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unset = %v", err)
+	}
+	if err := s.Save(ctx, Credentials{APIID: 0, APIHash: hash}, 1); err == nil {
+		t.Fatal("invalid credentials must not be saved")
+	}
+	if err := s.Save(ctx, Credentials{APIID: 123, APIHash: hash}, 1); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := st.GetSetting(ctx, settingKey)
+	if bytes.Contains(raw, []byte(hash)) {
+		t.Fatal("api_hash stored in plaintext")
+	}
+	c, err := s.Load(ctx)
+	if err != nil || c.APIID != 123 || c.APIHash != hash {
+		t.Fatalf("Load = %+v, %v", c, err)
+	}
+}
+```
+
+`internal/tgapp/tgapp.go`
+
+```go
+// Package tgapp stores the Telegram application credentials (api_id / api_hash),
+// set from the web UI and encrypted at rest.
+package tgapp
+
+import (
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+
+	"tgarchive/internal/seal"
+	"tgarchive/internal/store"
+)
+
+const settingKey = "telegram_app"
+
+type Credentials struct {
+	APIID   int    `json:"api_id"`
+	APIHash string `json:"api_hash"`
+}
+
+func Validate(c Credentials) error {
+	if c.APIID <= 0 {
+		return errors.New("api_id 必须是正整数")
+	}
+	if b, err := hex.DecodeString(c.APIHash); err != nil || len(b) != 16 {
+		return errors.New("api_hash 必须是 32 位十六进制字符串")
+	}
+	return nil
+}
+
+type Store struct {
+	st  *store.Store
+	box *seal.Box
+}
+
+func New(st *store.Store, box *seal.Box) *Store { return &Store{st: st, box: box} }
+
+func (s *Store) Load(ctx context.Context) (*Credentials, error) {
+	raw, err := s.st.GetSetting(ctx, settingKey)
+	if err != nil {
+		return nil, err
+	}
+	plain, err := s.box.Open(raw)
+	if err != nil {
+		return nil, errors.New("cannot decrypt telegram app credentials; TOKEN_ENC_KEY changed?")
+	}
+	var c Credentials
+	if err := json.Unmarshal(plain, &c); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (s *Store) Save(ctx context.Context, c Credentials, now int64) error {
+	if err := Validate(c); err != nil {
+		return err
+	}
+	plain, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	return s.st.PutSetting(ctx, settingKey, s.box.Seal(plain), now)
+}
+```
+
+Run: `go test ./internal/tgapp/` → 先 FAIL，实现后 PASS。
+
+- [ ] **Step 3: Supervisor**
+
+`internal/botapiserver/supervisor_test.go`（测试二进制自身充当假的 telegram-bot-api：`TestMain` 在 `FAKE_BOTAPI=1` 时把收到的凭据和参数追加写入 `FAKE_RECORD`，然后等待 SIGTERM；若设置了 `FAKE_EXIT_AFTER_MS` 则到时以退出码 1 退出）
+
+```go
+package botapiserver
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"tgarchive/internal/tgapp"
+)
+
+func TestMain(m *testing.M) {
+	if os.Getenv("FAKE_BOTAPI") == "1" {
+		f, _ := os.OpenFile(os.Getenv("FAKE_RECORD"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fmt.Fprintf(f, "%s %s %s token=%q\n", os.Getenv("TELEGRAM_API_ID"), os.Getenv("TELEGRAM_API_HASH"), strings.Join(os.Args[1:], " "), os.Getenv("TOKEN_ENC_KEY"))
+		f.Close()
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGTERM)
+		if ms, err := strconv.Atoi(os.Getenv("FAKE_EXIT_AFTER_MS")); err == nil {
+			select {
+			case <-sig:
+				os.Exit(0)
+			case <-time.After(time.Duration(ms) * time.Millisecond):
+				os.Exit(1)
+			}
+		}
+		<-sig
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+const hash1 = "11111111111111111111111111111111"
+const hash2 = "22222222222222222222222222222222"
+
+func newSup(t *testing.T, extra ...string) (*Supervisor, string) {
+	t.Helper()
+	dir := t.TempDir()
+	record := filepath.Join(dir, "record.txt")
+	s := New(os.Args[0], filepath.Join(dir, "botapi"), filepath.Join(dir, "tmp"), 18081)
+	s.Env = append([]string{"FAKE_BOTAPI=1", "FAKE_RECORD=" + record}, extra...)
+	s.MinBackoff, s.MaxBackoff = 10*time.Millisecond, 50*time.Millisecond
+	return s, record
+}
+
+func lines(path string) []string {
+	b, _ := os.ReadFile(path)
+	s := strings.TrimSpace(string(b))
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
+}
+
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestStartsOnApplyAndRestartsOnChange(t *testing.T) {
+	t.Setenv("TOKEN_ENC_KEY", "must-not-leak")
+	s, record := newSup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { s.Run(ctx, nil); close(done) }()
+
+	eventually(t, "unconfigured", func() bool { st, _ := s.Status(); return st == StateUnconfigured })
+	if len(lines(record)) != 0 {
+		t.Fatal("must not start without credentials")
+	}
+
+	s.Apply(tgapp.Credentials{APIID: 1, APIHash: hash1})
+	eventually(t, "first start", func() bool { return len(lines(record)) == 1 })
+	first := lines(record)[0]
+	for _, want := range []string{"1 " + hash1, "--local", "--http-ip-address=127.0.0.1", "--http-port=18081", "--dir=", "--temp-dir=", `token=""`} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("first start %q lacks %q", first, want)
+		}
+	}
+	eventually(t, "running", func() bool { st, _ := s.Status(); return st == StateRunning })
+
+	s.Apply(tgapp.Credentials{APIID: 2, APIHash: hash2})
+	eventually(t, "restart with new credentials", func() bool {
+		l := lines(record)
+		return len(l) == 2 && strings.HasPrefix(l[1], "2 "+hash2)
+	})
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}
+
+func TestRestartsAfterCrash(t *testing.T) {
+	s, record := newSup(t, "FAKE_EXIT_AFTER_MS=20")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx, &tgapp.Credentials{APIID: 1, APIHash: hash1})
+	eventually(t, "three starts", func() bool { return len(lines(record)) >= 3 })
+	if _, lastErr := s.Status(); lastErr == "" {
+		eventually(t, "crash recorded", func() bool { _, e := s.Status(); return e != "" })
+	}
+}
+```
+
+`internal/botapiserver/supervisor.go`
+
+```go
+// Package botapiserver runs the official telegram-bot-api server as a child process,
+// using api_id / api_hash configured from the web UI.
+package botapiserver
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"sync"
+	"syscall"
+	"time"
+
+	"tgarchive/internal/tgapp"
+)
+
+const (
+	StateUnconfigured = "unconfigured"
+	StateRunning      = "running"
+	StateRestarting   = "restarting"
+)
+
+type Supervisor struct {
+	Binary     string
+	Dir        string
+	TempDir    string
+	Port       int
+	Env        []string // extra child environment (tests)
+	MinBackoff time.Duration
+	MaxBackoff time.Duration
+
+	applyMu sync.Mutex
+	apply   chan tgapp.Credentials
+
+	mu      sync.Mutex
+	state   string
+	lastErr string
+}
+
+func New(binary, dir, tempDir string, port int) *Supervisor {
+	return &Supervisor{
+		Binary: binary, Dir: dir, TempDir: tempDir, Port: port,
+		MinBackoff: time.Second, MaxBackoff: 30 * time.Second,
+		apply: make(chan tgapp.Credentials, 1),
+		state: StateUnconfigured,
+	}
+}
+
+// Apply hands new credentials to Run, replacing any not yet picked up.
+func (s *Supervisor) Apply(c tgapp.Credentials) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	select {
+	case <-s.apply:
+	default:
+	}
+	s.apply <- c
+}
+
+func (s *Supervisor) Status() (string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state, s.lastErr
+}
+
+func (s *Supervisor) set(state, lastErr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state, s.lastErr = state, lastErr
+}
+
+func (s *Supervisor) Run(ctx context.Context, initial *tgapp.Credentials) {
+	cur := initial
+	backoff := s.MinBackoff
+	for {
+		if cur == nil {
+			s.set(StateUnconfigured, "")
+			select {
+			case <-ctx.Done():
+				return
+			case c := <-s.apply:
+				cur = &c
+			}
+		}
+		cmd, done, err := s.start(*cur)
+		if err != nil {
+			log.Printf("botapi: start telegram-bot-api: %v", err)
+			s.set(StateRestarting, err.Error())
+		} else {
+			s.set(StateRunning, "")
+			started := time.Now()
+			select {
+			case <-ctx.Done():
+				s.stop(cmd, done)
+				return
+			case c := <-s.apply:
+				s.stop(cmd, done)
+				cur, backoff = &c, s.MinBackoff
+				continue
+			case err := <-done:
+				msg := "exited"
+				if err != nil {
+					msg = err.Error()
+				}
+				log.Printf("botapi: telegram-bot-api %s", msg)
+				s.set(StateRestarting, msg)
+				if time.Since(started) > time.Minute {
+					backoff = s.MinBackoff
+				}
+			}
+		}
+		t := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case c := <-s.apply:
+			t.Stop()
+			cur, backoff = &c, s.MinBackoff
+			continue
+		case <-t.C:
+		}
+		backoff = min(backoff*2, s.MaxBackoff)
+	}
+}
+
+func (s *Supervisor) start(c tgapp.Credentials) (*exec.Cmd, <-chan error, error) {
+	for _, d := range []string{s.Dir, s.TempDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return nil, nil, err
+		}
+	}
+	cmd := exec.Command(s.Binary,
+		"--local",
+		"--dir="+s.Dir,
+		"--temp-dir="+s.TempDir,
+		fmt.Sprintf("--http-port=%d", s.Port),
+		"--http-ip-address=127.0.0.1",
+	)
+	// Deliberately not inheriting os.Environ(): the child must not see TOKEN_ENC_KEY.
+	cmd.Env = append([]string{
+		"PATH=/usr/local/bin:/usr/bin:/bin",
+		fmt.Sprintf("TELEGRAM_API_ID=%d", c.APIID),
+		"TELEGRAM_API_HASH=" + c.APIHash,
+	}, s.Env...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, nil, err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	return cmd, done, nil
+}
+
+func (s *Supervisor) stop(cmd *exec.Cmd, done <-chan error) {
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+	}
+}
+```
+
+Run: `go test -race ./internal/botapiserver/` → 先 FAIL，实现后 PASS。
+
+- [ ] **Step 4: 配置默认值**
+
+`internal/config/config.go`：在 `Config` 增加 `ManageBotAPI bool` 与 `BotAPIBinary string`；`Load` 中把 `BotAPIURL` 默认值改为 `"http://127.0.0.1:8081"`，`BotAPIDirRemote` 默认值改为与 `BotAPIDirLocal` 相同（`<DATA_DIR>/botapi`，仍可被 `BOT_API_DIR_REMOTE` 覆盖），并增加：
+
+```go
+	c.BotAPIBinary = or(getenv("BOT_API_BINARY"), "telegram-bot-api")
+	switch v := getenv("BOT_API_MANAGED"); v {
+	case "", "true":
+		c.ManageBotAPI = true
+	case "false":
+		c.ManageBotAPI = false
+	default:
+		return nil, fmt.Errorf("BOT_API_MANAGED must be true or false, got %q", v)
+	}
+```
+
+（`BotAPIDirLocal` 的计算需移到 `BotAPIDirRemote` 之前，二者都基于 `DataDir`。）
+
+`internal/config/config_test.go`：`TestLoadDefaults` 的期望改为 `c.BotAPIURL != "http://127.0.0.1:8081"`、`c.BotAPIDirRemote != "/data/botapi"`，并断言 `c.ManageBotAPI && c.BotAPIBinary == "telegram-bot-api"`；`TestLoadRejects` 增加用例 `"bad managed": {"TOKEN_ENC_KEY": validKey, "BOT_API_MANAGED": "yes"}`。
+
+Run: `go test ./internal/config/` → 先 FAIL，改完 PASS。
+
+- [ ] **Step 5: 设置接口与 addBot 前置检查**
+
+`internal/httpapi/server.go`：`Server` 增加字段
+
+```go
+	TgApp  *tgapp.Store
+	BotAPI *botapiserver.Supervisor // nil when the Bot API server is not managed by this process
+```
+
+并在 `Handler()` 中 `s.adminRoutes(mux)` 之后加 `s.settingsRoutes(mux)`。
+
+`internal/httpapi/settings.go`
+
+```go
+package httpapi
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"tgarchive/internal/store"
+	"tgarchive/internal/tgapp"
+)
+
+func (s *Server) settingsRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/admin/telegram-app", s.getTelegramApp)
+	mux.HandleFunc("PUT /api/admin/telegram-app", s.putTelegramApp)
+}
+
+func (s *Server) getTelegramApp(w http.ResponseWriter, r *http.Request) {
+	out := map[string]any{"configured": false, "api_id": 0}
+	c, err := s.TgApp.Load(r.Context())
+	switch {
+	case err == nil:
+		out["configured"], out["api_id"] = true, c.APIID
+	case !errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	server := map[string]any{"managed": s.BotAPI != nil, "state": "", "error": ""}
+	if s.BotAPI != nil {
+		server["state"], server["error"] = s.BotAPI.Status()
+	}
+	out["server"] = server
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) putTelegramApp(w http.ResponseWriter, r *http.Request) {
+	var c tgapp.Credentials
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if err := tgapp.Validate(c); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.TgApp.Save(r.Context(), c, s.Now().Unix()); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if s.BotAPI != nil {
+		s.BotAPI.Apply(c)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+```
+
+`internal/httpapi/admin.go` 的 `addBot`：在 token 格式校验通过之后、调用 `GetMe` 之前插入
+
+```go
+	if s.BotAPI != nil {
+		if _, err := s.TgApp.Load(r.Context()); errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusConflict, "请先在设置中填写 api_id / api_hash")
+			return
+		} else if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+```
+
+`internal/httpapi/admin_test.go` 的 `newAdminEnv`：`Server` 字面量增加 `TgApp: tgapp.New(st, box)`（并 import `tgarchive/internal/tgapp`）。
+
+`internal/httpapi/settings_test.go`
+
+```go
+package httpapi
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"tgarchive/internal/botapiserver"
+	"tgarchive/internal/config"
+	"tgarchive/internal/seal"
+	"tgarchive/internal/store"
+	"tgarchive/internal/tgapp"
+)
+
+func newSettingsEnv(t *testing.T) (http.Handler, *botapiserver.Supervisor) {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	box, _ := seal.New(bytes.Repeat([]byte{1}, 32))
+	sup := botapiserver.New("/nonexistent/telegram-bot-api", t.TempDir(), t.TempDir(), 18082)
+	srv := &Server{Cfg: &config.Config{RequireForwardAuth: true}, Store: st, Box: box, TgApp: tgapp.New(st, box), BotAPI: sup, Now: time.Now}
+	return srv.Handler(), sup
+}
+
+func TestTelegramAppSettings(t *testing.T) {
+	h, sup := newSettingsEnv(t)
+	w := call(h, "GET", "/api/admin/telegram-app", nil)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"configured":false`) || !strings.Contains(w.Body.String(), `"managed":true`) {
+		t.Fatalf("initial = %d %s", w.Code, w.Body)
+	}
+	if w := call(h, "POST", "/api/admin/bots", map[string]string{"token": goodToken}); w.Code != 409 {
+		t.Fatalf("add bot before credentials = %d %s", w.Code, w.Body)
+	}
+	for _, bad := range []map[string]any{{"api_id": 0, "api_hash": "0123456789abcdef0123456789abcdef"}, {"api_id": 1, "api_hash": "nope"}} {
+		if w := call(h, "PUT", "/api/admin/telegram-app", bad); w.Code != 400 {
+			t.Fatalf("invalid %v = %d", bad, w.Code)
+		}
+	}
+	const hash = "0123456789abcdef0123456789abcdef"
+	if w := call(h, "PUT", "/api/admin/telegram-app", map[string]any{"api_id": 4242, "api_hash": hash}); w.Code != 204 {
+		t.Fatalf("save = %d %s", w.Code, w.Body)
+	}
+	w = call(h, "GET", "/api/admin/telegram-app", nil)
+	var got struct {
+		Configured bool `json:"configured"`
+		APIID      int  `json:"api_id"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if !got.Configured || got.APIID != 4242 || strings.Contains(w.Body.String(), hash) {
+		t.Fatalf("after save = %s", w.Body)
+	}
+
+	// The supervisor received the credentials: running it now starts (and fails to exec) the binary.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go sup.Run(ctx, nil)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if st, e := sup.Status(); st == botapiserver.StateRestarting && e != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("supervisor never received the applied credentials")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+```
+
+Run: `go test ./internal/httpapi/` → 先 FAIL（路由未注册 / 字段不存在），实现后 PASS。
+
+- [ ] **Step 6: 装配**
+
+`internal/app/app.go`：
+
+- `New` 中构造 `tg := tgapp.New(st, box)`，当 `cfg.ManageBotAPI` 为 true 时构造 `sup := botapiserver.New(cfg.BotAPIBinary, cfg.BotAPIDirLocal, filepath.Join(cfg.DataDir, "botapi-tmp"), 8081)`，否则 `sup` 为 nil；二者存入 `App`（字段 `tg *tgapp.Store`、`sup *botapiserver.Supervisor`），并传给 `httpapi.Server{..., TgApp: tg, BotAPI: sup}`
+- `Start` 中，若 `a.sup != nil`：
+
+```go
+	creds, err := a.tg.Load(a.ctx)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.sup.Run(a.ctx, creds) }()
+```
+
+（`creds` 为 nil 时 supervisor 等待 Web 设置。`Close` 已经 `cancel()` + `wg.Wait()`，会等子进程退出。）
+
+Run: `go test -race ./... && go vet ./...` → 全部 PASS（`internal/app` 测试使用 `ManageBotAPI` 零值 false，不启动子进程）。
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add internal/store internal/tgapp internal/botapiserver internal/httpapi internal/config internal/app
+git commit -m "feat: manage telegram-bot-api child process with web-configured api_id/api_hash"
+```
+
+---
+
 ## 后续计划（不在本计划内）
 
 - **计划 2：userbot 代取**——`internal/linkparse`、`internal/convert/mtproto`、`internal/userbot`（gotd 登录流程、session 加密存 `userbot` 表、串行队列、FLOOD_WAIT），实现 `collector.LinkHandler` 与 `downloader.Source`（前缀 `mt`），新增 `/api/admin/userbot/*`
 - **计划 3：WebUI**——先读 `Ajaxy/telegram-tt` 源码定位要移植的 SCSS/组件/算法，Preact + Vite 构建到 `web/dist`；bot 语音无 waveform，前端用 WebAudio 解码计算
-- **计划 4：部署**——Dockerfile（node → go → distroless）、compose（`tgarchive` + `tgarchive-botapi`，`tgarchive-internal` 网络，`/opt/app/tgarchive` 挂到 `/data`、`/opt/app/tgarchive/botapi` 挂到 Bot API 容器的 `/var/lib/telegram-bot-api`）、Caddy、DNS、Cup exclude、备份 exclude 与 NAS 拉取、基础设施文档
+- **计划 4：部署**——GitHub Actions 构建多架构镜像推 GHCR（`ghcr.io/senshinya/tgarchive`）；Dockerfile（node → go → alpine 运行时，`COPY --from=aiogram/telegram-bot-api:<ver>` 带入 `telegram-bot-api` 二进制及其运行库）；compose 单容器，`/opt/app/tgarchive` 挂到 `/data`；`.env` 仅 `TOKEN_ENC_KEY`（及可选 `BARK_NOTIFY_FILE`/`MEDIA_MAX_BYTES`）、Caddy、DNS、Cup exclude、备份 exclude 与 NAS 拉取、基础设施文档
