@@ -80,14 +80,15 @@ type Service struct {
 
 	reload chan struct{}
 
-	mu       sync.Mutex
-	api      *tg.Client
-	auth     *auth.Client
-	state    string
-	lastErr  string
-	phone    string
-	codeHash string
-	clear    clearMode
+	mu        sync.Mutex
+	api       *tg.Client
+	auth      *auth.Client
+	state     string
+	lastErr   string
+	phone     string
+	codeHash  string
+	clear     clearMode
+	logoutGen uint64
 }
 
 func New(st *store.Store, box *seal.Box, creds CredsLoader, d Dialer, n notify.Notifier) *Service {
@@ -126,12 +127,12 @@ func (s *Service) Run(ctx context.Context) {
 			continue
 		}
 		s.setState(StateConnecting, "")
-		connected := false
+		attached := false
 		err = s.dialer.Dial(ctx, *creds, s.sess, func(cctx context.Context, api *tg.Client) error {
-			connected = true
 			if err := s.attach(cctx, api, creds); err != nil {
 				return err
 			}
+			attached = true
 			select {
 			case <-cctx.Done():
 				return cctx.Err()
@@ -147,7 +148,11 @@ func (s *Service) Run(ctx context.Context) {
 			backoff = time.Second
 			continue
 		}
-		if connected {
+		// Only reset backoff once attach has actually succeeded; a dial that reaches the
+		// callback but fails inside attach() every time (e.g. a persistent, non-transport
+		// error) must still back off exponentially instead of hammering Telegram once a
+		// second forever.
+		if attached {
 			backoff = time.Second
 		}
 		log.Printf("userbot: connection: %v (retry in %s)", err, backoff)
@@ -163,6 +168,9 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 func (s *Service) attach(ctx context.Context, api *tg.Client, creds *tgapp.Credentials) error {
+	s.mu.Lock()
+	gen := s.logoutGen
+	s.mu.Unlock()
 	a := auth.NewClient(api, rand.Reader, creds.APIID, creds.APIHash)
 	st, err := a.Status(ctx)
 	if err != nil {
@@ -170,8 +178,18 @@ func (s *Service) attach(ctx context.Context, api *tg.Client, creds *tgapp.Crede
 	}
 	s.mu.Lock()
 	s.api, s.auth = api, a
+	loggedOutMeanwhile := s.logoutGen != gen
 	s.mu.Unlock()
 	if st.Authorized {
+		if loggedOutMeanwhile {
+			// Logout() ran while auth.Status was still in flight: at that point s.api/s.auth
+			// were still nil, so Logout took the "not connected" branch (direct ClearUserbot)
+			// and armed clearAll. A stale "authorized" answer from the RPC that was already
+			// in flight must not resurrect the account; stay logged out and let detach()
+			// apply the pending clearAll once this connection is torn down.
+			s.setState(StateLoggedOut, "")
+			return nil
+		}
 		return s.markReady(ctx, st.User, "")
 	}
 	u, err := s.st.GetUserbot(ctx)
@@ -223,18 +241,23 @@ func (s *Service) markReady(ctx context.Context, u *tg.User, phone string) error
 }
 
 // unauthorized handles a revoked session once: persist the error, alert, drop the auth key, reconnect.
+//
+// The dedupe check-and-set happens under mu in one critical section, so two concurrent 401s
+// (e.g. two in-flight With() calls) can't both pass the check before either sets the in-memory
+// state: only the first to acquire the lock proceeds past it. The DB write below is still the
+// persisted source of truth for status/last_error observed across reconnects and restarts.
 func (s *Service) unauthorized(ctx context.Context) {
-	u, err := s.st.GetUserbot(ctx)
-	if err == nil && u.Status == store.UserbotError {
-		s.setState(StateError, u.LastError)
+	s.mu.Lock()
+	if s.state == StateError {
+		s.mu.Unlock()
 		return
 	}
+	s.state, s.lastErr, s.clear = StateError, msgRevoked, clearSession
+	s.mu.Unlock()
+
 	if err := s.st.SetUserbotStatus(ctx, store.UserbotError, msgRevoked, s.Now().Unix()); err != nil {
 		log.Printf("userbot: save status: %v", err)
 	}
-	s.mu.Lock()
-	s.state, s.lastErr, s.clear = StateError, msgRevoked, clearSession
-	s.mu.Unlock()
 	s.Reload()
 	if s.notifier != nil {
 		s.notifier.Notify(ctx, "tgarchive 代取账号失效", msgRevoked)
@@ -382,22 +405,22 @@ func (s *Service) finish(ctx context.Context, authz *tg.AuthAuthorization, phone
 func (s *Service) Logout(ctx context.Context) error {
 	s.mu.Lock()
 	api := s.api
+	s.logoutGen++
+	s.clear = clearAll
+	s.state, s.lastErr, s.phone, s.codeHash = StateLoggedOut, "", "", ""
 	s.mu.Unlock()
 	if api != nil {
 		if _, err := api.AuthLogOut(ctx); err != nil {
 			log.Printf("userbot: auth.logOut: %v", err)
 		}
 	}
-	s.mu.Lock()
-	s.state, s.lastErr, s.phone, s.codeHash = StateLoggedOut, "", "", ""
-	if api != nil {
-		s.clear = clearAll
-	}
-	s.mu.Unlock()
+	// Always nudge the connection loop so a pending clearAll (armed above) gets applied by
+	// detach() even if nothing was connected yet (e.g. attach() is mid-setup right now: it
+	// will see logoutGen advance and refuse to markReady a stale "authorized" answer).
+	s.Reload()
 	if api == nil {
 		return s.st.ClearUserbot(ctx, s.Now().Unix())
 	}
-	s.Reload()
 	return nil
 }
 
