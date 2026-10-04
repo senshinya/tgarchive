@@ -33,6 +33,7 @@ type FakeTG struct {
 	lastOffset int64
 	updErr     *apiErr
 	badTokens  map[string]bool
+	holdFiles  bool
 }
 
 type apiErr struct {
@@ -97,6 +98,14 @@ func (f *FakeTG) RejectToken(token string) {
 	f.badTokens[token] = true
 }
 
+// HoldFiles makes getFile block until released or the request is cancelled,
+// simulating a download in progress.
+func (f *FakeTG) HoldFiles(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.holdFiles = on
+}
+
 func (f *FakeTG) Calls(method string) []Call {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -146,7 +155,7 @@ func (f *FakeTG) serve(w http.ResponseWriter, r *http.Request) {
 	case "getUpdates":
 		f.getUpdates(w, r, params)
 	case "getFile":
-		f.getFile(w, token, params)
+		f.getFile(w, r, token, params)
 	case "getUserProfilePhotos":
 		f.mu.Lock()
 		fid, has := f.avatars[int64(num(params["user_id"]))]
@@ -195,7 +204,20 @@ func (f *FakeTG) getUpdates(w http.ResponseWriter, r *http.Request, params map[s
 	}
 }
 
-func (f *FakeTG) getFile(w http.ResponseWriter, token string, params map[string]any) {
+func (f *FakeTG) getFile(w http.ResponseWriter, r *http.Request, token string, params map[string]any) {
+	for {
+		f.mu.Lock()
+		hold := f.holdFiles
+		f.mu.Unlock()
+		if !hold {
+			break
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 	fileID, _ := params["file_id"].(string)
 	f.mu.Lock()
 	content, has := f.files[fileID]
