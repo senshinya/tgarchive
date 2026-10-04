@@ -4,6 +4,11 @@
   position: relative;
   display: flex;
   height: 100%;
+  // On iOS Safari, 100% resolves against the *largest* viewport (toolbar collapsed), so the
+  // bottom of the message list / settings FAB ends up hidden behind the toolbar when it's
+  // expanded. dvh tracks the toolbar instead. Browsers without dvh support ignore this whole
+  // declaration (invalid value) and keep the fallback above - it must stay listed after it.
+  height: 100dvh;
   overflow: hidden;
   // Deliberately not --color-background-secondary: that token is also the settings-canvas /
   // right-column card color (see settings.scss, §8 of webA-design.md). Reusing it here made the
