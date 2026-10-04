@@ -58,6 +58,10 @@
   flex: 1;
 }
 
+.message-date-group {
+  position: relative;
+}
+
 .sticky-date {
   position: sticky;
   top: calc(var(--middle-header-height) + 1rem);

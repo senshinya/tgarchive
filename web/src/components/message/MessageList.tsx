@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/ho
 import { errorMessage, mediaUrl } from '../../api/client';
 import type { Message } from '../../api/types';
 import { senderName } from '../../lib/format';
-import { groupMessages } from '../../lib/grouping';
+import { groupMessages, type ListEntry } from '../../lib/grouping';
 import { useStore } from '../../state/store';
 import { ContextMenu, type MenuItem } from '../../ui/ContextMenu';
 import { ConfirmDialog } from '../../ui/Modal';
@@ -32,6 +32,17 @@ export function MessageList({ chatId }: { chatId: number }) {
   const chat = store.chats.value.find((c) => c.id === chatId);
   const sender = chat ? { name: senderName(chat.sender), peerId: chat.sender.tg_user_id } : { name: '', peerId: chatId };
   const entries = useMemo(() => groupMessages(conv.items), [conv.items]);
+  // Each day's pill must stick only within its own day (Web A behaviour): nest it as the
+  // first child of a per-day container so the next day's container pushes it out, instead of
+  // every pill sticking to the same scroll-container top and stacking on scroll.
+  const dayGroups = useMemo(() => {
+    const out: { key: string; label: string; groups: Extract<ListEntry, { kind: 'group' }>[] }[] = [];
+    for (const e of entries) {
+      if (e.kind === 'date') out.push({ key: e.key, label: e.label, groups: [] });
+      else out[out.length - 1]?.groups.push(e);
+    }
+    return out;
+  }, [entries]);
   const ref = useRef<HTMLDivElement>(null);
   const snap = useRef({ firstId: 0, lastId: 0, height: 0, top: 0, atBottom: true });
   const [showDown, setShowDown] = useState(false);
@@ -147,19 +158,20 @@ export function MessageList({ chatId }: { chatId: number }) {
               <span>暂无消息</span>
             </div>
           )}
-          {entries.map((e) =>
-            e.kind === 'date' ? (
-              <div class="sticky-date" key={e.key}>
-                <span>{e.label}</span>
+          {dayGroups.map((d) => (
+            <section class="message-date-group" key={d.key}>
+              <div class="sticky-date">
+                <span>{d.label}</span>
               </div>
-            ) : (
-              <div class="message-group" key={e.key}>
-                {e.bubbles.map((b) => (
-                  <MessageBubble key={b.key} bubble={b} sender={sender} onMenu={(x, y, msg) => setMenu({ x, y, msg })} />
-                ))}
-              </div>
-            ),
-          )}
+              {d.groups.map((g) => (
+                <div class="message-group" key={g.key}>
+                  {g.bubbles.map((b) => (
+                    <MessageBubble key={b.key} bubble={b} sender={sender} onMenu={(x, y, msg) => setMenu({ x, y, msg })} />
+                  ))}
+                </div>
+              ))}
+            </section>
+          ))}
         </div>
       </div>
       {showDown && (

@@ -5,7 +5,11 @@
   display: flex;
   height: 100%;
   overflow: hidden;
-  background: var(--color-background-secondary);
+  // Deliberately not --color-background-secondary: that token is also the settings-canvas /
+  // right-column card color (see settings.scss, §8 of webA-design.md). Reusing it here made the
+  // gap around the left island visually fuse with the settings canvas once a page's cards ran
+  // out, so the island looked like it ended early instead of the gray continuing to the bottom.
+  background: var(--color-background-secondary-accent);
 }
 
 #LeftColumn {

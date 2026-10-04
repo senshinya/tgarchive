@@ -159,6 +159,20 @@ describe('MiddleColumn', () => {
     expect(r.store.sharedMediaOpen.value).toBe(true);
   });
 
+  it('wraps each day in its own sticky-date group so headers do not stack on top of each other', async () => {
+    const day1 = new Date(2026, 9, 3, 10, 0).getTime() / 1000;
+    const day2 = new Date(2026, 9, 4, 9, 0).getTime() / 1000;
+    const api = setup([makeMessage({ id: 1, text: 'first', date: day1 }), makeMessage({ id: 2, text: 'second', date: day2 })]);
+    const { container } = renderWithStore(<MiddleColumn chatId={10} />, api);
+    await screen.findByText('second');
+    const groups = container.querySelectorAll('.message-date-group');
+    expect(groups).toHaveLength(2);
+    for (const g of groups) {
+      expect(g.firstElementChild?.classList.contains('sticky-date')).toBe(true);
+      expect(g.querySelector('.message-group')).toBeTruthy();
+    }
+  });
+
   it('loads older history when scrolled near the top', async () => {
     const page = Array.from({ length: 50 }, (_, i) => makeMessage({ id: 100 + i, text: `m${i}` }));
     const api = setup(page);
