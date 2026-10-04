@@ -102,3 +102,10 @@ func (s *Store) GetPeer(ctx context.Context, channelID int64) (*Peer, error) {
 	}
 	return &p, nil
 }
+
+// DeletePeer evicts a cached channel, e.g. after its access_hash turned out stale
+// (CHANNEL_INVALID / CHANNEL_PRIVATE from an account switch or rejoin) so the next resolve
+// re-scans the account's dialogs instead of reusing the bad hash.
+func (s *Store) DeletePeer(ctx context.Context, channelID int64) error {
+	return affected(s.db.ExecContext(ctx, "DELETE FROM userbot_peers WHERE channel_id = ?", channelID))
+}

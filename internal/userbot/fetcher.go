@@ -204,39 +204,26 @@ type fetched struct {
 func (f *Fetcher) fetch(ctx context.Context, link linkparse.Link) (*fetched, error) {
 	var out *fetched
 	err := f.api.With(ctx, func(api *tg.Client) error {
-		ch, err := f.resolve(ctx, api, link)
+		ch, cached, err := f.resolve(ctx, api, link)
 		if err != nil {
 			return err
 		}
-		in := &tg.InputChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
-		names := mtproto.NamesFrom(nil, nil)
-		id := int(link.MsgID)
-		got, err := getMessages(ctx, api, in, names, id)
+		list, names, err := f.fetchMessages(ctx, api, ch, link)
+		if err != nil && cached && stalePeerErr(err) {
+			// The cached access_hash is rejected outright (rather than just failing to find the
+			// message): most likely the userbot account switched or rejoined since it was cached.
+			// Evict it and re-resolve once via a fresh dialogs scan before giving up.
+			if derr := f.st.DeletePeer(ctx, link.ChannelID); derr != nil && !errors.Is(derr, store.ErrNotFound) {
+				log.Printf("userbot: invalidate stale peer %d: %v", link.ChannelID, derr)
+			}
+			var ch2 *tg.Channel
+			if ch2, _, err = f.resolve(ctx, api, link); err == nil {
+				ch = ch2
+				list, names, err = f.fetchMessages(ctx, api, ch, link)
+			}
+		}
 		if err != nil {
 			return err
-		}
-		first, ok := got[id]
-		if !ok {
-			return errNoMessage
-		}
-		list := []*tg.Message{first}
-		if g, ok := first.GetGroupedID(); ok && !link.Single {
-			var ids []int
-			for i := id - 10; i <= id+10; i++ {
-				if i > 0 && i != id {
-					ids = append(ids, i)
-				}
-			}
-			around, err := getMessages(ctx, api, in, names, ids...)
-			if err != nil {
-				return err
-			}
-			for _, m := range around {
-				if mg, ok := m.GetGroupedID(); ok && mg == g {
-					list = append(list, m)
-				}
-			}
-			sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
 		}
 		out = &fetched{msgs: list, ch: mtproto.ChannelFrom(ch), names: names}
 		return nil
@@ -244,33 +231,72 @@ func (f *Fetcher) fetch(ctx context.Context, link linkparse.Link) (*fetched, err
 	return out, err
 }
 
-func (f *Fetcher) resolve(ctx context.Context, api *tg.Client, link linkparse.Link) (*tg.Channel, error) {
+// fetchMessages fetches the linked message (plus its album siblings, unless ?single) from an
+// already-resolved channel.
+func (f *Fetcher) fetchMessages(ctx context.Context, api *tg.Client, ch *tg.Channel, link linkparse.Link) ([]*tg.Message, mtproto.Names, error) {
+	in := &tg.InputChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
+	names := mtproto.NamesFrom(nil, nil)
+	id := int(link.MsgID)
+	got, err := getMessages(ctx, api, in, names, id)
+	if err != nil {
+		return nil, names, err
+	}
+	first, ok := got[id]
+	if !ok {
+		return nil, names, errNoMessage
+	}
+	list := []*tg.Message{first}
+	if g, ok := first.GetGroupedID(); ok && !link.Single {
+		var ids []int
+		for i := id - 10; i <= id+10; i++ {
+			if i > 0 && i != id {
+				ids = append(ids, i)
+			}
+		}
+		around, err := getMessages(ctx, api, in, names, ids...)
+		if err != nil {
+			return nil, names, err
+		}
+		for _, m := range around {
+			if mg, ok := m.GetGroupedID(); ok && mg == g {
+				list = append(list, m)
+			}
+		}
+		sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
+	}
+	return list, names, nil
+}
+
+// resolve finds the channel a link refers to. cached reports whether ch came straight from the
+// userbot_peers cache (as opposed to a fresh username resolve or dialogs scan): only a cached hit
+// might be stale, so only it is worth invalidating and retrying on CHANNEL_INVALID/CHANNEL_PRIVATE.
+func (f *Fetcher) resolve(ctx context.Context, api *tg.Client, link linkparse.Link) (ch *tg.Channel, cached bool, err error) {
 	if link.Username != "" {
 		r, err := api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: link.Username})
 		if err != nil {
 			if tgerr.Is(err, "USERNAME_NOT_OCCUPIED", "USERNAME_INVALID") {
-				return nil, errNoChat
+				return nil, false, errNoChat
 			}
-			return nil, err
+			return nil, false, err
 		}
 		pc, ok := r.Peer.(*tg.PeerChannel)
 		if !ok {
-			return nil, errNotChannel
+			return nil, false, errNotChannel
 		}
 		for _, c := range r.Chats {
 			if ch, ok := c.(*tg.Channel); ok && ch.ID == pc.ChannelID {
 				f.savePeers(ctx, ch)
-				return ch, nil
+				return ch, false, nil
 			}
 		}
-		return nil, errNotChannel
+		return nil, false, errNotChannel
 	}
 	p, err := f.st.GetPeer(ctx, link.ChannelID)
 	if err == nil {
-		return &tg.Channel{ID: p.ChannelID, AccessHash: p.AccessHash, Title: p.Title, Username: p.Username}, nil
+		return &tg.Channel{ID: p.ChannelID, AccessHash: p.AccessHash, Title: p.Title, Username: p.Username}, true, nil
 	}
 	if !errors.Is(err, store.ErrNotFound) {
-		return nil, err
+		return nil, false, err
 	}
 	seen := map[int64]*tg.Channel{}
 	err = dialogs.NewQueryBuilder(api).GetDialogs().BatchSize(100).ForEach(ctx, func(_ context.Context, e dialogs.Elem) error {
@@ -285,7 +311,7 @@ func (f *Fetcher) resolve(ctx context.Context, api *tg.Client, link linkparse.Li
 		return nil
 	})
 	if err != nil && !errors.Is(err, errStop) {
-		return nil, err
+		return nil, false, err
 	}
 	all := make([]*tg.Channel, 0, len(seen))
 	for _, c := range seen {
@@ -293,9 +319,16 @@ func (f *Fetcher) resolve(ctx context.Context, api *tg.Client, link linkparse.Li
 	}
 	f.savePeers(ctx, all...)
 	if c := seen[link.ChannelID]; c != nil {
-		return c, nil
+		return c, false, nil
 	}
-	return nil, errNotMember
+	return nil, false, errNotMember
+}
+
+// stalePeerErr reports whether err is Telegram rejecting a channel reference outright, the
+// signature of a cached access_hash that no longer matches (e.g. after an account switch/rejoin),
+// as opposed to the channel merely being gone or the message missing.
+func stalePeerErr(err error) bool {
+	return tgerr.Is(err, "CHANNEL_INVALID", "CHANNEL_PRIVATE")
 }
 
 func (f *Fetcher) savePeers(ctx context.Context, chs ...*tg.Channel) {

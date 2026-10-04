@@ -56,6 +56,25 @@ func TestPeers(t *testing.T) {
 	}
 }
 
+func TestDeletePeer(t *testing.T) {
+	s := newStore(t)
+	if err := s.DeletePeer(ctx, 5); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing peer delete err = %v", err)
+	}
+	if err := s.PutPeers(ctx, []Peer{{ChannelID: 5, AccessHash: 50}, {ChannelID: 6, AccessHash: 60}}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeletePeer(ctx, 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetPeer(ctx, 5); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("peer 5 not deleted: %v", err)
+	}
+	if _, err := s.GetPeer(ctx, 6); err != nil {
+		t.Fatalf("unrelated peer 6 affected: %v", err)
+	}
+}
+
 func TestSenders(t *testing.T) {
 	s := newStore(t)
 	if _, err := s.GetSender(ctx, 42); !errors.Is(err, ErrNotFound) {

@@ -71,10 +71,11 @@ func (a *fakeAPI) WaitReady(context.Context, time.Duration) bool {
 // channelTG serves one public channel ("chan", id 500) and its posts.
 type channelTG struct {
 	*fakeTG
-	ch      *tg.Channel
-	posts   map[int]*tg.Message
-	member  bool    // channel appears in the account's dialogs
-	failGet []error // errors returned by successive channels.getMessages calls before succeeding
+	ch       *tg.Channel
+	posts    map[int]*tg.Message
+	member   bool    // channel appears in the account's dialogs
+	failGet  []error // errors returned by successive channels.getMessages calls before succeeding
+	staleErr string  // error type returned for a getMessages call using the wrong access hash; default CHANNEL_INVALID
 }
 
 func newChannelTG() *channelTG {
@@ -101,8 +102,16 @@ func (c *channelTG) serve(req bin.Encoder) (bin.Encoder, error) {
 		}
 		return &tg.ContactsResolvedPeer{Peer: &tg.PeerChannel{ChannelID: 500}, Chats: []tg.ChatClass{c.ch}}, nil
 	case *tg.ChannelsGetMessagesRequest:
-		if in, ok := r.Channel.(*tg.InputChannel); !ok || in.ChannelID != 500 || in.AccessHash != 5005 {
+		in, ok := r.Channel.(*tg.InputChannel)
+		if !ok || in.ChannelID != 500 {
 			return nil, tgerr.New(400, "CHANNEL_INVALID")
+		}
+		if in.AccessHash != 5005 {
+			errType := c.staleErr
+			if errType == "" {
+				errType = "CHANNEL_INVALID"
+			}
+			return nil, tgerr.New(400, errType)
 		}
 		if len(c.failGet) > 0 {
 			err := c.failGet[0]
@@ -338,6 +347,76 @@ func TestPrivateLinkNeedsMembership(t *testing.T) {
 	}
 	if msgs := e.messages(t); len(msgs) != 1 || msgs[0].OriginLink != "https://t.me/chan/42" {
 		t.Fatalf("messages = %+v", msgs)
+	}
+}
+
+// TestStalePeerCacheRefreshesOnRescan covers an account switch / rejoin: the cached channel 500
+// has a stale access_hash, so the first getMessages rejects it outright (CHANNEL_PRIVATE, as
+// Telegram does for a hash it no longer recognises). The fetcher must evict that cache row,
+// rescan dialogs once for a fresh hash, and retry — succeeding without ever surfacing a
+// not-member error to the sender.
+func TestStalePeerCacheRefreshesOnRescan(t *testing.T) {
+	e := newFetchEnv(t)
+	e.tg.post(42, "secret", 0)
+	e.tg.member = true // the fresh dialogs scan will find channel 500 with the current hash (5005)
+	e.tg.staleErr = "CHANNEL_PRIVATE"
+	if err := e.st.PutPeers(ctx, []store.Peer{{ChannelID: 500, AccessHash: 9999, Username: "chan", Title: "Chan"}}, 1); err != nil {
+		t.Fatal(err)
+	}
+	e.submit(t, 10, "https://t.me/c/500/42")
+	e.runOne(t)
+	if got := e.tr.take(); !reflect.DeepEqual(got, []string{"react 42 10 👀", "react 42 10 👌"}) {
+		t.Fatalf("calls = %v", got)
+	}
+	if p, err := e.st.GetPeer(ctx, 500); err != nil || p.AccessHash != 5005 {
+		t.Fatalf("stale peer not refreshed: %+v, %v", p, err)
+	}
+	if msgs := e.messages(t); len(msgs) != 1 || msgs[0].Text != "secret" {
+		t.Fatalf("messages = %+v", msgs)
+	}
+}
+
+// TestStalePeerCacheStillNotMemberAfterRescan covers the same stale-hash trigger, but the rescan
+// doesn't find the channel either (member stays false): the job must still fail with the normal
+// not-member reason, and the bad cache row must stay evicted (not resurrected).
+func TestStalePeerCacheStillNotMemberAfterRescan(t *testing.T) {
+	e := newFetchEnv(t)
+	e.tg.post(42, "secret", 0)
+	e.tg.staleErr = "CHANNEL_PRIVATE"
+	if err := e.st.PutPeers(ctx, []store.Peer{{ChannelID: 500, AccessHash: 9999, Username: "chan", Title: "Chan"}}, 1); err != nil {
+		t.Fatal(err)
+	}
+	e.submit(t, 10, "https://t.me/c/500/42")
+	e.runOne(t)
+	want := []string{"react 42 10 👀", "reply 42 10 ⚠️ 代取失败：私有群/频道，代取账号未加入"}
+	if got := e.tr.take(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v", got)
+	}
+	if _, err := e.st.GetPeer(ctx, 500); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("stale peer should stay evicted: err=%v", err)
+	}
+}
+
+// TestFloodWaitCapExhaustsAfterThreeRetries pins the "本 job 重试未满 3 次" boundary: a
+// FLOOD_WAIT returned on every attempt must be retried exactly 3 times (4 attempts total) before
+// the job is failed with the rate-limited reason, instead of retrying forever.
+func TestFloodWaitCapExhaustsAfterThreeRetries(t *testing.T) {
+	e := newFetchEnv(t)
+	e.tg.post(42, "x", 0)
+	flood := tgerr.New(420, "FLOOD_WAIT_1")
+	e.tg.failGet = []error{flood, flood, flood, flood}
+	e.submit(t, 10, "https://t.me/chan/42")
+	start := time.Now()
+	e.runOne(t)
+	if time.Since(start) < 3*time.Second {
+		t.Fatal("did not wait out all 3 flood-wait retries")
+	}
+	if n := e.tg.called("*tg.ChannelsGetMessagesRequest"); n != 4 {
+		t.Fatalf("getMessages calls = %d, want 4 (1 initial + 3 retries)", n)
+	}
+	want := []string{"react 42 10 👀", "reply 42 10 ⚠️ 代取失败：被限流，请 1 分钟后重试"}
+	if got := e.tr.take(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v", got)
 	}
 }
 
