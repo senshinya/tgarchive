@@ -68,7 +68,7 @@ CREATE TABLE messages (
   raw_json               TEXT    NOT NULL,
   receipt                TEXT    NOT NULL DEFAULT 'none',
   deleted_at             INTEGER NOT NULL DEFAULT 0,
-  UNIQUE (chat_id, source, tg_message_id)
+  UNIQUE (chat_id, source, origin_chat_id, tg_message_id)
 );
 CREATE INDEX messages_chat_page ON messages(chat_id, deleted_at, id);
 CREATE INDEX messages_group ON messages(chat_id, media_group_id);

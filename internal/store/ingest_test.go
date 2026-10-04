@@ -254,3 +254,39 @@ func TestChatSendersAndAvatar(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestUserbotFetchesKeyedByOriginChat(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	fetched := func(origin int64, key, text string) *model.Message {
+		m := photoMsg(7, key)
+		m.Source = model.SourceUserbotFetch
+		m.OriginChatID = origin
+		m.Text = text
+		return m
+	}
+	a := ingest(t, s, bot, fetched(-1001, "user:a", "from A"))
+	b := ingest(t, s, bot, fetched(-1002, "user:b", "from B"))
+	if !a.Created || !b.Created || a.MessageID == b.MessageID {
+		t.Fatalf("a = %+v, b = %+v", a, b)
+	}
+	// Re-fetching A's message (an edit) must update A only.
+	again := ingest(t, s, bot, fetched(-1001, "user:a2", "A edited"))
+	if again.Created || again.MessageID != a.MessageID {
+		t.Fatalf("refetch = %+v", again)
+	}
+	if ids := mediaIDs(t, s, b.MessageID); len(ids) != 1 {
+		t.Fatalf("B media after editing A = %v", ids)
+	}
+	var textB string
+	s.db.QueryRow("SELECT text FROM messages WHERE id = ?", b.MessageID).Scan(&textB)
+	if textB != "from B" {
+		t.Fatalf("B text = %q", textB)
+	}
+	if _, _, err := s.DeleteMessage(ctx, a.MessageID, 9); err != nil {
+		t.Fatal(err)
+	}
+	if ids := mediaIDs(t, s, b.MessageID); len(ids) != 1 {
+		t.Fatalf("B media after deleting A = %v", ids)
+	}
+}

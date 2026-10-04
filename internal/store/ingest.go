@@ -66,8 +66,8 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 		}
 
 		var existing, existingDeletedAt int64
-		err = tx.QueryRowContext(ctx, "SELECT id, deleted_at FROM messages WHERE chat_id = ? AND source = ? AND tg_message_id = ?",
-			res.ChatID, m.Source, m.TgMessageID).Scan(&existing, &existingDeletedAt)
+		err = tx.QueryRowContext(ctx, "SELECT id, deleted_at FROM messages WHERE chat_id = ? AND source = ? AND origin_chat_id = ? AND tg_message_id = ?",
+			res.ChatID, m.Source, m.OriginChatID, m.TgMessageID).Scan(&existing, &existingDeletedAt)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			if err := tx.QueryRowContext(ctx, `
