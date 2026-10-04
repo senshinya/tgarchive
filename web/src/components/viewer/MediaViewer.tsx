@@ -14,6 +14,8 @@ export const VIEWER_MAX_PAGES = 50;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
 const ZOOM_STEP = 0.5;
+const SWIPE_H_THRESHOLD = 50; // px; horizontal drag past this (and past the vertical delta) navigates
+const SWIPE_V_THRESHOLD = 80; // px; downward drag past this closes the viewer
 
 export interface ViewerItem {
   msg: Message;
@@ -40,6 +42,7 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const drag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const swipeStart = useRef<{ x: number; y: number } | null>(null);
 
   // Load the whole chat's media (newest first, paged by id) so left/right walks all of it.
   useEffect(() => {
@@ -111,10 +114,10 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
         <div class="MediaViewer-actions">
           {isPhoto && (
             <>
-              <IconButton label="缩小" class="translucent-white" disabled={zoom <= MIN_ZOOM} onClick={() => setZoomClamped(zoom - ZOOM_STEP)}>
+              <IconButton label="缩小" class="translucent-white zoom-btn" disabled={zoom <= MIN_ZOOM} onClick={() => setZoomClamped(zoom - ZOOM_STEP)}>
                 <ZoomOut size={24} />
               </IconButton>
-              <IconButton label="放大" class="translucent-white" disabled={zoom >= MAX_ZOOM} onClick={() => setZoomClamped(zoom + ZOOM_STEP)}>
+              <IconButton label="放大" class="translucent-white zoom-btn" disabled={zoom >= MAX_ZOOM} onClick={() => setZoomClamped(zoom + ZOOM_STEP)}>
                 <ZoomIn size={24} />
               </IconButton>
             </>
@@ -136,6 +139,20 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
           if (!isPhoto) return;
           e.preventDefault();
           setZoomClamped(zoom + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP));
+        }}
+        onPointerDown={(e) => {
+          // zoom > 1 is the pan-drag's territory (handled on the <img> itself below); leave it alone.
+          if (zoom > 1) return;
+          swipeStart.current = { x: e.clientX, y: e.clientY };
+        }}
+        onPointerUp={(e) => {
+          const start = swipeStart.current;
+          swipeStart.current = null;
+          if (!start || zoom > 1) return;
+          const dx = e.clientX - start.x;
+          const dy = e.clientY - start.y;
+          if (Math.abs(dx) > SWIPE_H_THRESHOLD && Math.abs(dx) > Math.abs(dy)) go(dx < 0 ? 1 : -1); // swipe left = next
+          else if (dy > SWIPE_V_THRESHOLD && dy > Math.abs(dx)) close();
         }}
       >
         {isPhoto ? (
