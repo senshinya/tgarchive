@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"mime"
 	"net/http"
 	"path"
 	"strconv"
@@ -67,8 +68,32 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
+		if crossSite(r) {
+			writeErr(w, http.StatusForbidden, "cross-site request rejected")
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// crossSite is a CSRF backstop for state-changing requests: browsers label cross-origin requests
+// with Sec-Fetch-Site, and a form or no-cors fetch cannot send an application/json body.
+func crossSite(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" {
+		return true
+	}
+	switch r.Method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch:
+		if r.ContentLength != 0 {
+			mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			return err != nil || mt != "application/json"
+		}
+	}
+	return false
 }
 
 func (s *Server) spa() http.Handler {

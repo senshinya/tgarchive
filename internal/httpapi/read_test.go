@@ -249,3 +249,39 @@ func TestServeMediaContentSafety(t *testing.T) {
 		t.Fatalf("html = %d %v", w.Code, w.Header())
 	}
 }
+
+func TestCrossSiteWritesRejected(t *testing.T) {
+	e := newReadEnv(t)
+	send := func(method, path, body string, hdr map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Remote-User", "shinya")
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		e.h.ServeHTTP(w, req)
+		return w
+	}
+	del := fmt.Sprintf("/api/messages/%d", e.photoMsg)
+	retry := fmt.Sprintf("/api/media/%d/retry", e.media)
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"cross-site delete": send("DELETE", del, "", map[string]string{"Sec-Fetch-Site": "cross-site"}),
+		"same-site delete":  send("DELETE", del, "", map[string]string{"Sec-Fetch-Site": "same-site"}),
+		"form post":         send("POST", retry, "a=1", map[string]string{"Content-Type": "application/x-www-form-urlencoded"}),
+		"text post":         send("POST", retry, "{}", map[string]string{"Content-Type": "text/plain"}),
+		"post no type":      send("POST", retry, "{}", nil),
+	} {
+		if w.Code != 403 || !strings.Contains(w.Body.String(), `"error":"cross-site request rejected"`) {
+			t.Fatalf("%s = %d %s", name, w.Code, w.Body)
+		}
+	}
+	if w := send("GET", "/api/bots", "", map[string]string{"Sec-Fetch-Site": "cross-site"}); w.Code != 200 {
+		t.Fatalf("cross-site GET = %d", w.Code)
+	}
+	if w := send("POST", retry, "{}", map[string]string{"Sec-Fetch-Site": "same-origin", "Content-Type": "application/json; charset=utf-8"}); w.Code != 409 {
+		t.Fatalf("same-origin JSON post = %d %s", w.Code, w.Body)
+	}
+	if w := send("DELETE", del, "", map[string]string{"Sec-Fetch-Site": "same-origin"}); w.Code != 204 {
+		t.Fatalf("same-origin delete = %d %s", w.Code, w.Body)
+	}
+}

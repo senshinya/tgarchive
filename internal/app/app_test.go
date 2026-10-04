@@ -49,6 +49,7 @@ func req(t *testing.T, h http.Handler, method, path string, body any) (int, []by
 	}
 	r := httptest.NewRequest(method, path, rd)
 	r.Header.Set("Remote-User", "shinya")
+	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w.Code, w.Body.Bytes()
