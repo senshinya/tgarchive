@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"tgarchive/internal/model"
 	"tgarchive/internal/store"
@@ -247,5 +248,47 @@ func TestFailureReplyRedactsToken(t *testing.T) {
 	got := v.tr.(*rec).take()
 	if len(got) != 2 || got[1] != "reply 42 10 ⚠️ 存档失败：open /x/<bot>/documents/f: denied" {
 		t.Fatalf("calls = %v", got)
+	}
+}
+
+type deadlineRec struct {
+	mu        sync.Mutex
+	deadlines []time.Duration // remaining time at call; -1 when the context had no deadline
+}
+
+func (d *deadlineRec) note(c context.Context) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if dl, ok := c.Deadline(); ok {
+		d.deadlines = append(d.deadlines, time.Until(dl))
+	} else {
+		d.deadlines = append(d.deadlines, -1)
+	}
+}
+
+func (d *deadlineRec) SetReaction(c context.Context, _, _, _ int64, _ string) error {
+	d.note(c)
+	return nil
+}
+
+func (d *deadlineRec) Reply(c context.Context, _, _, _ int64, _ string) error {
+	d.note(c)
+	return nil
+}
+
+func TestTransportCallsHaveTimeout(t *testing.T) {
+	v := newEnv(t)
+	tr := &deadlineRec{}
+	v.e = New(v.st, tr)
+	id, mids := v.ingest(t, 10, model.SourceBotUpdate, "bot:a")
+	v.st.MarkMediaFailed(ctx, mids[0], 4, "boom")
+	v.e.Evaluate(ctx, id)
+	if len(tr.deadlines) != 2 {
+		t.Fatalf("calls = %v", tr.deadlines)
+	}
+	for _, d := range tr.deadlines {
+		if d <= 0 || d > 30*time.Second {
+			t.Fatalf("transport call deadline = %v, want within 30s", d)
+		}
 	}
 }

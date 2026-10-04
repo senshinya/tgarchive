@@ -5,6 +5,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"time"
 
 	"tgarchive/internal/botapifs"
 	"tgarchive/internal/model"
@@ -18,6 +19,10 @@ const (
 	textFailedPrefix = "⚠️ 存档失败："
 	textTooLarge     = "文件超过存档上限，仅保存了消息记录"
 )
+
+// callTimeout bounds each transport call: Evaluate holds e.mu, so one stuck call would stall
+// every downloader worker that settles media.
+const callTimeout = 30 * time.Second
 
 type Transport interface {
 	SetReaction(ctx context.Context, botID, chatID, msgID int64, emoji string) error
@@ -97,8 +102,20 @@ func (e *Engine) Evaluate(ctx context.Context, messageID int64) {
 	}
 }
 
+func (e *Engine) setReaction(ctx context.Context, i *store.ReceiptInfo, emoji string) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	return e.tr.SetReaction(ctx, i.BotID, i.TgChatID, i.TgMessageID, emoji)
+}
+
+func (e *Engine) sendReply(ctx context.Context, i *store.ReceiptInfo, text string) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	return e.tr.Reply(ctx, i.BotID, i.TgChatID, i.TgMessageID, text)
+}
+
 func (e *Engine) react(ctx context.Context, i *store.ReceiptInfo, emoji string) error {
-	if err := e.tr.SetReaction(ctx, i.BotID, i.TgChatID, i.TgMessageID, emoji); err != nil {
+	if err := e.setReaction(ctx, i, emoji); err != nil {
 		log.Printf("receipt: react %s on bot %d msg %d: %v", emoji, i.BotID, i.TgMessageID, err)
 		return err
 	}
@@ -106,13 +123,13 @@ func (e *Engine) react(ctx context.Context, i *store.ReceiptInfo, emoji string) 
 }
 
 func (e *Engine) reactLogOnly(ctx context.Context, i *store.ReceiptInfo, emoji string) {
-	if err := e.tr.SetReaction(ctx, i.BotID, i.TgChatID, i.TgMessageID, emoji); err != nil {
+	if err := e.setReaction(ctx, i, emoji); err != nil {
 		log.Printf("receipt: react %s on bot %d msg %d: %v", emoji, i.BotID, i.TgMessageID, err)
 	}
 }
 
 func (e *Engine) reply(ctx context.Context, i *store.ReceiptInfo, text string) error {
-	if err := e.tr.Reply(ctx, i.BotID, i.TgChatID, i.TgMessageID, text); err != nil {
+	if err := e.sendReply(ctx, i, text); err != nil {
 		log.Printf("receipt: reply on bot %d msg %d: %v", i.BotID, i.TgMessageID, err)
 		return err
 	}
@@ -120,7 +137,7 @@ func (e *Engine) reply(ctx context.Context, i *store.ReceiptInfo, text string) e
 }
 
 func (e *Engine) replyLogOnly(ctx context.Context, i *store.ReceiptInfo, text string) {
-	if err := e.tr.Reply(ctx, i.BotID, i.TgChatID, i.TgMessageID, text); err != nil {
+	if err := e.sendReply(ctx, i, text); err != nil {
 		log.Printf("receipt: reply on bot %d msg %d: %v", i.BotID, i.TgMessageID, err)
 	}
 }
