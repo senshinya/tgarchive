@@ -1,0 +1,190 @@
+package userbot
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/gotd/td/bin"
+	"github.com/gotd/td/session"
+	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
+
+	"tgarchive/internal/store"
+	"tgarchive/internal/tgapp"
+)
+
+func TestUnconfiguredThenReload(t *testing.T) {
+	e := newSvcEnv(t, newFakeTG(), false)
+	e.waitState(t, StateUnconfigured)
+	if err := e.svc.SendCode(ctx, "+100"); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("SendCode unconfigured err = %v", err)
+	}
+	if e.svc.WaitReady(ctx, 0) {
+		t.Fatal("WaitReady true while unconfigured")
+	}
+	e.creds.Save(ctx, tgapp.Credentials{APIID: 1, APIHash: "0123456789abcdef0123456789abcdef"}, 2)
+	e.svc.Reload()
+	e.waitState(t, StateLoggedOut)
+}
+
+func TestLoginWithCode(t *testing.T) {
+	f := newFakeTG()
+	e := newSvcEnv(t, f, true)
+	e.waitState(t, StateLoggedOut)
+	if _, err := e.svc.SignIn(ctx, "12345"); !errors.Is(err, ErrBadState) {
+		t.Fatalf("SignIn before SendCode err = %v", err)
+	}
+	if err := e.svc.SendCode(ctx, "+8613800000000"); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.svc.Status(ctx).State; got != StateCodeSent {
+		t.Fatalf("state = %s", got)
+	}
+	var ie *InputError
+	if _, err := e.svc.SignIn(ctx, "00000"); !errors.As(err, &ie) || ie.Msg != "验证码错误" {
+		t.Fatalf("wrong code err = %v", err)
+	}
+	state, err := e.svc.SignIn(ctx, "12345")
+	if err != nil || state != StateReady {
+		t.Fatalf("SignIn = %s, %v", state, err)
+	}
+	info := e.svc.Status(ctx)
+	if info.State != StateReady || info.TgUserID != 99 || info.Name != "Me Self" || info.Phone != "+8613800000000" {
+		t.Fatalf("info = %+v", info)
+	}
+	u, _ := e.st.GetUserbot(ctx)
+	if u.Status != store.UserbotReady || u.TgUserID != 99 {
+		t.Fatalf("db = %+v", u)
+	}
+	if err := e.svc.SendCode(ctx, "+1"); !errors.Is(err, ErrAlreadyLoggedIn) {
+		t.Fatalf("SendCode when ready err = %v", err)
+	}
+}
+
+func TestLoginNeedsPassword(t *testing.T) {
+	f := newFakeTG()
+	f.extra = func(req bin.Encoder) (bin.Encoder, error) {
+		switch req.(type) {
+		case *tg.AuthSignInRequest:
+			return nil, &tgerr.Error{Code: 401, Message: "SESSION_PASSWORD_NEEDED", Type: "SESSION_PASSWORD_NEEDED"}
+		case *tg.AccountGetPasswordRequest:
+			return nil, &tgerr.Error{Code: 400, Message: "PASSWORD_HASH_INVALID", Type: "PASSWORD_HASH_INVALID"}
+		}
+		return nil, nil
+	}
+	e := newSvcEnv(t, f, true)
+	e.waitState(t, StateLoggedOut)
+	if err := e.svc.Password(ctx, "pw"); !errors.Is(err, ErrBadState) {
+		t.Fatalf("Password before SignIn err = %v", err)
+	}
+	e.svc.SendCode(ctx, "+100")
+	state, err := e.svc.SignIn(ctx, "12345")
+	if err != nil || state != StatePasswordNeeded {
+		t.Fatalf("SignIn = %s, %v", state, err)
+	}
+	var ie *InputError
+	if err := e.svc.Password(ctx, "wrong"); !errors.As(err, &ie) || ie.Msg != "二步验证密码错误" {
+		t.Fatalf("Password err = %v", err)
+	}
+	if got := e.svc.Status(ctx).State; got != StatePasswordNeeded {
+		t.Fatalf("state after bad password = %s", got)
+	}
+}
+
+func TestStartsReadyWhenAuthorized(t *testing.T) {
+	f := newFakeTG()
+	f.authorized = true
+	e := newSvcEnv(t, f, true)
+	e.waitState(t, StateReady)
+	if !e.svc.WaitReady(ctx, 0) {
+		t.Fatal("WaitReady false when ready")
+	}
+	called := false
+	if err := e.svc.With(ctx, func(api *tg.Client) error { called = api != nil; return nil }); err != nil || !called {
+		t.Fatalf("With = %v, called=%v", err, called)
+	}
+}
+
+func TestUnauthorizedMarksErrorAndNotifiesOnce(t *testing.T) {
+	f := newFakeTG()
+	f.authorized = true
+	e := newSvcEnv(t, f, true)
+	e.waitState(t, StateReady)
+	e.st.SaveUserbotSession(ctx, []byte("sealed"), 1)
+	f.set(func(f *fakeTG) { f.authorized = false })
+	self := func(api *tg.Client) error {
+		_, err := api.UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUserSelf{}})
+		return err
+	}
+	for i := 0; i < 3; i++ {
+		if err := e.svc.With(ctx, self); !errors.Is(err, ErrNotReady) {
+			t.Fatalf("With #%d err = %v", i, err)
+		}
+	}
+	e.waitState(t, StateError)
+	eventually(t, "session dropped", func() bool { u, _ := e.st.GetUserbot(ctx); return u.SessionEnc == nil })
+	u, _ := e.st.GetUserbot(ctx)
+	if u.Status != store.UserbotError || u.LastError == "" || u.TgUserID != 99 {
+		t.Fatalf("db = %+v", u)
+	}
+	if e.n.count() != 1 {
+		t.Fatalf("notifications = %d", e.n.count())
+	}
+	// Re-login is allowed from the error state.
+	if err := e.svc.SendCode(ctx, "+100"); err != nil {
+		t.Fatalf("SendCode from error = %v", err)
+	}
+}
+
+func TestRevokedWhileOfflineDetectedOnConnect(t *testing.T) {
+	f := newFakeTG()
+	e := newSvcEnv(t, f, false)
+	e.waitState(t, StateUnconfigured)
+	e.st.SetUserbotAccount(ctx, "+100", 99, "Me", 1)
+	e.creds.Save(ctx, tgapp.Credentials{APIID: 1, APIHash: "0123456789abcdef0123456789abcdef"}, 2)
+	e.svc.Reload()
+	e.waitState(t, StateError)
+	if e.n.count() != 1 {
+		t.Fatalf("notifications = %d", e.n.count())
+	}
+}
+
+func TestLogoutClearsAccount(t *testing.T) {
+	f := newFakeTG()
+	f.authorized = true
+	e := newSvcEnv(t, f, true)
+	e.waitState(t, StateReady)
+	if err := e.svc.Logout(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if f.called("*tg.AuthLogOutRequest") != 1 {
+		t.Fatal("auth.logOut not called")
+	}
+	eventually(t, "account cleared", func() bool {
+		u, _ := e.st.GetUserbot(ctx)
+		return u.Status == store.UserbotLoggedOut && u.TgUserID == 0
+	})
+	e.waitState(t, StateLoggedOut)
+	if e.n.count() != 0 {
+		t.Fatalf("logout must not alert, got %d", e.n.count())
+	}
+}
+
+func TestSessionStoreEncrypts(t *testing.T) {
+	e := newSvcEnv(t, newFakeTG(), false)
+	ss := &sessionStore{st: e.st, box: e.box, now: e.svc.Now}
+	if _, err := ss.LoadSession(ctx); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("empty load err = %v", err)
+	}
+	if err := ss.StoreSession(ctx, []byte(`{"auth":"secret"}`)); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := e.st.GetUserbot(ctx)
+	if len(u.SessionEnc) == 0 || string(u.SessionEnc) == `{"auth":"secret"}` {
+		t.Fatalf("session stored in clear: %q", u.SessionEnc)
+	}
+	got, err := ss.LoadSession(ctx)
+	if err != nil || string(got) != `{"auth":"secret"}` {
+		t.Fatalf("load = %q, %v", got, err)
+	}
+}
