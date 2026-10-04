@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,17 +48,27 @@ func (r *recTransport) take() []string {
 }
 
 type fakeAPI struct {
-	mu     sync.Mutex
-	ready  bool
-	client *tg.Client
+	mu       sync.Mutex
+	ready    bool
+	client   *tg.Client
+	withErrs []error // errors returned by successive With calls (without running fn) first
+	withs    int
 }
 
 func (a *fakeAPI) With(_ context.Context, fn func(*tg.Client) error) error {
 	a.mu.Lock()
 	ready := a.ready
+	a.withs++
+	var err error
+	if len(a.withErrs) > 0 {
+		err, a.withErrs = a.withErrs[0], a.withErrs[1:]
+	}
 	a.mu.Unlock()
 	if !ready {
 		return ErrNotReady
+	}
+	if err != nil {
+		return err
 	}
 	return fn(a.client)
 }
@@ -161,7 +172,7 @@ func newFetchEnv(t *testing.T) *fetchEnv {
 	e := &fetchEnv{st: st, tr: &recTransport{}, tg: newChannelTG(), bot: bot}
 	e.api = &fakeAPI{ready: true, client: tg.NewClient(tgmock.Invoker(e.tg.handle))}
 	e.f = NewFetcher(e.api, st, receipt.New(st, e.tr), e.tr, events.NewHub(), func() { e.wakes++ }, t.TempDir())
-	e.f.Gap, e.f.FloodPad = 0, 0
+	e.f.Gap, e.f.FloodPad, e.f.RetryWait = 0, 0, 0
 	return e
 }
 
@@ -480,4 +491,86 @@ func TestRunRequeuesInterruptedJob(t *testing.T) {
 	if n := len(e.messages(t)); n != 1 {
 		t.Fatalf("messages = %d", n)
 	}
+}
+
+// TestTransientNotReadyRetries: a reconnect between WaitReady and With makes With report
+// ErrNotReady; the job must wait for the account again instead of failing outright.
+func TestTransientNotReadyRetries(t *testing.T) {
+	e := newFetchEnv(t)
+	e.tg.post(42, "x", 0)
+	e.api.withErrs = []error{ErrNotReady}
+	e.submit(t, 10, "https://t.me/chan/42")
+	e.runOne(t)
+	if got := e.tr.take(); !reflect.DeepEqual(got, []string{"react 42 10 👀", "react 42 10 👌"}) {
+		t.Fatalf("calls = %v", got)
+	}
+}
+
+// TestTransientConnectionErrorRetries: a non-RPC error from gotd (the connection closing under
+// the call) is transient too.
+func TestTransientConnectionErrorRetries(t *testing.T) {
+	e := newFetchEnv(t)
+	e.tg.post(42, "x", 0)
+	e.tg.failGet = []error{errors.New("engine was closed")}
+	e.submit(t, 10, "https://t.me/chan/42")
+	e.runOne(t)
+	if got := e.tr.take(); !reflect.DeepEqual(got, []string{"react 42 10 👀", "react 42 10 👌"}) {
+		t.Fatalf("calls = %v", got)
+	}
+}
+
+// TestTransientRetriesShareAttemptCap: transient errors count against the same 3-retry cap.
+func TestTransientRetriesShareAttemptCap(t *testing.T) {
+	e := newFetchEnv(t)
+	e.tg.post(42, "x", 0)
+	e.api.withErrs = []error{ErrNotReady, ErrNotReady, ErrNotReady, ErrNotReady, ErrNotReady}
+	e.submit(t, 10, "https://t.me/chan/42")
+	e.runOne(t)
+	if e.api.withs != 4 {
+		t.Fatalf("With calls = %d, want 4 (1 initial + 3 retries)", e.api.withs)
+	}
+	want := []string{"react 42 10 👀", "reply 42 10 ⚠️ 代取失败：代取账号未登录"}
+	if got := e.tr.take(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v", got)
+	}
+}
+
+// TestRunRequeuesStuckJob: a job left 'fetching' while the queue keeps running (e.g. its
+// FinishFetchJob failed) is picked up again without a restart. The stuck job is created and
+// claimed while the queue is busy with another job, so only a requeue inside Run can rescue it.
+func TestRunRequeuesStuckJob(t *testing.T) {
+	e := newFetchEnv(t)
+	e.tg.post(42, "x", 0)
+	e.tg.post(43, "y", 0)
+	e.st.UpsertSender(ctx, me, 1)
+	var stuck atomic.Int64
+	var once sync.Once
+	e.tg.set(func(f *fakeTG) {
+		f.before = func(req bin.Encoder) {
+			if _, ok := req.(*tg.ChannelsGetMessagesRequest); !ok {
+				return
+			}
+			once.Do(func() {
+				id, _, _ := e.st.CreateFetchJob(ctx, &store.FetchJob{BotID: e.bot, SenderID: 42, LinkTgMessageID: 11,
+					Link: "https://t.me/chan/43", State: store.JobQueued, CreatedAt: 2, UpdatedAt: 2})
+				stuck.Store(id)
+				if j, err := e.st.ClaimNextFetchJob(ctx, 2); err != nil || j.ID != id { // claimed, never finished
+					t.Errorf("claim stuck job = %+v, %v", j, err)
+				}
+			})
+		}
+	})
+	e.submit(t, 10, "https://t.me/chan/42")
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { e.f.Run(runCtx); close(done) }()
+	defer func() { cancel(); <-done }()
+	eventually(t, "stuck job fetched", func() bool {
+		id := stuck.Load()
+		if id == 0 {
+			return false
+		}
+		j, _ := e.st.GetFetchJob(ctx, id)
+		return j.State == store.JobFetched
+	})
 }

@@ -56,13 +56,14 @@ type Fetcher struct {
 	MaxFlood  time.Duration // longest FLOOD_WAIT waited out in place
 	FloodPad  time.Duration // slack added to each FLOOD_WAIT
 	ReadyWait time.Duration // how long a job waits for a connecting account
+	RetryWait time.Duration // pause before retrying after a transient connection error
 	Now       func() time.Time
 }
 
 func NewFetcher(api API, st *store.Store, rc JobReceipts, tr receipt.Transport, hub *events.Hub, wake func(), mediaDir string) *Fetcher {
 	return &Fetcher{api: api, st: st, receipts: rc, transport: tr, hub: hub, wakeDL: wake, mediaDir: mediaDir,
 		wake: make(chan struct{}, 1), Gap: 3 * time.Second, MaxFlood: 300 * time.Second, FloodPad: time.Second,
-		ReadyWait: 30 * time.Second, Now: time.Now}
+		ReadyWait: 30 * time.Second, RetryWait: time.Second, Now: time.Now}
 }
 
 // TryHandle implements collector.LinkHandler. It only enqueues; Run does the fetching.
@@ -110,12 +111,16 @@ func (f *Fetcher) TryHandle(ctx context.Context, botID int64, sender model.Sende
 }
 
 func (f *Fetcher) Run(ctx context.Context) {
-	if n, err := f.st.RequeueFetchingJobs(ctx, f.Now().Unix()); err != nil {
-		log.Printf("userbot: requeue interrupted jobs: %v", err)
-	} else if n > 0 {
-		log.Printf("userbot: requeued %d interrupted fetch jobs", n)
-	}
 	for ctx.Err() == nil {
+		// The queue is serial, so no job is legitimately 'fetching' between iterations: this
+		// requeues jobs interrupted by a restart and any whose FinishFetchJob failed.
+		if n, err := f.st.RequeueFetchingJobs(ctx, f.Now().Unix()); err != nil {
+			if ctx.Err() == nil {
+				log.Printf("userbot: requeue interrupted jobs: %v", err)
+			}
+		} else if n > 0 {
+			log.Printf("userbot: requeued %d interrupted fetch jobs", n)
+		}
 		did, err := f.RunOnce(ctx)
 		if err != nil && ctx.Err() == nil {
 			log.Printf("userbot: fetch queue: %v", err)
@@ -162,6 +167,7 @@ func (f *Fetcher) process(ctx context.Context, job *store.FetchJob) {
 			return
 		}
 		got, err := f.fetch(ctx, link)
+		fetchErr := err
 		if err == nil {
 			err = f.archive(ctx, job, got)
 		}
@@ -178,6 +184,15 @@ func (f *Fetcher) process(ctx context.Context, job *store.FetchJob) {
 		if d, ok := tgerr.AsFloodWait(err); ok && d <= f.MaxFlood && attempt < 3 {
 			log.Printf("userbot: job %d: flood wait %s", job.ID, d)
 			if !sleep(ctx, d+f.FloodPad) {
+				return
+			}
+			continue
+		}
+		if fetchErr != nil && transient(fetchErr) && attempt < 3 {
+			// The connection dropped or was reloaded between WaitReady and With: wait for
+			// the account again rather than failing the job.
+			log.Printf("userbot: job %d: transient: %v", job.ID, fetchErr)
+			if !sleep(ctx, f.RetryWait) {
 				return
 			}
 			continue
@@ -322,6 +337,24 @@ func (f *Fetcher) resolve(ctx context.Context, api *tg.Client, link linkparse.Li
 		return c, false, nil
 	}
 	return nil, false, errNotMember
+}
+
+// transient reports whether a fetch error is the connection going away under the call (the
+// account not ready, or a non-RPC error from gotd such as a closed engine) rather than an
+// answer from Telegram or a definitive outcome of our own.
+func transient(err error) bool {
+	if errors.Is(err, ErrNotReady) {
+		return true
+	}
+	if _, ok := tgerr.As(err); ok {
+		return false
+	}
+	for _, e := range []error{errNotMember, errNoMessage, errNotChannel, errNoChat} {
+		if errors.Is(err, e) {
+			return false
+		}
+	}
+	return true
 }
 
 // stalePeerErr reports whether err is Telegram rejecting a channel reference outright, the
