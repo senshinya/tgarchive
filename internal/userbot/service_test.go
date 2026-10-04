@@ -251,6 +251,89 @@ func TestLogoutDuringConnectDoesNotResurrect(t *testing.T) {
 	}
 }
 
+// TestLogoutWhileDisconnectedDoesNotWipeFutureLogin reproduces a round-1-fix regression: Logout()
+// called while nothing was connected armed s.clear = clearAll (so an in-flight attach() wouldn't
+// resurrect a stale "authorized" answer) but never disarmed it itself, relying on some future
+// detach() to consume it. If no detach() happens before a completely unrelated future login
+// succeeds, the stale clearAll sits pending and wipes that fresh account and session the next
+// time any disconnect (or shutdown) reaches detach() — logging the user back out and discarding
+// their session even though they never asked to log out again.
+func TestLogoutWhileDisconnectedDoesNotWipeFutureLogin(t *testing.T) {
+	f := newFakeTG()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	box, _ := seal.New(bytes.Repeat([]byte{2}, 32))
+	creds := tgapp.New(st, box)
+	if err := creds.Save(ctx, tgapp.Credentials{APIID: 1, APIHash: "0123456789abcdef0123456789abcdef"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(st, box, creds, &fakeDialer{tg: f}, &countNotifier{})
+
+	// Logout while genuinely disconnected: Run() hasn't even started yet, so s.api is nil and
+	// Logout takes the direct-clear branch.
+	if err := svc.Logout(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Drain the Reload() that Logout() just queued. Run() hasn't started, so nothing has
+	// consumed it yet; left in place, the very first connect cycle would immediately pick it
+	// up and disconnect/reconnect once on its own, which happens to run a detach() early (before
+	// the fresh login below) and would accidentally disarm the stale clearAll by coincidence —
+	// masking the bug this test exists to catch, regardless of whether the fix is applied.
+	select {
+	case <-svc.reload:
+	default:
+	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { svc.Run(runCtx); close(done) }()
+	// Wait for the connect cycle's attach() to actually finish (loginClient() needs s.auth
+	// set), not merely for the in-memory state to read "logged_out" — Logout() itself already
+	// set that same state directly before Run() even started, so checking state alone would be
+	// satisfied instantly and wouldn't actually wait for attach().
+	eventually(t, "connected and logged_out", func() bool {
+		_, state, err := svc.loginClient()
+		return err == nil && state == StateLoggedOut
+	})
+
+	// A fresh, unrelated login completes normally.
+	if err := svc.SendCode(ctx, "+100"); err != nil {
+		t.Fatalf("SendCode = %v", err)
+	}
+	state, err := svc.SignIn(ctx, "12345")
+	if err != nil || state != StateReady {
+		t.Fatalf("SignIn = %s, %v", state, err)
+	}
+	eventually(t, "state ready", func() bool { return svc.Status(ctx).State == StateReady })
+	// A live connection would have gotd persist the account's auth key via session.Storage as a
+	// side effect; this fake dialer ignores session.Storage entirely, so seed it directly
+	// through the same sessionStore the service uses, to also exercise "session still present".
+	if err := svc.sess.StoreSession(ctx, []byte("auth-key-bytes")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Force a disconnect: shut the service down. detach() runs unconditionally right after Dial
+	// returns no matter why, and on shutdown Run() returns immediately afterward with no
+	// healing reconnect — if the stale clearAll from the earlier Logout is still armed, this is
+	// exactly where it wipes an account and session that have no business being touched.
+	cancel()
+	<-done
+
+	if got := svc.Status(ctx).State; got != StateReady {
+		t.Fatalf("state after shutdown = %s, want %s (a stale clearAll must not fire)", got, StateReady)
+	}
+	u, err := st.GetUserbot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Status != store.UserbotReady || u.TgUserID != 99 || len(u.SessionEnc) == 0 {
+		t.Fatalf("account/session wiped by a stale clearAll from the earlier Logout: %+v", u)
+	}
+}
+
 // TestConcurrentUnauthorizedAlertsOnce exercises several concurrent 401s all triggering
 // unauthorized() at once. The check-and-set for "already handled" must happen under the same
 // lock acquisition as the read, or two callers can both pass the check before either sets the

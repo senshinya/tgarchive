@@ -235,7 +235,10 @@ func (s *Service) markReady(ctx context.Context, u *tg.User, phone string) error
 		return err
 	}
 	s.mu.Lock()
-	s.state, s.lastErr, s.phone, s.codeHash = StateReady, "", "", ""
+	// Defense in depth: a fresh successful login must never be undone by a stale pending
+	// clear armed by an earlier logout/revocation that never got consumed by a detach()
+	// (see Logout's api == nil branch, which is the normal way this gets disarmed).
+	s.state, s.lastErr, s.phone, s.codeHash, s.clear = StateReady, "", "", "", clearNone
 	s.mu.Unlock()
 	return nil
 }
@@ -419,7 +422,17 @@ func (s *Service) Logout(ctx context.Context) error {
 	// will see logoutGen advance and refuse to markReady a stale "authorized" answer).
 	s.Reload()
 	if api == nil {
-		return s.st.ClearUserbot(ctx, s.Now().Unix())
+		// Nothing is connected right now, so no detach() is coming to consume the clearAll
+		// just armed above — that flag exists only to protect an attach() that might be
+		// mid-setup this instant, and the logoutGen check in attach() already covers that
+		// race on its own. Clear directly and disarm the flag ourselves; otherwise it would
+		// sit there and wipe a completely unrelated *future* login's account and session the
+		// next time any disconnect (or shutdown) reaches detach().
+		err := s.st.ClearUserbot(ctx, s.Now().Unix())
+		s.mu.Lock()
+		s.clear = clearNone
+		s.mu.Unlock()
+		return err
 	}
 	return nil
 }
