@@ -3,6 +3,7 @@ package collector
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -40,14 +41,25 @@ type linkStub struct {
 	mu       sync.Mutex
 	calls    int
 	canFetch bool
+	errs     []error      // returned by successive calls before succeeding
+	peek     func() int64 // when set, records the persisted offset at each call
+	offsets  []int64
 }
 
-func (l *linkStub) TryHandle(_ context.Context, _ int64, _ model.Sender, _ *model.Message, canFetch bool) bool {
+func (l *linkStub) TryHandle(_ context.Context, _ int64, _ model.Sender, _ *model.Message, canFetch bool) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.calls++
 	l.canFetch = canFetch
-	return true
+	if l.peek != nil {
+		l.offsets = append(l.offsets, l.peek())
+	}
+	if len(l.errs) > 0 {
+		err := l.errs[0]
+		l.errs = l.errs[1:]
+		return false, err
+	}
+	return true, nil
 }
 
 type env struct {
@@ -213,6 +225,21 @@ func TestLinkHandlerConsumes(t *testing.T) {
 	defer stub.mu.Unlock()
 	if stub.calls != 1 || !stub.canFetch || len(e.messages(t)) != 0 {
 		t.Fatalf("calls=%d canFetch=%v", stub.calls, stub.canFetch)
+	}
+}
+
+func TestLinkHandlerErrorRetries(t *testing.T) {
+	stub := &linkStub{errs: []error{errors.New("userbot busy")}}
+	e := setup(t, stub)
+	stub.peek = e.offset
+	e.st.PutWhitelist(bg, store.WhitelistEntry{BotID: e.bot, TgUserID: 42, CanFetch: true})
+	e.fake.PushMessage(tgtest.TextMsg(1, 42, "https://t.me/c/123/456"))
+	e.m.Start(e.bot)
+	eventually(t, "offset advance", func() bool { return e.offset() == 2 })
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if stub.calls != 2 || stub.offsets[0] != 0 || stub.offsets[1] != 0 || len(e.messages(t)) != 0 {
+		t.Fatalf("calls=%d offsets=%v", stub.calls, stub.offsets)
 	}
 }
 

@@ -20,8 +20,12 @@ import (
 	"tgarchive/internal/tgbot"
 )
 
+// LinkHandler may consume a message (for example a Telegram post link to fetch) instead of
+// archiving it. handled=true advances the update offset; a non-nil err leaves the offset where it
+// is, so the worker refetches and re-delivers the same update. Implementations must therefore be
+// idempotent per (botID, msg.TgMessageID).
 type LinkHandler interface {
-	TryHandle(ctx context.Context, botID int64, sender model.Sender, msg *model.Message, canFetch bool) bool
+	TryHandle(ctx context.Context, botID int64, sender model.Sender, msg *model.Message, canFetch bool) (handled bool, err error)
 }
 
 type AvatarRefresher interface {
@@ -225,8 +229,14 @@ func (m *Manager) handle(ctx context.Context, botID int64, u tgbot.Update) error
 		}
 		return m.d.Store.AdvanceOffset(ctx, botID, next)
 	}
-	if len(u.Message) > 0 && m.d.Links != nil && m.d.Links.TryHandle(ctx, botID, res.Sender, res.Msg, canFetch) {
-		return m.d.Store.AdvanceOffset(ctx, botID, next)
+	if len(u.Message) > 0 && m.d.Links != nil {
+		handled, err := m.d.Links.TryHandle(ctx, botID, res.Sender, res.Msg, canFetch)
+		if err != nil {
+			return fmt.Errorf("link handler: %w", err)
+		}
+		if handled {
+			return m.d.Store.AdvanceOffset(ctx, botID, next)
+		}
 	}
 	ir, err := m.d.Store.Ingest(ctx, store.IngestInput{BotID: botID, Sender: res.Sender, Msg: res.Msg, Offset: next, Now: now})
 	if err != nil {
