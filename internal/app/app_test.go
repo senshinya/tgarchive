@@ -13,8 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gotd/td/bin"
+	"github.com/gotd/td/session"
+	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgmock"
+
 	"tgarchive/internal/config"
 	"tgarchive/internal/store"
+	"tgarchive/internal/tgapp"
 	"tgarchive/internal/tgtest"
 )
 
@@ -219,5 +225,84 @@ func TestRestartResumes(t *testing.T) {
 	}
 	if gets != 2 {
 		t.Fatalf("ph fetched %d times, want 2 (once held/cancelled, once after restart)", gets)
+	}
+}
+
+// mtDialer is an in-process MTProto account that can see one public channel with one photo post.
+type mtDialer struct{ photo []byte }
+
+func (d *mtDialer) handle(req bin.Encoder) (bin.Encoder, error) {
+	ch := &tg.Channel{ID: 500, AccessHash: 5005, Title: "Chan", Username: "chan", Photo: &tg.ChatPhotoEmpty{}}
+	switch r := req.(type) {
+	case *tg.UsersGetUsersRequest:
+		return &tg.UserClassVector{Elems: []tg.UserClass{&tg.User{ID: 99, FirstName: "Me", Self: true}}}, nil
+	case *tg.ContactsResolveUsernameRequest:
+		return &tg.ContactsResolvedPeer{Peer: &tg.PeerChannel{ChannelID: 500}, Chats: []tg.ChatClass{ch}}, nil
+	case *tg.ChannelsGetMessagesRequest:
+		post := &tg.Message{ID: 42, PeerID: &tg.PeerChannel{ChannelID: 500}, Date: 1700000000, Message: "protected",
+			Media: &tg.MessageMediaPhoto{Photo: &tg.Photo{ID: 9, AccessHash: 99, FileReference: []byte{1},
+				Sizes: []tg.PhotoSizeClass{&tg.PhotoSize{Type: "y", W: 1280, H: 960, Size: len(d.photo)}}}}}
+		return &tg.MessagesChannelMessages{Messages: []tg.MessageClass{post}, Chats: []tg.ChatClass{ch}}, nil
+	case *tg.UploadGetFileRequest:
+		if r.Offset > 0 {
+			return &tg.UploadFile{Type: &tg.StorageFileJpeg{}}, nil
+		}
+		return &tg.UploadFile{Type: &tg.StorageFileJpeg{}, Bytes: d.photo}, nil
+	}
+	return nil, fmt.Errorf("mtDialer: unexpected %T", req)
+}
+
+func (d *mtDialer) Dial(ctx context.Context, _ tgapp.Credentials, _ session.Storage, fn func(context.Context, *tg.Client) error) error {
+	return fn(ctx, tg.NewClient(tgmock.Invoker(d.handle)))
+}
+
+func TestUserbotFetchEndToEnd(t *testing.T) {
+	fake := tgtest.New(t)
+	cfg := cfgFor(fake, t.TempDir())
+	photo := []byte("protected-photo-bytes")
+	a, err := newApp(context.Background(), cfg, &mtDialer{photo: photo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	h := a.Handler
+
+	if code, b := req(t, h, "PUT", "/api/admin/telegram-app", map[string]any{"api_id": 1, "api_hash": "0123456789abcdef0123456789abcdef"}); code != 204 {
+		t.Fatalf("save app creds = %d %s", code, b)
+	}
+	eventually(t, "userbot ready", func() bool {
+		_, b := req(t, h, "GET", "/api/admin/userbot", nil)
+		return strings.Contains(string(b), `"state":"ready"`)
+	})
+	botID := addBotAndWhitelist(t, h, 42)
+	if code, b := req(t, h, "PUT", fmt.Sprintf("/api/admin/bots/%d/whitelist/42", botID), map[string]any{"note": "me", "can_fetch": true}); code != 204 {
+		t.Fatalf("grant can_fetch = %d %s", code, b)
+	}
+
+	fake.PushMessage(tgtest.TextMsg(1, 42, "https://t.me/chan/42"))
+	eventually(t, "👀 then 👌 on the link message", func() bool {
+		e := emojis(fake)
+		return len(e) == 2 && e[0] == "👀" && e[1] == "👌"
+	})
+	msgs := firstChatMessages(t, h)
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %+v", msgs)
+	}
+	m := msgs[0]
+	if m.Source != "userbot_fetch" || m.TgMessageID != 42 || m.Text != "protected" || m.OriginLink != "https://t.me/chan/42" ||
+		len(m.Media) != 1 || m.Media[0].State != "done" {
+		t.Fatalf("message = %+v", m)
+	}
+	code, body := req(t, h, "GET", fmt.Sprintf("/media/%d", m.Media[0].ID), nil)
+	if code != 200 || string(body) != string(photo) {
+		t.Fatalf("media = %d %q", code, body)
+	}
+	for _, c := range fake.Calls("setMessageReaction") {
+		if int64(c.Params["message_id"].(float64)) != 1 {
+			t.Fatalf("reaction on wrong message: %+v", c.Params)
+		}
 	}
 }

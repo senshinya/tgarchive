@@ -49,5 +49,8 @@ func (s *Server) putTelegramApp(w http.ResponseWriter, r *http.Request) {
 	if s.BotAPI != nil {
 		s.BotAPI.Apply(c)
 	}
+	if s.Userbot != nil {
+		s.Userbot.Reload()
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

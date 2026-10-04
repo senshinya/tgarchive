@@ -25,25 +25,32 @@ import (
 	"tgarchive/internal/seal"
 	"tgarchive/internal/store"
 	"tgarchive/internal/tgapp"
+	"tgarchive/internal/userbot"
 	"tgarchive/web"
 )
 
 type App struct {
 	Handler http.Handler
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	st     *store.Store
-	mgr    *collector.Manager
-	dl     *downloader.Downloader
-	av     *avatars.Refresher
-	mapper botapifs.Mapper
-	tg     *tgapp.Store
-	sup    *botapiserver.Supervisor
-	wg     sync.WaitGroup
+	ctx     context.Context
+	cancel  context.CancelFunc
+	st      *store.Store
+	mgr     *collector.Manager
+	dl      *downloader.Downloader
+	av      *avatars.Refresher
+	mapper  botapifs.Mapper
+	tg      *tgapp.Store
+	sup     *botapiserver.Supervisor
+	ub      *userbot.Service
+	fetcher *userbot.Fetcher
+	wg      sync.WaitGroup
 }
 
 func New(parent context.Context, cfg *config.Config) (*App, error) {
+	return newApp(parent, cfg, userbot.GotdDialer{})
+}
+
+func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer) (*App, error) {
 	mediaDir := filepath.Join(cfg.DataDir, "media")
 	avatarDir := filepath.Join(cfg.DataDir, "avatars")
 	for _, d := range []string{mediaDir, avatarDir, filepath.Join(cfg.DataDir, "db")} {
@@ -65,6 +72,8 @@ func New(parent context.Context, cfg *config.Config) (*App, error) {
 	clients := botclients.New(st, box, cfg.BotAPIURL, hc)
 	mapper := botapifs.Mapper{Remote: cfg.BotAPIDirRemote, Local: cfg.BotAPIDirLocal}
 	hub := events.NewHub()
+	tg := tgapp.New(st, box)
+	notifier := &notify.Bark{File: cfg.BarkNotifyFile}
 	rc := receipt.New(st, clients)
 	dl := downloader.New(st, mediaDir, cfg.MediaMaxBytes, func(mediaID int64) {
 		rc.MediaSettled(ctx, mediaID)
@@ -72,29 +81,35 @@ func New(parent context.Context, cfg *config.Config) (*App, error) {
 		hub.Publish(events.Event{Type: "media.updated", Data: map[string]any{"media_id": mediaID, "message_ids": ids}})
 	})
 	dl.Register("bot", &downloader.BotSource{Clients: clients.Get, Mapper: mapper})
+	ub := userbot.New(st, box, tg, dialer, notifier)
+	dl.Register("mt", &userbot.MTSource{API: ub})
+	fetcher := userbot.NewFetcher(ub, st, rc, clients, hub, dl.Wake, mediaDir)
 	av := &avatars.Refresher{Store: st, Clients: clients, Mapper: mapper, Dir: avatarDir}
 	mgr := collector.New(ctx, collector.Deps{
 		Store: st, Clients: clients, Downloader: dl, Receipts: rc, Hub: hub,
-		Notifier: &notify.Bark{File: cfg.BarkNotifyFile}, Avatars: av,
+		Notifier: notifier, Avatars: av, Links: fetcher,
 		MediaDir: mediaDir, PollTimeoutSec: cfg.PollTimeoutSec,
 	})
-	tg := tgapp.New(st, box)
 	var sup *botapiserver.Supervisor
 	if cfg.ManageBotAPI {
 		sup = botapiserver.New(cfg.BotAPIBinary, cfg.BotAPIDirLocal, filepath.Join(cfg.DataDir, "botapi-tmp"), 8081)
 	}
 	srv := &httpapi.Server{
 		Cfg: cfg, Store: st, Box: box, Clients: clients, Manager: mgr, Downloader: dl, Hub: hub, Avatars: av,
-		TgApp: tg, BotAPI: sup,
+		TgApp: tg, BotAPI: sup, Userbot: ub,
 		Web: web.FS(), MediaDir: mediaDir, AvatarDir: avatarDir, HTTP: hc, Now: time.Now,
 	}
-	return &App{Handler: srv.Handler(), ctx: ctx, cancel: cancel, st: st, mgr: mgr, dl: dl, av: av, mapper: mapper, tg: tg, sup: sup}, nil
+	return &App{Handler: srv.Handler(), ctx: ctx, cancel: cancel, st: st, mgr: mgr, dl: dl, av: av, mapper: mapper, tg: tg, sup: sup,
+		ub: ub, fetcher: fetcher}, nil
 }
 
 func (a *App) Start() error {
 	a.wg.Add(2)
 	go func() { defer a.wg.Done(); a.dl.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.maintain() }()
+	a.wg.Add(2)
+	go func() { defer a.wg.Done(); a.ub.Run(a.ctx) }()
+	go func() { defer a.wg.Done(); a.fetcher.Run(a.ctx) }()
 	if a.sup != nil {
 		creds, err := a.tg.Load(a.ctx)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {

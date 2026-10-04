@@ -16,8 +16,9 @@ const (
 	EmojiSeen = "👀"
 	EmojiDone = "👌"
 
-	textFailedPrefix = "⚠️ 存档失败："
-	textTooLarge     = "文件超过存档上限，仅保存了消息记录"
+	textFailedPrefix      = "⚠️ 存档失败："
+	TextFetchFailedPrefix = "⚠️ 代取失败："
+	textTooLarge          = "文件超过存档上限，仅保存了消息记录"
 )
 
 // callTimeout bounds each transport call: Evaluate holds e.mu, so one stuck call would stall
@@ -37,31 +38,11 @@ type Engine struct {
 
 func New(st *store.Store, tr Transport) *Engine { return &Engine{st: st, tr: tr} }
 
-func (e *Engine) MediaSettled(ctx context.Context, mediaID int64) {
-	ids, err := e.st.MessagesForMedia(ctx, mediaID)
-	if err != nil {
-		log.Printf("receipt: messages for media %d: %v", mediaID, err)
-		return
-	}
-	for _, id := range ids {
-		e.Evaluate(ctx, id)
-	}
-}
-
-func (e *Engine) Evaluate(ctx context.Context, messageID int64) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	info, err := e.st.GetReceiptInfo(ctx, messageID)
-	if err != nil {
-		log.Printf("receipt: info for message %d: %v", messageID, err)
-		return
-	}
-	if info.Source != model.SourceBotUpdate {
-		return
-	}
+// apply drives the reaction / reply state machine for one tracked item (a message or a fetch job).
+func (e *Engine) apply(ctx context.Context, info *store.ReceiptInfo, main []store.MediaStatus, cur string, save func(string)) {
 	var pending, failed, tooLarge int
 	firstErr := ""
-	for _, m := range info.Main {
+	for _, m := range main {
 		switch m.State {
 		case store.StatePending:
 			pending++
@@ -76,29 +57,106 @@ func (e *Engine) Evaluate(ctx context.Context, messageID int64) {
 	}
 	switch {
 	case pending > 0:
-		if info.Receipt == store.ReceiptNone {
+		if cur == store.ReceiptNone {
 			if err := e.react(ctx, info, EmojiSeen); err == nil {
-				e.set(ctx, messageID, store.ReceiptSeen)
+				save(store.ReceiptSeen)
 			}
 		}
 	case failed > 0:
-		if info.Receipt != store.ReceiptFailed {
-			if info.Receipt == store.ReceiptNone {
+		if cur != store.ReceiptFailed {
+			if cur == store.ReceiptNone {
 				e.reactLogOnly(ctx, info, EmojiSeen)
 			}
 			if err := e.reply(ctx, info, textFailedPrefix+truncate(botapifs.RedactPath(firstErr), 200)); err == nil {
-				e.set(ctx, messageID, store.ReceiptFailed)
+				save(store.ReceiptFailed)
 			}
 		}
 	default:
-		if info.Receipt != store.ReceiptDone {
+		if cur != store.ReceiptDone {
 			if err := e.react(ctx, info, EmojiDone); err == nil {
 				if tooLarge > 0 {
 					e.replyLogOnly(ctx, info, textTooLarge)
 				}
-				e.set(ctx, messageID, store.ReceiptDone)
+				save(store.ReceiptDone)
 			}
 		}
+	}
+}
+
+func (e *Engine) Evaluate(ctx context.Context, messageID int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	info, err := e.st.GetReceiptInfo(ctx, messageID)
+	if err != nil {
+		log.Printf("receipt: info for message %d: %v", messageID, err)
+		return
+	}
+	if info.Source != model.SourceBotUpdate {
+		return
+	}
+	e.apply(ctx, info, info.Main, info.Receipt, func(r string) { e.set(ctx, messageID, r) })
+}
+
+// EvaluateJob reports a userbot fetch job's progress on the sender's original link message.
+func (e *Engine) EvaluateJob(ctx context.Context, jobID int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	ji, err := e.st.GetJobReceiptInfo(ctx, jobID)
+	if err != nil {
+		log.Printf("receipt: info for fetch job %d: %v", jobID, err)
+		return
+	}
+	info := &store.ReceiptInfo{BotID: ji.BotID, TgChatID: ji.TgChatID, TgMessageID: ji.TgMessageID}
+	save := func(r string) {
+		if err := e.st.SetFetchJobReceipt(ctx, jobID, r); err != nil {
+			log.Printf("receipt: save state for fetch job %d: %v", jobID, err)
+		}
+	}
+	switch ji.State {
+	case store.JobQueued, store.JobFetching:
+		if ji.Receipt == store.ReceiptNone {
+			if err := e.react(ctx, info, EmojiSeen); err == nil {
+				save(store.ReceiptSeen)
+			}
+		}
+	case store.JobFailed:
+		if ji.Receipt != store.ReceiptFailed {
+			if ji.Receipt == store.ReceiptNone {
+				e.reactLogOnly(ctx, info, EmojiSeen)
+			}
+			if err := e.reply(ctx, info, TextFetchFailedPrefix+truncate(ji.Error, 200)); err == nil {
+				save(store.ReceiptFailed)
+			}
+		}
+	case store.JobFetched:
+		e.apply(ctx, info, ji.Main, ji.Receipt, save)
+	}
+}
+
+func (e *Engine) MediaSettled(ctx context.Context, mediaID int64) {
+	ids, err := e.st.MessagesForMedia(ctx, mediaID)
+	if err != nil {
+		log.Printf("receipt: messages for media %d: %v", mediaID, err)
+		return
+	}
+	jobs := map[int64]bool{}
+	var order []int64
+	for _, id := range ids {
+		e.Evaluate(ctx, id)
+		js, err := e.st.FetchJobsForMessage(ctx, id)
+		if err != nil {
+			log.Printf("receipt: fetch jobs for message %d: %v", id, err)
+			continue
+		}
+		for _, j := range js {
+			if !jobs[j] {
+				jobs[j] = true
+				order = append(order, j)
+			}
+		}
+	}
+	for _, j := range order {
+		e.EvaluateJob(ctx, j)
 	}
 }
 

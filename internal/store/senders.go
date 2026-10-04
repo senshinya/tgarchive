@@ -1,6 +1,12 @@
 package store
 
-import "context"
+import (
+	"context"
+	"database/sql"
+	"errors"
+
+	"tgarchive/internal/model"
+)
 
 type ChatSender struct{ BotID, TgUserID int64 }
 
@@ -26,4 +32,23 @@ func (s *Store) ChatSenders(ctx context.Context) ([]ChatSender, error) {
 		out = append(out, cs)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) GetSender(ctx context.Context, tgUserID int64) (model.Sender, error) {
+	snd := model.Sender{TgUserID: tgUserID}
+	err := s.db.QueryRowContext(ctx, "SELECT first_name, last_name, username FROM senders WHERE tg_user_id = ?", tgUserID).
+		Scan(&snd.FirstName, &snd.LastName, &snd.Username)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Sender{}, ErrNotFound
+	}
+	return snd, err
+}
+
+func (s *Store) UpsertSender(ctx context.Context, snd model.Sender, now int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO senders (tg_user_id, first_name, last_name, username, updated_at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (tg_user_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name,
+			username = excluded.username, updated_at = excluded.updated_at`,
+		snd.TgUserID, snd.FirstName, snd.LastName, snd.Username, now)
+	return err
 }
