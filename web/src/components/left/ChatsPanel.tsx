@@ -46,7 +46,7 @@ function ChatItem({ chat, selected, showBot }: { chat: Chat; selected: boolean; 
       type="button"
       class={`ChatItem${selected ? ' selected' : ''}`}
       aria-current={selected ? 'page' : undefined}
-      onClick={() => navigate({ name: 'chat', chatId: chat.id })}
+      onClick={() => navigate({ name: 'chat', chatId: chat.id }, { fromList: true })}
     >
       <Avatar
         name={name}

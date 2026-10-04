@@ -117,7 +117,7 @@ export function BotSettings({ botId }: { botId: number }) {
     try {
       await store.api.deleteBot(botId, purge);
       await Promise.all([store.loadBots(), store.loadChats()]);
-      navigate({ name: 'settings' }, true);
+      navigate({ name: 'settings' }, { replace: true });
     } catch (e) {
       store.showToast(errorMessage(e));
       setBusy(false);

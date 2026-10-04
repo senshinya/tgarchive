@@ -39,4 +39,24 @@ describe('router', () => {
     expect(route.value).toEqual({ name: 'settings' });
     stop();
   });
+
+  it('pushes by default and marks history.state.fromList false when not given', () => {
+    navigate({ name: 'chat', chatId: 5 });
+    expect(location.pathname).toBe('/chat/5');
+    expect(history.state).toEqual({ fromList: false });
+  });
+
+  it('marks history.state.fromList true when opened from the chat list, so the header back button can use history.back()', () => {
+    navigate({ name: 'chat', chatId: 5 }, { fromList: true });
+    expect(history.state).toEqual({ fromList: true });
+  });
+
+  it('replaces the current entry instead of pushing when opts.replace is set', () => {
+    history.pushState(null, '', '/chat/5');
+    const before = history.length;
+    navigate({ name: 'settings' }, { replace: true });
+    expect(location.pathname).toBe('/settings');
+    expect(history.length).toBe(before);
+    expect(history.state).toEqual({ fromList: false });
+  });
 });

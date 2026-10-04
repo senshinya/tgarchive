@@ -16,9 +16,18 @@ function MiddleHeader({ chatId }: { chatId: number }) {
   const toggleShared = () => {
     store.sharedMediaOpen.value = !store.sharedMediaOpen.value;
   };
+  // A chat opened from the list pushed a `{ fromList: true }` history entry (ChatsPanel), so
+  // going back lands on whatever was there before (usually "/") without adding a fresh entry —
+  // keeping Android's hardware back button in sync. A deep link (no such marker) has nothing to
+  // go back to, so it navigates to home instead.
+  const goBack = () => {
+    const state = history.state as { fromList?: boolean } | null;
+    if (state?.fromList) history.back();
+    else navigate({ name: 'home' });
+  };
   return (
     <div class="MiddleHeader">
-      <IconButton label="返回" class="back-button" onClick={() => navigate({ name: 'home' })}>
+      <IconButton label="返回" class="back-button" onClick={goBack}>
         <ArrowLeft size={24} />
       </IconButton>
       <button type="button" class="MiddleHeader-info" onClick={toggleShared}>
