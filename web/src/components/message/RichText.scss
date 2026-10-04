@@ -1,0 +1,142 @@
+.text-entity-link {
+  color: var(--color-links) !important;
+  text-decoration: none;
+  cursor: pointer;
+  word-break: break-word;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+span.text-entity-link {
+  cursor: default;
+
+  &:hover {
+    text-decoration: none;
+  }
+}
+
+.text-entity-code {
+  padding: 1px 2px;
+  border-radius: 4px;
+  font-family: var(--font-family-monospace);
+  font-size: 0.875rem;
+  color: var(--color-code);
+  background: var(--color-code-bg);
+  word-break: break-word;
+}
+
+.text-entity-pre {
+  position: relative;
+  display: block;
+  margin: 0.25rem 0;
+  padding: 0.5rem;
+  border-radius: 4px;
+  font-family: var(--font-family-monospace);
+  font-size: 0.875rem;
+  color: var(--color-code);
+  background: var(--color-code-bg);
+  white-space: pre;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-scrollbar-code) transparent;
+
+  code {
+    font-family: inherit;
+  }
+
+  .code-language {
+    display: block;
+    margin-bottom: 0.25rem;
+    font-family: var(--font-family);
+    font-size: 0.75rem;
+    font-weight: var(--font-weight-semibold);
+    color: var(--accent-color, var(--color-primary));
+  }
+}
+
+.text-entity-quote {
+  position: relative;
+  display: block;
+  margin: 0.25rem 0;
+  padding: 0.125rem 1rem 0.125rem 0.5625rem;
+  border-radius: 4px;
+  font-size: calc(var(--message-text-size) - 2px);
+  background: var(--accent-background-color, var(--color-primary-tint));
+  overflow: hidden;
+
+  &::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--accent-color, var(--color-primary));
+  }
+
+  &::after {
+    content: "\201D";
+    position: absolute;
+    top: 0;
+    right: 0.25rem;
+    font-size: 1rem;
+    line-height: 1;
+    color: var(--accent-color, var(--color-primary));
+  }
+
+  &.expandable {
+    .quote-body {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    &.expanded .quote-body {
+      display: block;
+    }
+
+    .quote-toggle {
+      display: block;
+      margin-top: 0.125rem;
+      font-size: 0.75rem;
+      color: var(--accent-color, var(--color-primary));
+    }
+  }
+}
+
+.text-entity-spoiler {
+  position: relative;
+  border-radius: 4px;
+  cursor: pointer;
+  background-image: radial-gradient(circle, var(--color-text-secondary) 0.6px, transparent 0.8px);
+  background-size: 4px 4px;
+  animation: spoiler-breathe 1.75s linear infinite;
+
+  .spoiler-content {
+    opacity: 0;
+    transition: opacity 250ms ease;
+  }
+
+  &.revealed {
+    background: none;
+    animation: none;
+    cursor: inherit;
+
+    .spoiler-content {
+      opacity: 1;
+    }
+  }
+}
+
+@keyframes spoiler-breathe {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.custom-emoji {
+  display: inline-block;
+}
