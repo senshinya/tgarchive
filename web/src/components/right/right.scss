@@ -1,0 +1,151 @@
+.SharedMedia {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.right-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 1.375rem;
+  height: var(--column-header-height);
+  padding: 0.5rem 0.75rem;
+}
+
+.right-header-title {
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-medium);
+}
+
+.SharedMedia-tabs {
+  flex-shrink: 0;
+  padding: 0 0.5rem;
+  background: var(--color-background);
+  box-shadow: inset 0 -1px 0 var(--color-borders);
+}
+
+.SharedMedia-content {
+  flex: 1;
+  min-height: 0;
+  background: var(--color-background);
+}
+
+.SharedMedia-month-title {
+  margin: 0;
+  padding: 0.75rem 1.25rem 0.5rem;
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.SharedMedia-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-auto-rows: 1fr;
+  gap: 0.0625rem;
+}
+
+.SharedMedia-tile {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: var(--color-background-secondary-accent);
+
+  img,
+  video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .MediaBadge {
+    display: flex;
+    align-items: center;
+    gap: 0.125rem;
+  }
+
+  &:disabled {
+    cursor: default;
+  }
+}
+
+.SharedMedia-tile-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.SharedMedia-files,
+.SharedMedia-links {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 0 1.25rem 1.25rem;
+}
+
+.SharedLink {
+  display: flex;
+  gap: 0.75rem;
+  color: inherit;
+  text-decoration: none !important;
+}
+
+.SharedLink-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: var(--border-radius-messages-small);
+  font-size: 1.5rem;
+  font-weight: var(--font-weight-medium);
+  color: #fff;
+}
+
+.SharedLink-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: 0.9375rem;
+  line-height: 1.25rem;
+
+  > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.SharedLink-title {
+  font-weight: var(--font-weight-medium);
+}
+
+.SharedLink-url {
+  color: var(--color-links);
+}
+
+.SharedLink-text {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}
+
+.SharedMedia-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.5rem 1rem;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+
+  button {
+    color: var(--color-primary);
+    font-weight: var(--font-weight-medium);
+  }
+}
