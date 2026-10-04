@@ -71,35 +71,54 @@ func (e *Engine) Evaluate(ctx context.Context, messageID int64) {
 	switch {
 	case pending > 0:
 		if info.Receipt == store.ReceiptNone {
-			e.react(ctx, info, EmojiSeen)
-			e.set(ctx, messageID, store.ReceiptSeen)
+			if err := e.react(ctx, info, EmojiSeen); err == nil {
+				e.set(ctx, messageID, store.ReceiptSeen)
+			}
 		}
 	case failed > 0:
 		if info.Receipt != store.ReceiptFailed {
 			if info.Receipt == store.ReceiptNone {
-				e.react(ctx, info, EmojiSeen)
+				e.reactLogOnly(ctx, info, EmojiSeen)
 			}
-			e.reply(ctx, info, textFailedPrefix+truncate(firstErr, 200))
-			e.set(ctx, messageID, store.ReceiptFailed)
+			if err := e.reply(ctx, info, textFailedPrefix+truncate(firstErr, 200)); err == nil {
+				e.set(ctx, messageID, store.ReceiptFailed)
+			}
 		}
 	default:
 		if info.Receipt != store.ReceiptDone {
-			e.react(ctx, info, EmojiDone)
-			if tooLarge > 0 {
-				e.reply(ctx, info, textTooLarge)
+			if err := e.react(ctx, info, EmojiDone); err == nil {
+				if tooLarge > 0 {
+					e.replyLogOnly(ctx, info, textTooLarge)
+				}
+				e.set(ctx, messageID, store.ReceiptDone)
 			}
-			e.set(ctx, messageID, store.ReceiptDone)
 		}
 	}
 }
 
-func (e *Engine) react(ctx context.Context, i *store.ReceiptInfo, emoji string) {
+func (e *Engine) react(ctx context.Context, i *store.ReceiptInfo, emoji string) error {
+	if err := e.tr.SetReaction(ctx, i.BotID, i.TgChatID, i.TgMessageID, emoji); err != nil {
+		log.Printf("receipt: react %s on bot %d msg %d: %v", emoji, i.BotID, i.TgMessageID, err)
+		return err
+	}
+	return nil
+}
+
+func (e *Engine) reactLogOnly(ctx context.Context, i *store.ReceiptInfo, emoji string) {
 	if err := e.tr.SetReaction(ctx, i.BotID, i.TgChatID, i.TgMessageID, emoji); err != nil {
 		log.Printf("receipt: react %s on bot %d msg %d: %v", emoji, i.BotID, i.TgMessageID, err)
 	}
 }
 
-func (e *Engine) reply(ctx context.Context, i *store.ReceiptInfo, text string) {
+func (e *Engine) reply(ctx context.Context, i *store.ReceiptInfo, text string) error {
+	if err := e.tr.Reply(ctx, i.BotID, i.TgChatID, i.TgMessageID, text); err != nil {
+		log.Printf("receipt: reply on bot %d msg %d: %v", i.BotID, i.TgMessageID, err)
+		return err
+	}
+	return nil
+}
+
+func (e *Engine) replyLogOnly(ctx context.Context, i *store.ReceiptInfo, text string) {
 	if err := e.tr.Reply(ctx, i.BotID, i.TgChatID, i.TgMessageID, text); err != nil {
 		log.Printf("receipt: reply on bot %d msg %d: %v", i.BotID, i.TgMessageID, err)
 	}
