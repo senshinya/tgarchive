@@ -31,6 +31,7 @@ type adminEnv struct {
 	st   *store.Store
 	fake *tgtest.FakeTG
 	mgr  *collector.Manager
+	hub  *events.Hub
 }
 
 func newAdminEnv(t *testing.T) *adminEnv {
@@ -54,7 +55,7 @@ func newAdminEnv(t *testing.T) *adminEnv {
 		TgApp:    tgapp.New(st, box),
 		MediaDir: mediaDir, AvatarDir: t.TempDir(), Now: time.Now,
 	}
-	return &adminEnv{h: srv.Handler(), st: st, fake: fake, mgr: mgr}
+	return &adminEnv{h: srv.Handler(), st: st, fake: fake, mgr: mgr, hub: hub}
 }
 
 func call(h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
@@ -169,6 +170,33 @@ func TestToggleAndDeleteBot(t *testing.T) {
 	}
 	if w := call(e.h, "DELETE", p+"?purge=1", nil); w.Code != 404 {
 		t.Fatalf("purge missing = %d", w.Code)
+	}
+}
+
+func TestPatchBotPublishesStatus(t *testing.T) {
+	e := newAdminEnv(t)
+	var r addResp
+	json.Unmarshal(call(e.h, "POST", "/api/admin/bots", map[string]string{"token": goodToken}).Body.Bytes(), &r)
+	waitStatus(t, e.st, r.BotID, store.StatusRunning)
+	ch, unsub := e.hub.Subscribe()
+	defer unsub()
+	if w := call(e.h, "PATCH", fmt.Sprintf("/api/admin/bots/%d", r.BotID), map[string]bool{"enabled": false}); w.Code != 200 {
+		t.Fatalf("disable = %d", w.Code)
+	}
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type != "bot.status" {
+				continue
+			}
+			d, _ := ev.Data.(map[string]any)
+			if d["bot_id"] != r.BotID || d["status"] != store.StatusStopped || d["error"] != "" {
+				t.Fatalf("event data = %#v", ev.Data)
+			}
+			return
+		case <-time.After(2 * time.Second):
+			t.Fatal("no bot.status event after PATCH")
+		}
 	}
 }
 

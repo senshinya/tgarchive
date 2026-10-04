@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"tgarchive/internal/downloader"
+	"tgarchive/internal/events"
 	"tgarchive/internal/store"
 	"tgarchive/internal/tgbot"
 )
@@ -117,6 +118,8 @@ func (s *Server) patchBot(w http.ResponseWriter, r *http.Request) {
 		storeErr(w, err)
 		return
 	}
+	// Same shape as the collector's event; a re-enabled worker publishes "running" once it starts.
+	s.Hub.Publish(events.Event{Type: "bot.status", Data: map[string]any{"bot_id": id, "status": store.StatusStopped, "error": ""}})
 	if *req.Enabled {
 		s.Clients.Forget(id)
 		s.Manager.Start(id)
