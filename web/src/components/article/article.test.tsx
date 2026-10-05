@@ -246,6 +246,28 @@ describe('ArticleReader in the app', () => {
     back.mockRestore();
   });
 
+  it('a same-path popstate that still lands on a viewer entry does not close the viewer (App closes it only on a path change)', async () => {
+    history.replaceState({ fromList: true }, '', '/chat/10');
+    const api = fakeApi({
+      bots: vi.fn(async () => [makeBot({ id: 1 })]),
+      chats: vi.fn(async () => [makeChat({ id: 10 })]),
+      messages: vi.fn(async () => [linkMsg(summary())]),
+      article: vi.fn(async () => makeArticle({ content: everyNode, media: everyMedia })),
+    });
+    const store = createStore(api, { chatsReloadDelay: 0 });
+    render(<App store={store} eventSource={() => new FakeES()} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Sample/ }));
+    await screen.findByRole('dialog', { name: '文章' });
+    fireEvent.click(screen.getByRole('button', { name: '查看图片' }));
+    await screen.findByRole('dialog', { name: '媒体查看器' });
+
+    // The router re-parses a fresh route object on every popstate; the path is unchanged here.
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    expect(screen.getByRole('dialog', { name: '媒体查看器' })).toBeTruthy();
+  });
+
   it('deep-links straight into the reader', async () => {
     history.replaceState(null, '', '/chat/10/article/1');
     const api = fakeApi({ chats: vi.fn(async () => [makeChat({ id: 10 })]) });

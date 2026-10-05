@@ -50,7 +50,12 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
       if (!(history.state as { viewer?: boolean } | null)?.viewer) store.viewer.value = null;
     };
     window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
+    return () => {
+      window.removeEventListener('popstate', onPopState);
+      // Closed some other way (e.g. store.viewer cleared elsewhere) while our entry is still on
+      // top: drop it, or the next system back would land on a dead "viewer" entry.
+      if ((history.state as { viewer?: boolean } | null)?.viewer) history.back();
+    };
   }, []);
   const listed = 'list' in target ? target : null;
   const inChat = 'list' in target ? null : target;

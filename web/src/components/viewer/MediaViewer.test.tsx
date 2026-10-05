@@ -171,4 +171,14 @@ describe('MediaViewer history (system back closes only the viewer)', () => {
     expect(store.viewer.value).toBeNull();
     expect(location.pathname).toBe('/chat/10/article/1'); // closing the viewer did not navigate
   });
+
+  it('closed from elsewhere while its entry is on top, it pops that entry so back is not wasted', async () => {
+    const { store } = await setup();
+    const back = vi.spyOn(history, 'back').mockImplementation(() => {});
+    act(() => {
+      store.viewer.value = null;
+    });
+    expect(back).toHaveBeenCalledTimes(1);
+    back.mockRestore();
+  });
 });
