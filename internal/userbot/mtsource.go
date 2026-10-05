@@ -14,6 +14,7 @@ import (
 	"github.com/gotd/td/tgerr"
 
 	"tgarchive/internal/convert/mtproto"
+	"tgarchive/internal/downloader"
 	"tgarchive/internal/store"
 )
 
@@ -30,7 +31,7 @@ func (s *MTSource) Fetch(ctx context.Context, m *store.Media, dstBase string) (s
 	dst := dstBase + extFor(m)
 	tmp := dst + ".part"
 	err := s.API.With(ctx, func(api *tg.Client) error {
-		err := download(ctx, api, ref.Location(), tmp)
+		err := download(ctx, api, ref.Location(), tmp, m.Size)
 		if !tgerr.Is(err, "FILE_REFERENCE_EXPIRED", "FILE_REFERENCE_INVALID") {
 			return err
 		}
@@ -38,7 +39,7 @@ func (s *MTSource) Fetch(ctx context.Context, m *store.Media, dstBase string) (s
 		if err != nil {
 			return err
 		}
-		return download(ctx, api, fresh.Location(), tmp)
+		return download(ctx, api, fresh.Location(), tmp, m.Size)
 	})
 	if err != nil {
 		os.Remove(tmp)
@@ -55,12 +56,13 @@ func (s *MTSource) Fetch(ctx context.Context, m *store.Media, dstBase string) (s
 	return dst, st.Size(), nil
 }
 
-func download(ctx context.Context, api *tg.Client, loc tg.InputFileLocationClass, path string) error {
+// download streams loc into path, reporting progress against size (the size Telegram announced).
+func download(ctx context.Context, api *tg.Client, loc tg.InputFileLocationClass, path string, size int64) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	_, err = tgdown.NewDownloader().Download(api, loc).Stream(ctx, f)
+	_, err = tgdown.NewDownloader().Download(api, loc).Stream(ctx, downloader.CountingWriter(ctx, f, size))
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

@@ -373,3 +373,79 @@ func TestGetMessage(t *testing.T) {
 		t.Fatalf("deleted = %d %s", w.Code, w.Body)
 	}
 }
+
+// heldSource reports half of a 10-byte file, then blocks until its context ends.
+type heldSource struct{ started chan struct{} }
+
+func (h heldSource) Fetch(c context.Context, _ *store.Media, _ string) (string, int64, error) {
+	downloader.Report(c, 5, 10)
+	close(h.started)
+	<-c.Done()
+	return "", 0, c.Err()
+}
+
+func TestDownloadsEndpoint(t *testing.T) {
+	e := newReadEnv(t)
+	bots, _ := e.st.ListBots(bg)
+	ingestPhoto := func(tgID int64, key string) *store.IngestResult {
+		m := &model.Message{TgMessageID: tgID, Source: model.SourceBotUpdate, Date: tgID, Kind: model.KindPhoto, RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`),
+			Media: []model.Media{{DedupeKey: key, Kind: "photo", Mime: "image/jpeg", Size: 10, Role: model.RoleMain}}}
+		r, err := e.st.Ingest(bg, store.IngestInput{BotID: bots[0].ID, Sender: model.Sender{TgUserID: 42}, Msg: m, Now: tgID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	active := ingestPhoto(10, "bot:active")
+	ingestPhoto(11, "bot:queued")
+	failed := ingestPhoto(12, "bot:failed")
+	due, _ := e.st.DueMedia(bg, 1<<40, 10)
+	byKey := map[string]store.Media{}
+	for _, m := range due {
+		byKey[m.DedupeKey] = m
+	}
+	e.st.MarkMediaFailed(bg, byKey["bot:failed"].ID, 3, "HTTP 500")
+
+	src := heldSource{started: make(chan struct{})}
+	e.srv.Downloader.Register("bot", src)
+	c, cancel := context.WithCancel(bg)
+	done := make(chan struct{})
+	m := byKey["bot:active"]
+	go func() { e.srv.Downloader.Process(c, &m); close(done) }()
+	<-src.started
+	defer func() { cancel(); <-done }()
+
+	w := do(e.h, "GET", "/api/downloads", nil)
+	var got struct {
+		Active []struct {
+			MediaID   int64  `json:"media_id"`
+			MessageID int64  `json:"message_id"`
+			ChatID    int64  `json:"chat_id"`
+			Done      int64  `json:"done"`
+			Total     int64  `json:"total"`
+			Kind      string `json:"kind"`
+		} `json:"active"`
+		Queued struct{ Count, Bytes int64 } `json:"queued"`
+		Failed []struct {
+			MessageID int64  `json:"message_id"`
+			Error     string `json:"error"`
+		} `json:"failed"`
+		Speed *int64 `json:"speed"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 {
+		t.Fatalf("downloads = %d %s", w.Code, w.Body)
+	}
+	if len(got.Active) != 1 || got.Active[0].MediaID != m.ID || got.Active[0].MessageID != active.MessageID ||
+		got.Active[0].ChatID != active.ChatID || got.Active[0].Done != 5 || got.Active[0].Total != 10 || got.Active[0].Kind != "photo" {
+		t.Fatalf("active = %+v", got.Active)
+	}
+	if got.Queued.Count != 1 || got.Queued.Bytes != 10 {
+		t.Fatalf("queued = %+v", got.Queued)
+	}
+	if len(got.Failed) != 1 || got.Failed[0].MessageID != failed.MessageID || got.Failed[0].Error != "HTTP 500" {
+		t.Fatalf("failed = %+v", got.Failed)
+	}
+	if got.Speed == nil {
+		t.Fatal("speed missing")
+	}
+}

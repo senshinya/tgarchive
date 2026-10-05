@@ -53,7 +53,7 @@ bot 列表、会话列表、所有已加载的会话（含合并时间线）、�
 ### 进度表（`internal/downloader/progress.go`）
 - `Tracker`：内存 `map[mediaID]{done, total, startedAt}`，互斥保护；累计字节计数用于测速（5s 滑动窗口）
 - `WithProgress(ctx, fn)` / `Report(ctx, done, total)`：数据源通过 ctx 上报，无上报函数时为空操作
-- `CountingWriter(ctx, w, total)`：包装写入目标，写入时上报（节流：同一项 ≥250ms 或完成时）
+- `CountingWriter(ctx, w, total)`：包装写入目标，每次写入上报（上报只是一次加锁赋值，无需节流；推送频率由 1s tick 决定）
 - `Process` 开始时登记、结束（任何结果）时注销
 - `Run` 内每 1s：若有进行中项，或上一 tick 有而本 tick 无（发一次空表收尾），调用 `onProgress(snapshot)`
 

@@ -71,9 +71,14 @@ func TestWebSourceDownloads(t *testing.T) {
 	srv := webServer(t)
 	src := NewWebSource(0, allowAll)
 	base := filepath.Join(t.TempDir(), "x")
-	p, n, err := src.Fetch(ctx, webMedia(srv.URL+"/img"), base)
+	var last [2]int64
+	pc := WithProgress(ctx, func(done, total int64) { last = [2]int64{done, total} })
+	p, n, err := src.Fetch(pc, webMedia(srv.URL+"/img"), base)
 	if err != nil || p != base+".png" || n != 7 {
 		t.Fatalf("Fetch = %q %d %v", p, n, err)
+	}
+	if last != [2]int64{7, 7} {
+		t.Fatalf("progress = %v, want 7 of 7 (Content-Length)", last)
 	}
 	if b, _ := os.ReadFile(p); string(b) != "PNGDATA" {
 		t.Fatalf("content = %q", b)
