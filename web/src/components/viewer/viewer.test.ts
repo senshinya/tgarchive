@@ -33,6 +33,10 @@ describe('viewer.scss', () => {
     expect(body).toMatch(/overflow:\s*hidden;\s*text-overflow:\s*ellipsis;\s*white-space:\s*nowrap;/);
   });
 
+  it('makes the buffering spinner svg a block, so its box is square and it spins about its own centre', () => {
+    expect(bodyOf('.vds-buffering-spinner svg {')).toMatch(/display:\s*block;/);
+  });
+
   it('pins the header to the viewport edges so a long nowrap title cannot widen it past the viewport', () => {
     expect(bodyOf('.MediaViewer-head {')).toMatch(/position:\s*absolute;[\s\S]*left:\s*0;\s*right:\s*0;/);
   });

@@ -115,6 +115,9 @@ export function createVideoSlide(o: VideoSlideOptions): VideoSlide {
   layout.playbackRates = PLAYBACK_RATES;
   layout.colorScheme = 'dark';
   layout.seekStep = 10;
+  // Vidstack turns a horizontal drag anywhere on the video into scrubbing on touch screens;
+  // here that drag pages the gallery (as in Telegram), and seeking stays on the time slider.
+  layout.noScrubGesture = true;
   player.append(provider, layout);
   el.appendChild(player);
 

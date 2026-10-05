@@ -251,6 +251,12 @@
     object-fit: contain;
   }
 
+  // The spinner's svg is inline by default: the line box adds a descender gap under it, so
+  // <media-spinner> is taller than wide and rotates about a point below the ring's centre.
+  .vds-buffering-spinner svg {
+    display: block;
+  }
+
   // No casting; the sender is already in the viewer's header (the title keeps its slot, which
   // pushes the right-hand buttons over).
   media-google-cast-button,
