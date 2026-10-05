@@ -28,7 +28,16 @@ const (
 	webTimeout      = 5 * time.Minute
 )
 
-var cgnat = mustCIDR("100.64.0.0/10")
+var (
+	cgnat = mustCIDR("100.64.0.0/10")
+	// nat64 and nat64WKP let an IPv6-only path embed a forbidden IPv4 target in the low 32 bits
+	// (RFC 6052 well-known prefix, and the RFC 8215 local-use alternative); sixToFour does the
+	// same via RFC 3056. net.IP's own classifiers never see the embedded address, so these must
+	// be rejected as whole ranges regardless of payload.
+	nat64     = mustCIDR("64:ff9b::/96")
+	nat64WKP  = mustCIDR("64:ff9b:1::/48")
+	sixToFour = mustCIDR("2002::/16")
+)
 
 func mustCIDR(s string) *net.IPNet {
 	_, n, err := net.ParseCIDR(s)
@@ -41,7 +50,8 @@ func mustCIDR(s string) *net.IPNet {
 // PublicIP is the default dial check of WebSource: nil for publicly routable unicast addresses.
 func PublicIP(ip net.IP) error {
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() || cgnat.Contains(ip) {
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() || cgnat.Contains(ip) ||
+		nat64.Contains(ip) || nat64WKP.Contains(ip) || sixToFour.Contains(ip) {
 		return ErrAddrNotAllowed
 	}
 	return nil

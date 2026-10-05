@@ -21,6 +21,7 @@ type Receipts interface {
 const (
 	ReasonNotFound = "文章不存在"
 	ReasonNetwork  = "网络错误"
+	ReasonInternal = "内部错误"
 )
 
 // Worker fetches queued Telegraph jobs one at a time; it is independent of the userbot queue.
@@ -102,8 +103,10 @@ func (w *Worker) process(ctx context.Context, job *store.TelegraphJob) {
 				return // the link message was deleted meanwhile
 			}
 			if err != nil {
+				// Log the real cause but never surface it to the user — save() failures are
+				// internal (DB, encoding, …), not something the sender's phrasing should quote.
 				log.Printf("telegraph: job %d: save: %v", job.ID, err)
-				w.finish(ctx, job, store.TelegraphFailed, err.Error())
+				w.finish(ctx, job, store.TelegraphFailed, ReasonInternal)
 				return
 			}
 			w.publish(job)
