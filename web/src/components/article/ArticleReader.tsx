@@ -16,10 +16,8 @@ export function ArticleReader({ chatId, messageId }: { chatId: number; messageId
   const store = useStore();
   const [article, setArticle] = useState<Article | null>(null);
   const [error, setError] = useState('');
-  // The message object is replaced whenever SSE reports a change to it or its article media,
-  // so depending on it reloads the article (media states) while the reader is open.
+  // Only for the header's title/link while the article itself is still loading.
   const msg = store.conv(chatId).items.find((m) => m.id === messageId);
-
   useEffect(() => {
     let cancelled = false;
     store.api.article(messageId).then(
@@ -35,13 +33,11 @@ export function ArticleReader({ chatId, messageId }: { chatId: number; messageId
     return () => {
       cancelled = true;
     };
-  }, [messageId, msg]);
+  }, [messageId]);
 
-  // The effect above only reruns when `msg` (from the loaded conversation) changes, so a deep
-  // link to an older message that never gets loaded into any conversation would never see a
-  // later media.updated/message.updated for it. Subscribe directly to every SSE event instead,
-  // debounced ~500ms so a burst of media.updated (one per article image finishing) produces a
-  // single refetch rather than one per event.
+  // Live updates come straight from SSE, not from the loaded conversation (a deep link to an
+  // older message may never be loaded into one), debounced ~500ms so a burst of media.updated
+  // (one per article image finishing) produces a single refetch rather than one per event.
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;

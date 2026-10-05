@@ -224,6 +224,32 @@ describe('ArticleReader', () => {
     }
   });
 
+  it('with its conversation loaded, one media.updated still causes exactly one refetch', async () => {
+    const article = vi.fn(async () => makeArticle({ content: everyNode, media: everyMedia }));
+    const api = fakeApi({
+      article,
+      messages: vi.fn(async () => [linkMsg(summary())]),
+      message: vi.fn(async () => linkMsg(summary())),
+    });
+    const r = renderWithStore(<ArticleReader chatId={10} messageId={1} />, api);
+    await act(async () => {
+      await r.store.refreshLatest(10);
+    });
+    await screen.findByRole('heading', { level: 1, name: 'Sample' });
+    const before = article.mock.calls.length;
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        await r.store.handleEvent({ type: 'media.updated', data: { media_id: 201, message_ids: [1] } });
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(article.mock.calls.length - before).toBe(1); // not one per effect
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('refetches on a message.updated event for this message', async () => {
     const article = vi.fn(async () => makeArticle({ content: everyNode, media: everyMedia }));
     const api = fakeApi({ article });
