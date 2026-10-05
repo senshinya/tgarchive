@@ -21,6 +21,15 @@ import (
 
 var ErrTooLarge = errors.New("file exceeds the archive size limit")
 
+// permanentError marks a failure that retrying cannot fix (e.g. a forbidden address).
+type permanentError struct{ err error }
+
+func (p *permanentError) Error() string { return p.err.Error() }
+func (p *permanentError) Unwrap() error { return p.err }
+
+// Permanent wraps err so Process fails the media at once instead of scheduling retries.
+func Permanent(err error) error { return &permanentError{err: err} }
+
 type Source interface {
 	// Fetch stores the file for m at dstBase plus an extension of the source's choosing.
 	Fetch(ctx context.Context, m *store.Media, dstBase string) (path string, size int64, err error)
@@ -142,6 +151,11 @@ func (d *Downloader) Process(ctx context.Context, m *store.Media) {
 			d.tooLarge(ctx, m)
 			return
 		}
+		var pe *permanentError
+		if errors.As(err, &pe) {
+			d.fail(ctx, m, m.Attempts+1, err)
+			return
+		}
 		d.retry(ctx, m, err)
 		return
 	}
@@ -165,17 +179,21 @@ func (d *Downloader) Process(ctx context.Context, m *store.Media) {
 func (d *Downloader) retry(ctx context.Context, m *store.Media, cause error) {
 	n := m.Attempts + 1
 	if n > len(d.Delays) {
-		if err := d.st.MarkMediaFailed(ctx, m.ID, n, botapifs.RedactPath(cause.Error())); err != nil {
-			log.Printf("downloader: mark media %d failed: %v", m.ID, err)
-			return
-		}
-		d.settle(m.ID)
+		d.fail(ctx, m, n, cause)
 		return
 	}
 	next := d.Now().Add(d.Delays[n-1]).Unix()
 	if err := d.st.MarkMediaRetry(ctx, m.ID, n, next, botapifs.RedactPath(cause.Error())); err != nil {
 		log.Printf("downloader: schedule retry for media %d: %v", m.ID, err)
 	}
+}
+
+func (d *Downloader) fail(ctx context.Context, m *store.Media, attempts int, cause error) {
+	if err := d.st.MarkMediaFailed(ctx, m.ID, attempts, botapifs.RedactPath(cause.Error())); err != nil {
+		log.Printf("downloader: mark media %d failed: %v", m.ID, err)
+		return
+	}
+	d.settle(m.ID)
 }
 
 func (d *Downloader) tooLarge(ctx context.Context, m *store.Media) {

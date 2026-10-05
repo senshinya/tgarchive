@@ -229,3 +229,14 @@ func TestRemoveFilesStaysInside(t *testing.T) {
 		t.Fatal("RemoveFiles escaped mediaDir")
 	}
 }
+
+func TestPermanentErrorFailsAtOnce(t *testing.T) {
+	f, _, m := setup(t, 4)
+	d := f.newDL(0)
+	d.Register("bot", &fakeSource{errs: []error{Permanent(errors.New("地址不允许"))}})
+	d.Process(ctx, m)
+	got, _ := f.st.GetMedia(ctx, m.ID)
+	if got.State != store.StateFailed || got.Attempts != 1 || got.Error != "地址不允许" || len(f.settled) != 1 {
+		t.Fatalf("media = %+v settled = %v", got, f.settled)
+	}
+}
