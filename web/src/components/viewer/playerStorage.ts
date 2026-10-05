@@ -41,6 +41,7 @@ export class PlayerStorage {
   /** While true (a long-press 2× is in effect) speed changes are not remembered. */
   holdRate = false;
   #lastSave = 0;
+  #frozen = false;
 
   constructor(
     private readonly mediaId: number,
@@ -53,21 +54,21 @@ export class PlayerStorage {
     return v !== null && v >= 0 && v <= 1 ? v : null;
   }
   async setVolume(volume: number) {
-    this.#prefs({ volume });
+    if (!this.#frozen) this.#prefs({ volume });
   }
   async getMuted() {
     const v = read<Prefs>(PREFS_KEY).muted;
     return typeof v === 'boolean' ? v : null;
   }
   async setMuted(muted: boolean) {
-    this.#prefs({ muted });
+    if (!this.#frozen) this.#prefs({ muted });
   }
   async getPlaybackRate() {
     const v = num(read<Prefs>(PREFS_KEY).rate);
     return v !== null && v > 0 && v <= 4 ? v : null;
   }
   async setPlaybackRate(rate: number) {
-    if (!this.holdRate) this.#prefs({ rate });
+    if (!this.holdRate && !this.#frozen) this.#prefs({ rate });
   }
 
   async getTime() {
@@ -76,7 +77,13 @@ export class PlayerStorage {
     return t !== null && t > 0 ? t : null;
   }
 
+  /** Ignore everything from now on (the player is being torn down). */
+  freeze() {
+    this.#frozen = true;
+  }
+
   async setTime(time: number, ended?: boolean) {
+    if (this.#frozen) return;
     const d = this.duration();
     const keep = !ended && time >= RESUME_MIN && !(d > 0 && d - time <= RESUME_TAIL);
     const now = this.now();

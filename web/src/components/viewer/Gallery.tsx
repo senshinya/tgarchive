@@ -64,7 +64,7 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
       dataSource: items.map(slideOf),
       appendToEl: container,
       index: start,
-      bgOpacity: 0.9,
+      bgOpacity: window.innerWidth <= NARROW ? 1 : 0.9, // phones: solid black, as Telegram
       loop: false,
       wheelToZoom: true,
       maxZoomLevel: MAX_ZOOM,
@@ -83,8 +83,8 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
       counter: false,
       zoom: false,
       close: false,
-      arrowPrev: true,
-      arrowNext: true,
+      arrowPrev: false,
+      arrowNext: false,
       errorMsg: '无法加载',
       // Desktop keeps the media clear of the header and the thumbnail strip; phones go edge to
       // edge with the controls floating over it, as Telegram does.
@@ -139,7 +139,8 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
     // Gestures on a video's own controls (scrubbing, volume, menus) are not swipes, and taps on
     // the player belong to Vidstack (play/pause, show controls, double-tap seek).
     const onPlayerControl = (target: EventTarget | null) =>
-      !!(target as Element | null)?.closest?.('.vds-controls, .vds-menu-items, media-menu, [role="slider"], button');
+      // Not .vds-controls itself: that layer covers the whole video, and swiping there must page.
+      !!(target as Element | null)?.closest?.('button, [role="slider"], [role="menu"], media-menu-items, .vds-menu-items, .vds-slider');
     const inPlayer = (target: EventTarget | null) => !!(target as Element | null)?.closest?.('media-player');
     p.on('pointerDown', (e) => {
       if (onPlayerControl(e.originalEvent.target)) e.preventDefault();

@@ -3,6 +3,7 @@
 // PhotoSwipe owns the slide containers.
 import 'vidstack/player';
 import 'vidstack/player/layouts/default';
+import 'vidstack/player/ui';
 import 'vidstack/player/styles/default/theme.css';
 import 'vidstack/player/styles/default/layouts/video.css';
 import type { MediaPlayerElement, MediaVideoLayoutElement } from 'vidstack/elements';
@@ -10,6 +11,7 @@ import { bindLongPressRate } from './longPress';
 import { PlayerStorage } from './playerStorage';
 
 export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
+const GESTURE_QUIET_MS = 400;
 
 const ZH: Record<string, string> = {
   'Audio': '音频',
@@ -111,12 +113,26 @@ export function createVideoSlide(o: VideoSlideOptions): VideoSlide {
   badge.className = 'ViewerVideo-fast';
   badge.textContent = '2× ▸▸';
   el.appendChild(badge);
+  // Releasing a hold is a tap too, and Vidstack's buttons act on pointerup before our own
+  // pointerup listener runs. So from the moment a hold starts until shortly after it ends, drop
+  // the player's play/pause requests, tap gestures (will-trigger doesn't bubble, hence capture)
+  // and clicks.
+  let quietUntil = 0;
+  const QUIET = ['media-pause-request', 'media-play-request', 'will-trigger', 'click'];
+  const muteGesture = (e: Event) => {
+    if (performance.now() >= quietUntil) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+  for (const t of QUIET) player.addEventListener(t, muteGesture, true);
   const unbind = bindLongPressRate(player, player, {
     onStart: () => {
+      quietUntil = Infinity;
       storage.holdRate = true;
       el.classList.add('fast');
     },
     onEnd: () => {
+      quietUntil = performance.now() + GESTURE_QUIET_MS;
       el.classList.remove('fast');
       // Vidstack saves the restored speed asynchronously; release the hold after it has.
       setTimeout(() => {
@@ -133,11 +149,27 @@ export function createVideoSlide(o: VideoSlideOptions): VideoSlide {
       if (next === active) return;
       active = next;
       player.keyDisabled = !next;
-      if (next) player.play().catch(() => {});
-      else player.pause().catch(() => {});
+      if (!next) {
+        player.pause().catch(() => {});
+        return;
+      }
+      // Opening (or paging) onto a video plays it, as Telegram does; before the source is ready
+      // play() would just be rejected, so wait for it.
+      if (player.state.canPlay) player.play().catch(() => {});
+      else
+        player.addEventListener(
+          'can-play',
+          () => {
+            if (active) player.play().catch(() => {});
+          },
+          { once: true },
+        );
     },
     destroy() {
+      // Tearing down resets the player to 0s; that must not read as "watched from the start".
+      storage.freeze();
       unbind();
+      for (const t of QUIET) player.removeEventListener(t, muteGesture, true);
       player.pause().catch(() => {});
       player.destroy();
       el.remove();

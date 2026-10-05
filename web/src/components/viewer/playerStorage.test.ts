@@ -42,6 +42,16 @@ describe('PlayerStorage', () => {
     expect(await s.getTime()).toBeNull();
   });
 
+  it('ignores the reset to 0s while the player is torn down', async () => {
+    const s = new PlayerStorage(7, () => 100, () => 1e6);
+    await s.setTime(30);
+    s.freeze();
+    await s.setTime(0);
+    await s.setVolume(0);
+    expect(await s.getTime()).toBe(30);
+    expect(await s.getVolume()).toBeNull();
+  });
+
   it('throttles position writes but always applies a clear', async () => {
     let t = 0;
     const s = new PlayerStorage(7, () => 100, () => t);

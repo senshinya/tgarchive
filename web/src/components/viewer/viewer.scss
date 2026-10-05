@@ -187,13 +187,20 @@
   }
 }
 
-// PhotoSwipe's prev/next arrows, restyled as Telegram's round hover buttons.
-.MediaViewer .pswp__button--arrow {
+// Prev/next: Telegram's round hover buttons, for mouse users only (touch swipes).
+.MediaViewer-nav {
+  position: absolute;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 3.5rem;
   height: 3.5rem;
   margin-top: -1.75rem;
   border-radius: 50%;
+  color: #fff;
   opacity: 0.7;
+  pointer-events: auto;
   transition: opacity 0.15s, background-color 0.15s;
 
   &:hover {
@@ -201,19 +208,17 @@
     background: rgba(255, 255, 255, 0.1);
   }
 
-  .pswp__icn {
-    top: 50%;
-    left: 50%;
-    margin: -1rem 0 0 -1rem;
+  &.prev {
+    left: 1rem;
   }
-}
 
-.MediaViewer .pswp__button--arrow--prev {
-  left: 1rem;
-}
+  &.next {
+    right: 1rem;
+  }
 
-.MediaViewer .pswp__button--arrow--next {
-  right: 1rem;
+  @media (hover: none) {
+    display: none;
+  }
 }
 
 .ViewerVideo {
@@ -244,6 +249,17 @@
 
   media-player video {
     object-fit: contain;
+  }
+
+  // No casting; the sender is already in the viewer's header (the title keeps its slot, which
+  // pushes the right-hand buttons over).
+  media-google-cast-button,
+  .vds-google-cast-button {
+    display: none !important;
+  }
+
+  .vds-chapter-title {
+    visibility: hidden;
   }
 }
 

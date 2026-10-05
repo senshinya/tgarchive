@@ -1,4 +1,4 @@
-import { Download, Film, X, ZoomIn, ZoomOut } from 'lucide-preact';
+import { ChevronLeft, ChevronRight, Download, Film, X, ZoomIn, ZoomOut } from 'lucide-preact';
 import { useEffect, useRef } from 'preact/hooks';
 import { mediaUrl } from '../../api/client';
 import { formatFullDate } from '../../lib/format';
@@ -14,6 +14,8 @@ interface Props {
   onPick: (index: number) => void;
   onZoom?: (dir: 1 | -1) => void;
 }
+
+const ARROW = 36;
 
 /** The thumbnail strip (spec §3.6): shown for more than one item, current one highlighted and
  * kept in view. */
@@ -80,6 +82,16 @@ export function ViewerOverlay({ items, index, title, onClose, onPick, onZoom }: 
           </IconButton>
         </div>
       </div>
+      {index > 0 && (
+        <button type="button" class="MediaViewer-nav prev" aria-label="上一个" onClick={() => onPick(index - 1)}>
+          <ChevronLeft size={ARROW} />
+        </button>
+      )}
+      {index < items.length - 1 && (
+        <button type="button" class="MediaViewer-nav next" aria-label="下一个" onClick={() => onPick(index + 1)}>
+          <ChevronRight size={ARROW} />
+        </button>
+      )}
       <div class="ViewerOverlay-foot">
         {item.text && (
           <div class="MediaViewer-caption">
