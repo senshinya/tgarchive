@@ -181,3 +181,22 @@ func (s *Store) SetReceipt(ctx context.Context, messageID int64, receipt string)
 	_, err := s.db.ExecContext(ctx, "UPDATE messages SET receipt = ? WHERE id = ?", receipt, messageID)
 	return err
 }
+
+// DoneMediaPaths returns the stored paths (relative to the media dir) of every downloaded media
+// file, for one-off maintenance sweeps over the archive.
+func (s *Store) DoneMediaPaths(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT path FROM media WHERE state = ? AND path != '' ORDER BY id`, StateDone)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

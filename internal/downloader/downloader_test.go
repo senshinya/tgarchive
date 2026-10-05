@@ -3,6 +3,7 @@ package downloader
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -321,5 +322,49 @@ func TestPermanentErrorFailsAtOnce(t *testing.T) {
 	got, _ := f.st.GetMedia(ctx, m.ID)
 	if got.State != store.StateFailed || got.Attempts != 1 || got.Error != "地址不允许" || len(f.settled) != 1 {
 		t.Fatalf("media = %+v settled = %v", got, f.settled)
+	}
+}
+
+// hev1Movie is a minimal MP4 whose only video sample entry is hev1 with VPS/SPS/PPS in hvcC.
+func hev1Movie() []byte {
+	bx := func(typ string, body ...[]byte) []byte {
+		b := bytes.Join(body, nil)
+		out := binary.BigEndian.AppendUint32(nil, uint32(8+len(b)))
+		return append(append(out, typ...), b...)
+	}
+	cfg := make([]byte, 23)
+	cfg[22] = 3
+	for _, typ := range []byte{32, 33, 34} {
+		cfg = append(cfg, typ|0x80, 0, 1, 0, 1, 0xAA)
+	}
+	entry := bx("hev1", make([]byte, 78), bx("hvcC", cfg))
+	stsd := bx("stsd", []byte{0, 0, 0, 0, 0, 0, 0, 1}, entry)
+	moov := bx("moov", bx("trak", bx("mdia", bx("minf", bx("stbl", stsd)))))
+	return bytes.Join([][]byte{bx("ftyp", []byte("isom\x00\x00\x02\x00")), bx("mdat", make([]byte, 16)), moov}, nil)
+}
+
+type movieSource struct{}
+
+func (movieSource) Fetch(_ context.Context, _ *store.Media, dstBase string) (string, int64, error) {
+	b := hev1Movie()
+	p := dstBase + ".mp4"
+	return p, int64(len(b)), os.WriteFile(p, b, 0o644)
+}
+
+func TestProcessRelabelsHEV1(t *testing.T) {
+	f, _, m := setup(t, 4)
+	d := f.newDL(0)
+	d.Register("bot", movieSource{})
+	d.Process(ctx, m)
+	got, _ := f.st.GetMedia(ctx, m.ID)
+	if got.State != store.StateDone {
+		t.Fatalf("media = %+v", got)
+	}
+	b, err := os.ReadFile(filepath.Join(f.mediaDir, got.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, []byte("hev1")) || !bytes.Contains(b, []byte("hvc1")) {
+		t.Fatal("downloaded hev1 movie was not relabelled hvc1")
 	}
 }

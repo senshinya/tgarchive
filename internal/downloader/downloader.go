@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"tgarchive/internal/botapifs"
+	"tgarchive/internal/mp4fix"
 	"tgarchive/internal/store"
 )
 
@@ -183,6 +184,12 @@ func (d *Downloader) Process(ctx context.Context, m *store.Media) {
 	if err != nil {
 		d.retry(ctx, m, err)
 		return
+	}
+	if mp4fix.Candidate(final) {
+		// hev1-tagged HEVC won't play in Safari / any iOS browser; relabel it hvc1 when valid.
+		if _, err := mp4fix.HEV1ToHVC1(final); err != nil {
+			log.Printf("downloader: hevc tag fix for media %d: %v", m.ID, err)
+		}
 	}
 	ok, err := d.st.MarkMediaDone(ctx, m.ID, rel, size)
 	if err != nil {

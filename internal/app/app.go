@@ -21,6 +21,7 @@ import (
 	"tgarchive/internal/downloader"
 	"tgarchive/internal/events"
 	"tgarchive/internal/httpapi"
+	"tgarchive/internal/mp4fix"
 	"tgarchive/internal/notify"
 	"tgarchive/internal/receipt"
 	"tgarchive/internal/seal"
@@ -46,6 +47,7 @@ type App struct {
 	ub      *userbot.Service
 	fetcher *userbot.Fetcher
 	tw      *telegraph.Worker
+	media   string
 	wg      sync.WaitGroup
 }
 
@@ -107,7 +109,7 @@ func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer, w
 		Web: web.FS(), MediaDir: mediaDir, AvatarDir: avatarDir, HTTP: hc, Now: time.Now,
 	}
 	return &App{Handler: srv.Handler(), ctx: ctx, cancel: cancel, st: st, mgr: mgr, dl: dl, av: av, mapper: mapper, tg: tg, sup: sup,
-		ub: ub, fetcher: fetcher, tw: tw}, nil
+		ub: ub, fetcher: fetcher, tw: tw, media: mediaDir}, nil
 }
 
 func (a *App) Start() error {
@@ -136,7 +138,41 @@ func (a *App) Close() {
 	a.st.Close()
 }
 
+// fixHEVCTags relabels already-archived hev1 videos as hvc1 so Safari / iOS can play them
+// (new downloads are fixed by the downloader). Idempotent: it only reads each movie's metadata
+// once a file has been fixed.
+func (a *App) fixHEVCTags() {
+	paths, err := a.st.DoneMediaPaths(a.ctx)
+	if err != nil {
+		log.Printf("maintenance: list media for hevc tag fix: %v", err)
+		return
+	}
+	n := 0
+	for _, rel := range paths {
+		if a.ctx.Err() != nil {
+			return
+		}
+		if !mp4fix.Candidate(rel) {
+			continue
+		}
+		changed, err := mp4fix.HEV1ToHVC1(filepath.Join(a.media, rel))
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				log.Printf("maintenance: hevc tag fix %s: %v", rel, err)
+			}
+			continue
+		}
+		if changed {
+			n++
+		}
+	}
+	if n > 0 {
+		log.Printf("maintenance: relabelled %d hev1 videos as hvc1", n)
+	}
+}
+
 func (a *App) maintain() {
+	a.fixHEVCTags()
 	t := time.NewTimer(time.Minute)
 	defer t.Stop()
 	for {
