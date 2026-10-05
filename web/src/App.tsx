@@ -5,7 +5,7 @@ import { MiddleColumn } from './components/middle/MiddleColumn';
 import { SharedMedia } from './components/right/SharedMedia';
 import { SettingsPanel } from './components/settings/SettingsPanel';
 import { MediaViewer } from './components/viewer/MediaViewer';
-import { isSettings, navigate, route, routeChatId, routePath, startRouter } from './lib/router';
+import { convRoute, isSettings, navigate, route, routeArticleId, routeConvKey, routePath, startRouter } from './lib/router';
 import { connectEvents, type EventSourceFactory } from './lib/sse';
 import { StoreContext, type Store } from './state/store';
 import { Toast } from './ui/Toast';
@@ -35,17 +35,18 @@ export function App({ store, eventSource }: Props) {
   }, []);
 
   const r = route.value;
-  const chatId = routeChatId(r);
-  const articleId = r.name === 'article' ? r.messageId : 0;
-  const rightOpen = chatId > 0 && store.sharedMediaOpen.value;
+  // Conversation key: a chat id, or -botId for a bot's merged timeline (see routeConvKey).
+  const chatId = routeConvKey(r);
+  const articleId = routeArticleId(r);
+  const rightOpen = chatId !== 0 && store.sharedMediaOpen.value;
   const cls = [!chatId && 'left-column-open', rightOpen && 'right-column-open'].filter(Boolean).join(' ');
 
   // Remembers the chat that was open before navigating away (e.g. into settings), so the
   // ≤925px left-overlay scrim can offer a way back to it. Updated during render, not an
   // effect: the value must be ready for the SAME render that may show the scrim.
   const lastChatId = useRef(0);
-  if (chatId > 0) lastChatId.current = chatId;
-  const showScrim = !chatId && lastChatId.current > 0;
+  if (chatId !== 0) lastChatId.current = chatId;
+  const showScrim = !chatId && lastChatId.current !== 0;
 
   // Closing the viewer / shared-media panel on navigation keeps them from outliving the
   // content they were opened for (browser back, switching chats, etc). Keyed on the path, not
@@ -69,7 +70,7 @@ export function App({ store, eventSource }: Props) {
             type="button"
             id="LeftScrim"
             aria-label="返回会话"
-            onClick={() => navigate({ name: 'chat', chatId: lastChatId.current })}
+            onClick={() => navigate(convRoute(lastChatId.current))}
           />
         )}
         <MiddleColumn chatId={chatId} articleId={articleId} />

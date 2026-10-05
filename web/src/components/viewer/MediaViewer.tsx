@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from 'lucide-preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { errorMessage, mediaUrl } from '../../api/client';
+import { convMedia, errorMessage, mediaUrl } from '../../api/client';
 import type { Message } from '../../api/types';
 import { formatFullDate, senderName } from '../../lib/format';
 import { useStore, type ViewerItem, type ViewerTarget } from '../../state/store';
@@ -29,7 +29,7 @@ export function toViewerItems(msgs: Message[]): ViewerItem[] {
   for (const msg of msgs) {
     const media = mainMedia(msg);
     if (media && media.state === 'done' && VISUAL_KINDS.includes(msg.kind)) {
-      out.push({ id: msg.id, item: { mediaId: media.id, kind: msg.kind, date: msg.date, text: msg.text, entities: msg.entities } });
+      out.push({ id: msg.id, item: { mediaId: media.id, kind: msg.kind, date: msg.date, text: msg.text, entities: msg.entities, chatId: msg.chat_id } });
     }
   }
   return out.sort((a, b) => a.id - b.id).map((x) => x.item);
@@ -96,7 +96,7 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
       const all: Message[] = [];
       let before = 0;
       for (let i = 0; i < VIEWER_MAX_PAGES; i++) {
-        const page = await store.api.chatMedia(chatId, 'media', before, VIEWER_PAGE);
+        const page = await convMedia(store.api, chatId, 'media', before, VIEWER_PAGE);
         all.push(...page);
         if (page.length < VIEWER_PAGE) break;
         before = page[page.length - 1].id;
@@ -143,7 +143,7 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
   });
 
   if (!item) return null;
-  const chat = store.chats.value.find((c) => c.id === chatId);
+  const chat = store.chats.value.find((c) => c.id === (item.chatId ?? chatId));
   const title = listed ? listed.title : chat ? senderName(chat.sender) : '';
   const isPhoto = item.kind === 'photo';
 

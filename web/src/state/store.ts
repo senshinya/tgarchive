@@ -1,7 +1,7 @@
 import { computed, signal } from '@preact/signals';
 import { createContext } from 'preact';
 import { useContext } from 'preact/hooks';
-import { ApiError, PAGE_SIZE, errorMessage, type Api } from '../api/client';
+import { ApiError, PAGE_SIZE, convMessages, errorMessage, type Api } from '../api/client';
 import type { ArchiveEvent, Bot, Chat, Entity, Message } from '../api/types';
 
 export interface Conversation {
@@ -21,17 +21,40 @@ export interface ViewerItem {
   date: number;
   text: string; // caption, '' for none
   entities: Entity[];
+  /** The chat it was sent in, for the viewer's sender title; absent for article media. */
+  chatId?: number;
 }
 
 /** Opens the viewer on a chat's media (walking the whole chat), or on an explicit list such as
  * the media of one archived article (walking only that list). */
 export type ViewerTarget =
+  // chatId is a conversation key: a chat id, or -botId to walk a bot's merged timeline.
   | { chatId: number; messageId: number; mediaId: number }
   | { list: ViewerItem[]; mediaId: number; title: string };
 
 export interface Toast {
   id: number;
   text: string;
+}
+
+/** How the left column lists conversations: one per bot × sender, or one merged timeline per bot. */
+export type ListMode = 'people' | 'bot';
+export const LIST_MODE_KEY = 'tgarchive.listMode';
+
+function readListMode(): ListMode {
+  try {
+    return localStorage.getItem(LIST_MODE_KEY) === 'bot' ? 'bot' : 'people';
+  } catch {
+    return 'people';
+  }
+}
+
+/** One row of the left column in bot mode: a bot's merged timeline. */
+export interface BotEntry {
+  bot: Bot;
+  /** The bot's most recently active chat, for the preview line; undefined when it has none. */
+  last?: Chat;
+  senders: number;
 }
 
 function mergeById(a: Message[], b: Message[]): Message[] {
@@ -51,6 +74,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
   const toast = signal<Toast | null>(null);
   const viewer = signal<ViewerTarget | null>(null); // media viewer target
   const sharedMediaOpen = signal(false); // right column
+  const listMode = signal<ListMode>(readListMode());
   let toastSeq = 0;
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
   const eventListeners = new Set<(ev: ArchiveEvent) => void>();
@@ -62,6 +86,33 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
   const visibleChats = computed(() =>
     effectiveBotFilter.value ? chats.value.filter((c) => c.bot_id === effectiveBotFilter.value) : chats.value,
   );
+
+  // Bots with archived chats, most recently active first, then bots still running but empty.
+  const botEntries = computed<BotEntry[]>(() => {
+    const out: BotEntry[] = [];
+    for (const bot of bots.value) {
+      const own = chats.value.filter((c) => c.bot_id === bot.id);
+      if (own.length === 0 && bot.status === 'removed') continue;
+      const last = own.reduce<Chat | undefined>((a, c) => (!a || c.last_message_at > a.last_message_at ? c : a), undefined);
+      out.push({ bot, last, senders: own.length });
+    }
+    return out.sort((a, b) => (b.last?.last_message_at ?? -1) - (a.last?.last_message_at ?? -1));
+  });
+
+  function setListMode(mode: ListMode) {
+    listMode.value = mode;
+    try {
+      localStorage.setItem(LIST_MODE_KEY, mode);
+    } catch {
+      // Not persisted (private mode, blocked storage): the choice lasts for this page only.
+    }
+  }
+
+  /** The merged-timeline key of the bot that owns chat `chatId`; 0 while the chat is unknown. */
+  function botKeyOf(chatId: number): number {
+    const chat = chats.value.find((c) => c.id === chatId);
+    return chat ? -chat.bot_id : 0;
+  }
 
   function showToast(text: string) {
     toast.value = { id: ++toastSeq, text };
@@ -103,7 +154,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
     if (conv(chatId).loading) return;
     setConv(chatId, { loading: true, error: '' });
     try {
-      const page = await api.messages(chatId, 0, PAGE_SIZE);
+      const page = await convMessages(api, chatId, 0, PAGE_SIZE);
       const c = conv(chatId);
       const newestKnown = c.items.length ? c.items[c.items.length - 1].id : 0;
       const overlaps = c.loaded && page.length > 0 && page[0].id <= newestKnown;
@@ -127,7 +178,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
     if (!c.loaded || c.loading || !c.hasMore) return;
     setConv(chatId, { loading: true, error: '' });
     try {
-      const page = await api.messages(chatId, c.items[0]?.id ?? 0, PAGE_SIZE);
+      const page = await convMessages(api, chatId, c.items[0]?.id ?? 0, PAGE_SIZE);
       setConv(chatId, { items: mergeById(page, conv(chatId).items), hasMore: page.length >= PAGE_SIZE, loading: false });
     } catch (e) {
       setConv(chatId, { loading: false, error: errorMessage(e) });
@@ -141,19 +192,36 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
     return undefined;
   }
 
+  /** Adds or replaces `m` in its chat and in its bot's merged timeline, wherever loaded. */
   function upsertMessage(m: Message) {
-    const c = conversations.value[m.chat_id];
-    if (!c?.loaded) return;
-    const known = c.items.some((x) => x.id === m.id);
-    const oldest = c.items[0]?.id ?? 0;
-    // Never insert a message older than the loaded window: that would leave a hole.
-    if (known || !c.hasMore || m.id > oldest) setConv(m.chat_id, { items: mergeById(c.items, [m]) });
+    for (const key of [m.chat_id, botKeyOf(m.chat_id)]) {
+      const c = conversations.value[key];
+      if (!key || !c?.loaded) continue;
+      const known = c.items.some((x) => x.id === m.id);
+      const oldest = c.items[0]?.id ?? 0;
+      // Never insert a message older than the loaded window: that would leave a hole.
+      if (known || !c.hasMore || m.id > oldest) setConv(key, { items: mergeById(c.items, [m]) });
+    }
   }
 
-  function removeMessage(chatId: number, messageId: number) {
-    const c = conversations.value[chatId];
-    if (!c) return;
-    setConv(chatId, { items: c.items.filter((m) => m.id !== messageId) });
+  /** Drops message `messageId` from every conversation holding it (its chat and its bot timeline). */
+  function removeMessage(_chatId: number, messageId: number) {
+    for (const [key, c] of Object.entries(conversations.value)) {
+      if (c.items.some((m) => m.id === messageId)) setConv(Number(key), { items: c.items.filter((m) => m.id !== messageId) });
+    }
+  }
+
+  /** Marks media `mediaId` pending in every loaded message using it (media are deduplicated). */
+  function markMediaPending(mediaId: number) {
+    const uses = (m: Message) => m.media.some((md) => md.id === mediaId);
+    for (const [key, c] of Object.entries(conversations.value)) {
+      if (!c.items.some(uses)) continue;
+      setConv(Number(key), {
+        items: c.items.map((m) =>
+          uses(m) ? { ...m, media: m.media.map((md) => (md.id === mediaId ? { ...md, state: 'pending' as const, error: '' } : md)) } : m,
+        ),
+      });
+    }
   }
 
   async function refreshMessage(messageId: number, chatHint?: number) {
@@ -185,10 +253,19 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
     for (const l of eventListeners) l(ev);
     switch (ev.type) {
       case 'message.created':
-      case 'message.updated':
+      case 'message.updated': {
+        const { chat_id, message_id } = ev.data;
         scheduleChatsReload();
-        if (conv(ev.data.chat_id).loaded) await refreshMessage(ev.data.message_id, ev.data.chat_id);
+        let botKey = botKeyOf(chat_id);
+        // A new sender's first message lands in a chat we have never listed: learn its bot
+        // before deciding whether an open bot timeline wants it.
+        if (!botKey && Object.entries(conversations.value).some(([k, c]) => Number(k) < 0 && c.loaded)) {
+          await loadChats();
+          botKey = botKeyOf(chat_id);
+        }
+        if (conv(chat_id).loaded || (botKey && conv(botKey).loaded)) await refreshMessage(message_id, chat_id);
         return;
+      }
       case 'message.deleted':
         removeMessage(ev.data.chat_id, ev.data.message_id);
         scheduleChatsReload();
@@ -233,14 +310,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
   async function retryMedia(m: Message, mediaId: number) {
     try {
       await api.retryMedia(mediaId);
-      const c = conv(m.chat_id);
-      setConv(m.chat_id, {
-        items: c.items.map((x) =>
-          x.media.some((md) => md.id === mediaId)
-            ? { ...x, media: x.media.map((md) => (md.id === mediaId ? { ...md, state: 'pending' as const, error: '' } : md)) }
-            : x,
-        ),
-      });
+      markMediaPending(mediaId);
     } catch (e) {
       showToast(errorMessage(e));
       await refreshMessage(m.id, m.chat_id);
@@ -258,6 +328,10 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
     toast,
     viewer,
     sharedMediaOpen,
+    listMode,
+    setListMode,
+    botEntries,
+    botKeyOf,
     botsById,
     visibleChats,
     showToast,

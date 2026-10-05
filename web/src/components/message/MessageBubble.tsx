@@ -20,6 +20,10 @@ export interface SenderInfo {
 interface Props {
   bubble: Bubble;
   sender: SenderInfo;
+  /** The conversation shown (a chat id, or -botId for a bot timeline); opens the viewer on it. */
+  convKey: number;
+  /** Label the bubble with the sender's name (first bubble of a group in a bot timeline). */
+  showName?: boolean;
   onMenu: (x: number, y: number, msg: Message) => void;
 }
 
@@ -36,7 +40,7 @@ function visualWidth(msgs: Message[], album: boolean): number {
   return fitMedia({ width: main?.width ?? 0, height: main?.height ?? 0 }).width;
 }
 
-export function MessageBubble({ bubble, sender, onMenu }: Props) {
+export function MessageBubble({ bubble, sender, convKey, showName = false, onMenu }: Props) {
   const store = useStore();
   const press = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const suppressContextMenuUntil = useRef(0);
@@ -48,7 +52,7 @@ export function MessageBubble({ bubble, sender, onMenu }: Props) {
   const caption = msgs.find((m) => m.text);
   const noBubble = !album && NO_BUBBLE.includes(head.kind);
   const visual = album ? msgs.every((m) => m.kind === 'photo' || m.kind === 'video') : VISUAL_KINDS.includes(head.kind);
-  const hasHeader = Boolean(head.forward_origin) || head.source === 'userbot_fetch';
+  const hasHeader = showName || Boolean(head.forward_origin) || head.source === 'userbot_fetch';
   const hasReply = head.reply_to_tg_message_id > 0;
   const mediaOnly = visual && !caption && !hasHeader && !hasReply;
   const unsupported = !album && head.kind === 'other';
@@ -58,7 +62,7 @@ export function MessageBubble({ bubble, sender, onMenu }: Props) {
 
   const open = (m: Message) => {
     const md = mainMedia(m);
-    if (md && md.state === 'done') store.viewer.value = { chatId: m.chat_id, messageId: m.id, mediaId: md.id };
+    if (md && md.state === 'done') store.viewer.value = { chatId: convKey, messageId: m.id, mediaId: md.id };
   };
 
   const pick = (target: EventTarget | null): Message => {
@@ -111,6 +115,11 @@ export function MessageBubble({ bubble, sender, onMenu }: Props) {
         onTouchEnd={() => clearTimeout(press.current)}
         onTouchMove={() => clearTimeout(press.current)}
       >
+        {showName && !noBubble && (
+          <div class="message-title sender-title" style={{ '--accent-color': accent }}>
+            {sender.name || '未知用户'}
+          </div>
+        )}
         {head.source === 'userbot_fetch' && <OriginHeader msg={head} />}
         {head.forward_origin && <ForwardHeader origin={head.forward_origin} />}
         {hasReply && <ReplyQuote msg={head} senderName={sender.name} />}

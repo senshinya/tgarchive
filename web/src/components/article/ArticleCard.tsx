@@ -1,7 +1,7 @@
 import { mediaUrl } from '../../api/client';
 import type { Message } from '../../api/types';
 import { safeHref } from '../../lib/entities';
-import { navigate } from '../../lib/router';
+import { articleRoute, navigate, route, routeConvKey } from '../../lib/router';
 import './article.scss';
 
 /** Link-preview style card under a Telegraph link message; opens the reader once archived. */
@@ -13,7 +13,7 @@ export function ArticleCard({ msg }: { msg: Message }) {
       <button
         type="button"
         class="ArticleCard"
-        onClick={() => navigate({ name: 'article', chatId: msg.chat_id, messageId: msg.id }, { fromChat: true })}
+        onClick={() => navigate(articleRoute(routeConvKey(route.value) || msg.chat_id, msg.id), { fromChat: true })}
       >
         <span class="ArticleCard-site">Telegraph</span>
         {a.title && <span class="ArticleCard-title">{a.title}</span>}

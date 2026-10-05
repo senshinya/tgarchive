@@ -11,7 +11,7 @@ const sender = { name: 'Alice', peerId: 42 };
 const single = (msg: Message, first = true, last = true): Bubble => ({ kind: 'message', key: String(msg.id), msg, first, last });
 
 function bubble(b: Bubble, onMenu = vi.fn()) {
-  return renderWithStore(<MessageBubble bubble={b} sender={sender} onMenu={onMenu} />);
+  return renderWithStore(<MessageBubble bubble={b} sender={sender} convKey={b.kind === "album" ? b.msgs[0].chat_id : b.msg.chat_id} onMenu={onMenu} />);
 }
 
 describe('MessageBubble', () => {

@@ -1,6 +1,6 @@
 import { Play, X } from 'lucide-preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { errorMessage, mediaUrl } from '../../api/client';
+import { convMedia, errorMessage, mediaUrl } from '../../api/client';
 import type { Message, SharedMediaType } from '../../api/types';
 import { extractLinks } from '../../lib/entities';
 import { formatDuration, formatMonth, hashString, monthKey, peerColor, previewText } from '../../lib/format';
@@ -29,7 +29,7 @@ interface ListState {
 
 const INITIAL: ListState = { items: [], hasMore: true, loading: false, error: '' };
 
-function MediaTile({ msg }: { msg: Message }) {
+function MediaTile({ msg, convKey }: { msg: Message; convKey: number }) {
   const store = useStore();
   const main = mainMedia(msg);
   const thumb = readyThumb(msg);
@@ -44,7 +44,7 @@ function MediaTile({ msg }: { msg: Message }) {
       disabled={!done}
       aria-label={main.kind === 'photo' ? '查看照片' : '播放视频'}
       onClick={() => {
-        store.viewer.value = { chatId: msg.chat_id, messageId: msg.id, mediaId: main.id };
+        store.viewer.value = { chatId: convKey, messageId: msg.id, mediaId: main.id };
       }}
     >
       {src ? (
@@ -86,7 +86,8 @@ function LinkRows({ msg }: { msg: Message }) {
   );
 }
 
-/** Right column: shared media / files / links of the open chat, grouped by month, paged by message id. */
+/** Right column: shared media / files / links of the open conversation (a chat id, or -botId for a
+ * bot timeline), grouped by month, paged by message id. */
 export function SharedMedia({ chatId }: { chatId: number }) {
   const store = useStore();
   const [tab, setTab] = useState<SharedMediaType>('media');
@@ -102,7 +103,7 @@ export function SharedMedia({ chatId }: { chatId: number }) {
     setList({ ...current, loading: true, error: '' });
     try {
       const before = current.items.length ? current.items[current.items.length - 1].id : 0;
-      const page = await store.api.chatMedia(chatId, tab, before, SHARED_PAGE);
+      const page = await convMedia(store.api, chatId, tab, before, SHARED_PAGE);
       if (my !== token.current) return;
       setList({ items: [...current.items, ...page], hasMore: page.length >= SHARED_PAGE, loading: false, error: '' });
     } catch (e) {
@@ -163,7 +164,7 @@ export function SharedMedia({ chatId }: { chatId: number }) {
             {tab === 'media' && (
               <div class="SharedMedia-grid">
                 {g.items.map((m) => (
-                  <MediaTile key={m.id} msg={m} />
+                  <MediaTile key={m.id} msg={m} convKey={chatId} />
                 ))}
               </div>
             )}

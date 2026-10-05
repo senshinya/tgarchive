@@ -59,10 +59,18 @@ describe('ArticleCard', () => {
     expect(route.value).toEqual({ name: 'article', chatId: 10, messageId: 1 });
   });
 
+  it('opens the reader over the bot timeline when shown there', () => {
+    route.value = { name: 'bot', botId: 3 };
+    renderWithStore(<ArticleCard msg={linkMsg(summary({ image_media_id: 7 }))} />);
+    fireEvent.click(screen.getByRole('button'));
+    expect(location.pathname).toBe('/bot/3/article/1');
+    expect(route.value).toEqual({ name: 'bot-article', botId: 3, messageId: 1 });
+  });
+
   it('renders inside the message bubble under the text', () => {
     const msg = linkMsg(summary());
     const { container } = renderWithStore(
-      <MessageBubble bubble={{ kind: 'message', key: '1', msg, first: true, last: true }} sender={{ name: 'Alice', peerId: 42 }} onMenu={vi.fn()} />,
+      <MessageBubble bubble={{ kind: 'message', key: '1', msg, first: true, last: true }} sender={{ name: "Alice", peerId: 42 }} convKey={10} onMenu={vi.fn()} />,
     );
     const text = container.querySelector('.text-content')!;
     expect(text.querySelector('.ArticleCard')).toBeTruthy();

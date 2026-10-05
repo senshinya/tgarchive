@@ -1,15 +1,16 @@
 import { ArrowDown, Copy, Download, Trash2 } from 'lucide-preact';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { errorMessage, mediaUrl } from '../../api/client';
-import type { Message } from '../../api/types';
+import { avatarUrl, errorMessage, mediaUrl } from '../../api/client';
+import type { Chat, Message } from '../../api/types';
 import { senderName } from '../../lib/format';
 import { groupMessages, type ListEntry } from '../../lib/grouping';
 import { useStore } from '../../state/store';
+import { Avatar } from '../../ui/Avatar';
 import { ContextMenu, type MenuItem } from '../../ui/ContextMenu';
 import { ConfirmDialog } from '../../ui/Modal';
 import { Spinner } from '../../ui/Spinner';
 import { mainMedia } from '../media/util';
-import { MessageBubble } from './MessageBubble';
+import { MessageBubble, type SenderInfo } from './MessageBubble';
 import './message.scss';
 
 /** Load older history when the user scrolls within this many px of the top. */
@@ -26,11 +27,18 @@ function download(href: string) {
   a.remove();
 }
 
+function senderInfo(chat: Chat | undefined, fallbackPeer: number): SenderInfo {
+  return chat ? { name: senderName(chat.sender), peerId: chat.sender.tg_user_id } : { name: '', peerId: fallbackPeer };
+}
+
+/** A conversation: one chat (positive chatId), or a bot's merged timeline (chatId = -botId), where
+ * each group of messages is labelled with its sender, Telegram group-chat style. */
 export function MessageList({ chatId }: { chatId: number }) {
   const store = useStore();
   const conv = store.conv(chatId);
-  const chat = store.chats.value.find((c) => c.id === chatId);
-  const sender = chat ? { name: senderName(chat.sender), peerId: chat.sender.tg_user_id } : { name: '', peerId: chatId };
+  const merged = chatId < 0;
+  const chatsById = new Map(store.chats.value.map((c) => [c.id, c]));
+  const senderOf = (msgChatId: number) => senderInfo(chatsById.get(msgChatId), msgChatId);
   const entries = useMemo(() => groupMessages(conv.items), [conv.items]);
   // Each day's pill must stick only within its own day (Web A behaviour): nest it as the
   // first child of a per-day container so the next day's container pushes it out, instead of
@@ -163,13 +171,36 @@ export function MessageList({ chatId }: { chatId: number }) {
               <div class="sticky-date">
                 <span>{d.label}</span>
               </div>
-              {d.groups.map((g) => (
-                <div class="message-group" key={g.key}>
-                  {g.bubbles.map((b) => (
-                    <MessageBubble key={b.key} bubble={b} sender={sender} onMenu={(x, y, msg) => setMenu({ x, y, msg })} />
-                  ))}
-                </div>
-              ))}
+              {d.groups.map((g) => {
+                const first = g.bubbles[0];
+                const groupChat = (first.kind === 'album' ? first.msgs[0] : first.msg).chat_id;
+                const sender = senderOf(groupChat);
+                const chat = chatsById.get(groupChat);
+                return (
+                  <div class={`message-group${merged ? ' with-avatar' : ''}`} key={g.key}>
+                    {merged && (
+                      <div class="message-group-avatar">
+                        <Avatar
+                          name={sender.name}
+                          peerId={sender.peerId}
+                          src={chat?.sender.has_avatar ? avatarUrl('senders', chat.sender.tg_user_id) : null}
+                          size="small"
+                        />
+                      </div>
+                    )}
+                    {g.bubbles.map((b) => (
+                      <MessageBubble
+                        key={b.key}
+                        bubble={b}
+                        sender={sender}
+                        convKey={chatId}
+                        showName={merged && b.first}
+                        onMenu={(x, y, msg) => setMenu({ x, y, msg })}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
             </section>
           ))}
         </div>

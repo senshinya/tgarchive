@@ -4,6 +4,9 @@ export type Route =
   | { name: 'home' }
   | { name: 'chat'; chatId: number }
   | { name: 'article'; chatId: number; messageId: number }
+  | { name: 'bot'; botId: number }
+  | { name: 'bot-article'; botId: number; messageId: number }
+  | { name: 'downloads' }
   | { name: 'settings' }
   | { name: 'settings-add-bot' }
   | { name: 'settings-bot'; botId: number }
@@ -17,6 +20,11 @@ export function parseRoute(pathname: string): Route {
   if (parts[0] === 'chat' && parts.length === 4 && parts[2] === 'article' && id(parts[1]) && id(parts[3])) {
     return { name: 'article', chatId: id(parts[1]), messageId: id(parts[3]) };
   }
+  if (parts[0] === 'bot' && parts.length === 2 && id(parts[1])) return { name: 'bot', botId: id(parts[1]) };
+  if (parts[0] === 'bot' && parts.length === 4 && parts[2] === 'article' && id(parts[1]) && id(parts[3])) {
+    return { name: 'bot-article', botId: id(parts[1]), messageId: id(parts[3]) };
+  }
+  if (parts[0] === 'downloads' && parts.length === 1) return { name: 'downloads' };
   if (parts[0] === 'settings') {
     if (parts.length === 1) return { name: 'settings' };
     if (parts[1] === 'bots' && parts[2] === 'new' && parts.length === 3) return { name: 'settings-add-bot' };
@@ -35,6 +43,12 @@ export function routePath(r: Route): string {
       return `/chat/${r.chatId}`;
     case 'article':
       return `/chat/${r.chatId}/article/${r.messageId}`;
+    case 'bot':
+      return `/bot/${r.botId}`;
+    case 'bot-article':
+      return `/bot/${r.botId}/article/${r.messageId}`;
+    case 'downloads':
+      return '/downloads';
     case 'settings':
       return '/settings';
     case 'settings-add-bot':
@@ -66,9 +80,30 @@ export interface NavigateOptions {
   fromChat?: boolean;
 }
 
-/** The chat a route shows (the article reader overlays its chat); 0 for none. */
-export function routeChatId(r: Route): number {
-  return r.name === 'chat' || r.name === 'article' ? r.chatId : 0;
+/**
+ * The conversation a route shows (the article reader overlays its conversation); 0 for none.
+ * Conversation keys are chat ids for one bot × sender chat, and the negated bot id for a bot's
+ * merged timeline.
+ */
+export function routeConvKey(r: Route): number {
+  if (r.name === 'chat' || r.name === 'article') return r.chatId;
+  if (r.name === 'bot' || r.name === 'bot-article') return -r.botId;
+  return 0;
+}
+
+/** The article message a route shows over its conversation; 0 for none. */
+export function routeArticleId(r: Route): number {
+  return r.name === 'article' || r.name === 'bot-article' ? r.messageId : 0;
+}
+
+/** The route showing conversation `key` (see routeConvKey). */
+export function convRoute(key: number): Route {
+  return key < 0 ? { name: 'bot', botId: -key } : { name: 'chat', chatId: key };
+}
+
+/** The route showing article `messageId` over conversation `key`. */
+export function articleRoute(key: number, messageId: number): Route {
+  return key < 0 ? { name: 'bot-article', botId: -key, messageId } : { name: 'article', chatId: key, messageId };
 }
 
 export function navigate(to: Route, opts: NavigateOptions = {}): void {

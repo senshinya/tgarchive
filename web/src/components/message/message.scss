@@ -84,6 +84,32 @@
   }
 }
 
+.message-group.with-avatar {
+  position: relative;
+  padding-left: 2.625rem;
+}
+
+// Web A group chats: the sender's avatar sits beside the last bubble of their group, and rides
+// along while the group scrolls.
+.message-group-avatar {
+  position: absolute;
+  left: 0;
+  bottom: 0.375rem;
+  top: 0;
+  display: flex;
+  align-items: flex-end;
+  pointer-events: none;
+
+  .Avatar {
+    position: sticky;
+    bottom: 0.5rem;
+  }
+}
+
+.sender-title {
+  font-weight: var(--font-weight-semibold, 600);
+}
+
 .Message {
   @include meta-colors;
   position: relative;
