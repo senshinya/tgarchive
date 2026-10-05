@@ -354,17 +354,56 @@ describe('download progress', () => {
       await s.loadDownloads();
       const tick = (ids: number[]) =>
         s.handleEvent({ type: 'download.progress', data: { items: ids.map((id) => ({ media_id: id, done: 1, total: 2, started_at: 1 })), speed: 0 } });
-      await tick([7]); // same set as the snapshot
-      await vi.advanceTimersByTimeAsync(1500);
-      expect(api.downloads).toHaveBeenCalledTimes(1);
-      await tick([7, 8]);
-      await tick([7, 8]);
+      await tick([7]); // the first event names a set: one refresh
+      await tick([7]);
       await vi.advanceTimersByTimeAsync(1500);
       expect(api.downloads).toHaveBeenCalledTimes(2);
+      await tick([7]); // unchanged: none
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(api.downloads).toHaveBeenCalledTimes(2);
+      await tick([7, 8]);
+      await tick([7, 8]);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(api.downloads).toHaveBeenCalledTimes(3);
       await tick([]); // all done: the final empty event also refreshes
       expect(s.downloadSummary.value.active).toBe(0);
       await vi.advanceTimersByTimeAsync(1500);
-      expect(api.downloads).toHaveBeenCalledTimes(3);
+      expect(api.downloads).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('takes the live progress from a fresh snapshot, clearing downloads that ended while away', async () => {
+    const api = fakeApi({ downloads: vi.fn(async () => snapshot()) });
+    const s = createStore(api);
+    await s.handleEvent({
+      type: 'download.progress',
+      data: { items: [{ media_id: 3, done: 1, total: 2, started_at: 1 }], speed: 0 },
+    });
+    await s.resync(); // the final empty event was missed; the snapshot only has media 7
+    expect([...s.progress.value.keys()]).toEqual([7]);
+    expect(s.progress.value.get(7)).toEqual({ done: 10, total: 100 });
+  });
+
+  it('keeps refreshing while the set of downloads keeps changing (throttled, not starved)', async () => {
+    vi.useFakeTimers();
+    try {
+      const api = fakeApi({ downloads: vi.fn(async () => snapshot({ active: [] })) });
+      const s = createStore(api, { downloadsReloadDelay: 1000 });
+      for (let i = 1; i <= 5; i++) {
+        await s.handleEvent({ type: 'download.progress', data: { items: [{ media_id: i, done: 1, total: 2, started_at: 1 }], speed: 0 } });
+        await vi.advanceTimersByTimeAsync(600);
+      }
+      expect((api.downloads as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2);
+      // An unchanged set does not refresh at all, even if the snapshot disagrees with it.
+      await vi.advanceTimersByTimeAsync(2000);
+      const before = (api.downloads as ReturnType<typeof vi.fn>).mock.calls.length;
+      for (let i = 0; i < 3; i++) {
+        await s.handleEvent({ type: 'download.progress', data: { items: [{ media_id: 99, done: 1, total: 2, started_at: 1 }], speed: 0 } });
+        await vi.advanceTimersByTimeAsync(1100);
+      }
+      expect((api.downloads as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before + 1);
     } finally {
       vi.useRealTimers();
     }

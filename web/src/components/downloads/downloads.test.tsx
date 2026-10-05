@@ -67,7 +67,8 @@ describe('DownloadsPanel', () => {
     const r = await setupPanel();
     fireEvent.click(screen.getByText('clip.mp4'));
     expect(route.value).toEqual({ name: 'chat', chatId: 10 });
-    expect(r.store.jumpTo.value).toBe(3);
+    expect(r.store.jumpTo.value).toEqual({ key: 10, messageId: 3 });
+    expect(history.state).toEqual({ fromList: true });
   });
 
   it('opens the bot timeline in bot mode', async () => {

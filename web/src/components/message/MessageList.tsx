@@ -17,6 +17,8 @@ import './message.scss';
 export const LOAD_OLDER_THRESHOLD = 400;
 const AT_BOTTOM_PX = 100;
 const SHOW_DOWN_PX = 300;
+/** How many older pages a jump from the downloads panel may load looking for its message. */
+const JUMP_MAX_PAGES = 20;
 
 function download(href: string) {
   const a = document.createElement('a');
@@ -91,18 +93,38 @@ export function MessageList({ chatId }: { chatId: number }) {
     if (conv.loaded && conv.hasMore && el.scrollHeight - el.clientHeight < LOAD_OLDER_THRESHOLD) void store.loadOlder(chatId);
   }, [conv.items]);
 
-  // The downloads panel asks for a message: scroll to it and flash it once this list shows it.
+  // The downloads panel asks for a message: load older pages until it shows up (up to
+  // JUMP_MAX_PAGES), then scroll to it and flash it. A request for another conversation, or one
+  // left over when this list goes away, is dropped.
+  const jumpPages = useRef(0);
+  const jump = store.jumpTo.value;
   useEffect(() => {
-    const id = store.jumpTo.value;
-    if (!id || !conv.items.some((m) => m.id === id)) return;
-    store.jumpTo.value = 0;
-    const el = ref.current?.querySelector(`[data-message-id="${id}"]`)?.closest('.Message') as HTMLElement | null | undefined;
-    if (!el) return;
-    el.scrollIntoView?.({ block: 'center' });
-    el.classList.remove('highlight');
-    void el.offsetWidth;
-    el.classList.add('highlight');
-  }, [conv.items, store.jumpTo.value]);
+    if (!jump) return;
+    if (jump.key !== chatId) return;
+    const el = ref.current?.querySelector(`[data-message-id="${jump.messageId}"]`)?.closest('.Message') as HTMLElement | null | undefined;
+    if (conv.items.some((m) => m.id === jump.messageId) && el) {
+      store.jumpTo.value = null;
+      el.scrollIntoView?.({ block: 'center' });
+      el.classList.remove('highlight');
+      void el.offsetWidth;
+      el.classList.add('highlight');
+      return;
+    }
+    if (!conv.loaded || conv.loading) return;
+    const oldest = conv.items[0]?.id ?? 0;
+    if (conv.hasMore && jump.messageId < oldest && jumpPages.current < JUMP_MAX_PAGES) {
+      jumpPages.current++;
+      void store.loadOlder(chatId);
+    } else if (!conv.items.some((m) => m.id === jump.messageId)) {
+      store.jumpTo.value = null; // not in this conversation, deleted, or too far back
+    }
+  }, [conv.items, conv.loaded, conv.loading, jump]);
+  useEffect(
+    () => () => {
+      if (store.jumpTo.value?.key === chatId) store.jumpTo.value = null;
+    },
+    [],
+  );
 
   const onScroll = () => {
     const el = ref.current;

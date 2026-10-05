@@ -1,4 +1,4 @@
-import { act, fireEvent, screen } from '@testing-library/preact';
+import { act, fireEvent, screen, waitFor } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { navigate, route } from '../../lib/router';
 import { fakeApi, makeBot, makeChat, makeMessage } from '../../test/fixtures';
@@ -88,5 +88,42 @@ describe('MiddleColumn bot timeline', () => {
     await screen.findByText('hi');
     expect(r.container.querySelector('.sender-title')).toBeNull();
     expect(r.container.querySelector('.message-group-avatar')).toBeNull();
+  });
+});
+
+describe('jump from the downloads panel', () => {
+  const pageOf = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => makeMessage({ id: from + i, chat_id: 10, text: `m${from + i}` }));
+
+  it('loads older pages until the message shows, then clears the request', async () => {
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChat({ id: 10 })]),
+      messages: vi.fn(async (_chat: number, before = 0) => (before ? pageOf(1, 50) : pageOf(51, 100))),
+    });
+    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    r.store.jumpTo.value = { key: 10, messageId: 5 };
+    await screen.findByText('m5');
+    expect(api.messages).toHaveBeenCalledWith(10, 51, 50);
+    await waitFor(() => expect(r.store.jumpTo.value).toBeNull());
+    expect(r.container.querySelector('.Message.highlight')?.textContent).toContain('m5');
+  });
+
+  it('gives up on a message the conversation does not have', async () => {
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChat({ id: 10 })]),
+      messages: vi.fn(async () => pageOf(1, 3)),
+    });
+    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    r.store.jumpTo.value = { key: 10, messageId: 999 };
+    await screen.findByText('m3');
+    await waitFor(() => expect(r.store.jumpTo.value).toBeNull());
+  });
+
+  it('ignores a request meant for another conversation', async () => {
+    const api = fakeApi({ chats: vi.fn(async () => [makeChat({ id: 10 })]), messages: vi.fn(async () => pageOf(1, 3)) });
+    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    r.store.jumpTo.value = { key: -1, messageId: 2 };
+    await screen.findByText('m3');
+    expect(r.store.jumpTo.value).toEqual({ key: -1, messageId: 2 });
   });
 });

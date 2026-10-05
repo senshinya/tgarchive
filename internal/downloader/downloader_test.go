@@ -450,23 +450,30 @@ func TestProcessUntracksOnFailure(t *testing.T) {
 	}
 }
 
-// botSourceEnv is a fake Bot API whose getFile is held until released, with a BotSource polling fast.
-func botSourceEnv(t *testing.T) (*tgtest.FakeTG, *BotSource, *store.Media, string) {
+// botSourceEnv is a fake Bot API whose getFile is held until released, with a BotSource polling
+// fast. The returned media fetch different Bot API files.
+func botSourceEnv(t *testing.T) (*tgtest.FakeTG, *BotSource, []*store.Media, string) {
 	t.Helper()
 	fake := tgtest.New(t)
-	fake.AddFile("fid", []byte("img!"))
 	f, _, m := setup(t, 4)
-	m.Size = 1000
 	box, _ := seal.New(bytes.Repeat([]byte{1}, 32))
 	f.st.UpsertBot(ctx, &store.Bot{TgBotID: 777, TokenEnc: box.Seal([]byte("777:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")), CreatedAt: 1})
 	reg := botclients.New(f.st, box, fake.URL(), nil)
-	src := &BotSource{Clients: reg.Get, Mapper: botapifs.Mapper{Remote: fake.RemoteDir, Local: fake.RemoteDir},
-		Poll: 5 * time.Millisecond, ClaimTimeout: time.Second}
+	src := &BotSource{Clients: reg.Get, Mapper: botapifs.Mapper{Remote: fake.RemoteDir, Local: fake.RemoteDir}, Poll: 5 * time.Millisecond}
 	temp := filepath.Join(fake.RemoteDir, "777:AAAA", "temp")
 	os.MkdirAll(temp, 0o755)
+	var media []*store.Media
+	for i := range 3 {
+		mi := *m
+		mi.ID = m.ID + int64(i)*100
+		mi.SourceRef = fmt.Sprintf("fid%d", i)
+		mi.Size = 1000
+		fake.AddFile(mi.SourceRef, []byte("img!"))
+		media = append(media, &mi)
+	}
 	fake.HoldFiles(true)
 	t.Cleanup(func() { fake.HoldFiles(false) }) // runs before the fake server's Close waits on held requests
-	return fake, src, m, temp
+	return fake, src, media, temp
 }
 
 // progressLog collects reports from one Fetch.
@@ -502,6 +509,12 @@ func (p *progressLog) waitFor(t *testing.T, want [2]int64) {
 	t.Fatalf("progress = %v, want %v", p.last, want)
 }
 
+func (p *progressLog) reports() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.n
+}
+
 func fetchAsync(src *BotSource, c context.Context, m *store.Media, base string) chan error {
 	errc := make(chan error, 1)
 	go func() {
@@ -511,40 +524,68 @@ func fetchAsync(src *BotSource, c context.Context, m *store.Media, base string) 
 	return errc
 }
 
+// writeTemp creates or grows a temp file, with an increasing mtime so assignment order is clear.
+func writeTemp(t *testing.T, path string, size int) {
+	t.Helper()
+	if err := os.WriteFile(path, make([]byte, size), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(15 * time.Millisecond)
+}
+
 func TestBotSourceReportsTempFileGrowth(t *testing.T) {
-	fake, src, m, temp := botSourceEnv(t)
-	stale := filepath.Join(temp, "older")
-	os.WriteFile(stale, make([]byte, 900), 0o644) // existed before: never ours
+	fake, src, ms, temp := botSourceEnv(t)
+	writeTemp(t, filepath.Join(temp, "older"), 900) // existed before: never ours
 	var log progressLog
-	errc := fetchAsync(src, log.ctx(), m, filepath.Join(t.TempDir(), "out"))
+	errc := fetchAsync(src, log.ctx(), ms[0], filepath.Join(t.TempDir(), "out"))
 	time.Sleep(30 * time.Millisecond)
 	part := filepath.Join(temp, "file_1")
-	os.WriteFile(part, make([]byte, 100), 0o644)
+	writeTemp(t, part, 100)
 	log.waitFor(t, [2]int64{100, 1000})
-	os.WriteFile(part, make([]byte, 600), 0o644)
+	writeTemp(t, part, 600)
 	log.waitFor(t, [2]int64{600, 1000})
 	fake.HoldFiles(false)
 	if err := <-errc; err != nil {
 		t.Fatal(err)
 	}
-	if len(src.claimed) != 0 {
-		t.Fatalf("claim not released: %v", src.claimed)
+	if len(src.waiting) != 0 {
+		t.Fatalf("waiter not removed: %d", len(src.waiting))
 	}
 }
 
-func TestBotSourceConcurrentFetchesClaimTheirOwnFiles(t *testing.T) {
-	fake, src, m, temp := botSourceEnv(t)
+func TestBotSourceDoesNotHoldBackOtherDownloads(t *testing.T) {
+	fake, src, ms, _ := botSourceEnv(t)
+	errA := fetchAsync(src, ctx, ms[0], filepath.Join(t.TempDir(), "a")) // never gets a temp file
+	errB := fetchAsync(src, ctx, ms[1], filepath.Join(t.TempDir(), "b"))
+	deadline := time.Now().Add(2 * time.Second)
+	for len(fake.Calls("getFile")) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("getFile calls = %d: a waiting fetch held back the next one", len(fake.Calls("getFile")))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	fake.HoldFiles(false)
+	if err := <-errA; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errB; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBotSourceGivesNewFilesToTheLongestWaitingFetch(t *testing.T) {
+	fake, src, ms, temp := botSourceEnv(t)
 	var a, b progressLog
-	errA := fetchAsync(src, a.ctx(), m, filepath.Join(t.TempDir(), "a"))
+	errA := fetchAsync(src, a.ctx(), ms[0], filepath.Join(t.TempDir(), "a"))
 	time.Sleep(30 * time.Millisecond)
-	errB := fetchAsync(src, b.ctx(), m, filepath.Join(t.TempDir(), "b")) // waits at the gate
+	errB := fetchAsync(src, b.ctx(), ms[1], filepath.Join(t.TempDir(), "b"))
 	time.Sleep(30 * time.Millisecond)
-	os.WriteFile(filepath.Join(temp, "file_a"), make([]byte, 10), 0o644)
+	// Both are waiting; the first file to appear belongs to the one that started first.
+	writeTemp(t, filepath.Join(temp, "file_a"), 10)
 	a.waitFor(t, [2]int64{10, 1000})
-	time.Sleep(30 * time.Millisecond) // B now through the gate, with file_a in its snapshot
-	os.WriteFile(filepath.Join(temp, "file_b"), make([]byte, 20), 0o644)
+	writeTemp(t, filepath.Join(temp, "file_b"), 20)
 	b.waitFor(t, [2]int64{20, 1000})
-	os.WriteFile(filepath.Join(temp, "file_a"), make([]byte, 30), 0o644)
+	writeTemp(t, filepath.Join(temp, "file_a"), 30)
 	a.waitFor(t, [2]int64{30, 1000})
 	b.waitFor(t, [2]int64{20, 1000})
 	fake.HoldFiles(false)
@@ -556,42 +597,33 @@ func TestBotSourceConcurrentFetchesClaimTheirOwnFiles(t *testing.T) {
 	}
 }
 
-func TestBotSourceGivesUpTheGateWithoutATempFile(t *testing.T) {
-	fake, src, m, temp := botSourceEnv(t)
-	src.ClaimTimeout = 150 * time.Millisecond
-	var a, b progressLog
-	errA := fetchAsync(src, a.ctx(), m, filepath.Join(t.TempDir(), "a"))
-	time.Sleep(10 * time.Millisecond)
-	errB := fetchAsync(src, b.ctx(), m, filepath.Join(t.TempDir(), "b"))
-	time.Sleep(220 * time.Millisecond) // A timed out at ~150ms: B holds the gate until ~300ms
-	os.WriteFile(filepath.Join(temp, "file_b"), make([]byte, 5), 0o644)
-	b.waitFor(t, [2]int64{5, 1000})
-	a.mu.Lock()
-	if a.n != 0 {
-		t.Fatalf("A reported %v after giving up", a.last)
+func TestBotSourceFileFromBeforeAnyWaiterIsNotClaimedLater(t *testing.T) {
+	fake, src, ms, temp := botSourceEnv(t)
+	writeTemp(t, filepath.Join(temp, "stray"), 5)
+	var a progressLog
+	errA := fetchAsync(src, a.ctx(), ms[0], filepath.Join(t.TempDir(), "a"))
+	time.Sleep(50 * time.Millisecond)
+	writeTemp(t, filepath.Join(temp, "stray"), 50) // grows, but was there before A waited
+	time.Sleep(50 * time.Millisecond)
+	if a.reports() != 0 {
+		t.Fatalf("A claimed a file that predates it: %v", a.last)
 	}
-	a.mu.Unlock()
 	fake.HoldFiles(false)
 	<-errA
-	<-errB
 }
 
-func TestBotSourceGateHonoursCancellation(t *testing.T) {
-	fake, src, m, _ := botSourceEnv(t)
-	defer fake.HoldFiles(false)
-	errA := fetchAsync(src, ctx, m, filepath.Join(t.TempDir(), "a"))
-	time.Sleep(10 * time.Millisecond)
+func TestBotSourceCancellation(t *testing.T) {
+	_, src, ms, _ := botSourceEnv(t)
 	c, cancel := context.WithCancel(ctx)
-	errB := fetchAsync(src, c, m, filepath.Join(t.TempDir(), "b"))
+	errc := fetchAsync(src, c, ms[0], filepath.Join(t.TempDir(), "a"))
+	time.Sleep(20 * time.Millisecond)
 	cancel()
 	select {
-	case err := <-errB:
+	case err := <-errc:
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v", err)
 		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("Fetch waiting at the gate ignored cancellation")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Fetch ignored cancellation")
 	}
-	fake.HoldFiles(false)
-	<-errA
 }

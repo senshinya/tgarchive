@@ -165,16 +165,25 @@ func (s *Store) listMessages(ctx context.Context, sc scope, beforeID int64, limi
 	if err != nil {
 		return nil, err
 	}
-	// Never cut an album at the page boundary: pull in the rest of the oldest message's group.
-	// An album lives in one chat, so only that chat is searched.
+	// Never cut an album at the page boundary: extend the page down to the lowest id of the
+	// oldest message's group (an album lives in one chat). Everything in scope above that id is
+	// included too, so a merged timeline whose albums interleave with other senders' messages
+	// has no gap for the next page (which starts below this page's oldest id) to skip over.
 	if n := len(views); n > 0 && views[n-1].MediaGroupID != "" {
 		oldest := views[n-1]
-		more, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
-			WHERE chat_id = ? AND deleted_at = 0 AND media_group_id = ? AND id < ? ORDER BY id DESC`, oldest.ChatID, oldest.MediaGroupID, oldest.ID))
-		if err != nil {
+		var low sql.NullInt64
+		if err := s.db.QueryRowContext(ctx, `SELECT MIN(id) FROM messages
+			WHERE chat_id = ? AND deleted_at = 0 AND media_group_id = ? AND id < ?`, oldest.ChatID, oldest.MediaGroupID, oldest.ID).Scan(&low); err != nil {
 			return nil, err
 		}
-		views = append(views, more...)
+		if low.Valid {
+			more, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
+				WHERE `+sc.cond+` AND deleted_at = 0 AND id >= ? AND id < ? ORDER BY id DESC`, sc.arg, low.Int64, oldest.ID))
+			if err != nil {
+				return nil, err
+			}
+			views = append(views, more...)
+		}
 	}
 	slices.Reverse(views)
 	if err := s.hydrate(ctx, views); err != nil {

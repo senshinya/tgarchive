@@ -25,8 +25,9 @@ function DownloadRow({ item, progress, children }: { item: DownloadItem; progres
   // scroll to the message once it is shown.
   const open = () => {
     const key = store.listMode.value === 'bot' && chat ? -chat.bot_id : item.chat_id;
-    store.jumpTo.value = item.message_id;
-    navigate(convRoute(key));
+    store.jumpTo.value = { key, messageId: item.message_id };
+    // fromList: the conversation's back button then returns here instead of going home.
+    navigate(convRoute(key), { fromList: true });
   };
   const total = progress ? progress.total || item.size : item.size;
   const pct = progress && total > 0 ? Math.min(100, (progress.done / total) * 100) : 0;

@@ -186,13 +186,25 @@ describe('connectEvents', () => {
   });
 
   it('reconnects on a back/forward cache restore and when the network returns', () => {
+    vi.useFakeTimers();
     connect(() => {}, () => {}, (u) => new FakeES(u));
     window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: false }));
     expect(FakeES.all).toHaveLength(1);
     window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
     expect(FakeES.all).toHaveLength(2);
+    vi.advanceTimersByTime(3000);
     window.dispatchEvent(new Event('online'));
     expect(FakeES.all).toHaveLength(3);
+  });
+
+  it('reconnects once when a restore fires pageshow and visibilitychange together', () => {
+    vi.useFakeTimers();
+    connect(() => {}, () => {}, (u) => new FakeES(u));
+    setVisibility('hidden');
+    vi.advanceTimersByTime(AWAY_MS + 1000);
+    window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    setVisibility('visible');
+    expect(FakeES.all).toHaveLength(2);
   });
 
   it('stops listening to the page once stopped', () => {

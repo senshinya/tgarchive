@@ -57,6 +57,10 @@ export interface BotEntry {
   senders: number;
 }
 
+function idsKey(ids: number[]): string {
+  return [...ids].sort((a, b) => a - b).join(',');
+}
+
 function mergeById(a: Message[], b: Message[]): Message[] {
   const map = new Map<number, Message>();
   for (const m of a) map.set(m.id, m);
@@ -93,9 +97,11 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
   const listMode = signal<ListMode>(readListMode());
   const progress = signal<Map<number, MediaProgress>>(new Map()); // media id → bytes, from download.progress
   const downloads = signal<Downloads | null>(null); // the downloads panel snapshot
-  /** A message to scroll to once its conversation shows it (set by the downloads panel). */
-  const jumpTo = signal(0);
+  /** A message for conversation `key` to scroll to, loading older pages until it shows it (set by
+   * the downloads panel). */
+  const jumpTo = signal<{ key: number; messageId: number } | null>(null);
   let downloadsTimer: ReturnType<typeof setTimeout> | undefined;
+  let activeKey = ''; // the set of media ids in the last progress event (only events set it)
   let toastSeq = 0;
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
   const eventListeners = new Set<(ev: ArchiveEvent) => void>();
@@ -139,15 +145,27 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
 
   async function loadDownloads() {
     try {
-      downloads.value = await api.downloads();
+      const snap = await api.downloads();
+      downloads.value = snap;
+      // The snapshot is newer than any progress event a frozen or reconnected page missed
+      // (including the final empty one), so it replaces the live progress outright.
+      progress.value = new Map(snap.active.map((a) => [a.media_id, { done: a.done, total: a.total }]));
+      // activeKey is left alone: it tracks what the events said, and the snapshot may never
+      // list some of it (a download whose message was deleted), which must not cause a reload
+      // on every event.
     } catch {
       // Keep the last snapshot; the next event or resync tries again.
     }
   }
 
+  // Throttled, not debounced: events keep arriving every second, and resetting the timer on
+  // each could postpone the reload forever.
   function scheduleDownloadsReload() {
-    clearTimeout(downloadsTimer);
-    downloadsTimer = setTimeout(() => void loadDownloads(), downloadsDelay);
+    if (downloadsTimer !== undefined) return;
+    downloadsTimer = setTimeout(() => {
+      downloadsTimer = undefined;
+      void loadDownloads();
+    }, downloadsDelay);
   }
 
   function setListMode(mode: ListMode) {
@@ -331,8 +349,11 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
         const next = new Map(ev.data.items.map((p) => [p.media_id, { done: p.done, total: p.total }]));
         progress.value = next;
         // The snapshot names what is downloading; refresh it when that set changes.
-        const listed = new Set((downloads.value?.active ?? []).map((a) => a.media_id));
-        if (listed.size !== next.size || [...next.keys()].some((id) => !listed.has(id))) scheduleDownloadsReload();
+        const key = idsKey([...next.keys()]);
+        if (key !== activeKey) {
+          activeKey = key;
+          scheduleDownloadsReload();
+        }
         if (downloads.value) downloads.value = { ...downloads.value, speed: ev.data.speed };
         return;
       }

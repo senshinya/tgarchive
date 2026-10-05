@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -17,31 +18,28 @@ import (
 // which writes the file into the shared directory and returns its absolute path.
 //
 // getFile blocks until the Bot API server has the whole file and offers no progress. While it
-// downloads, though, TDLib writes the partial file under <dir>/<bot>/temp/. So each Fetch
-// watches that directory: the first file to appear there that existed neither before its
-// getFile nor belongs to another Fetch is taken to be its download, and its growing size is
-// reported as progress. Only one Fetch at a time may be looking for its file (the claim gate),
-// so concurrent downloads cannot take each other's; a Fetch that finds nothing within
-// ClaimTimeout gives up the gate and reports no bytes.
+// downloads, though, TDLib writes the partial file under <dir>/<bot>/temp/ and renames it away
+// when done. So each Fetch, while its getFile runs, waits in a queue for a temp file: every file
+// that appears there after a Fetch started waiting goes to the longest-waiting Fetch that has
+// none yet, and its growing size is reported as that Fetch's progress. getFile itself is never
+// held back; a Fetch whose file never shows up just reports no bytes.
 type BotSource struct {
 	Clients func(ctx context.Context, botID int64) (*tgbot.Client, error)
 	Mapper  botapifs.Mapper
 
-	// Poll is how often the temp directory is scanned and the claimed file measured.
+	// Poll is how often the temp directories are scanned and claimed files measured.
 	Poll time.Duration
-	// ClaimTimeout bounds how long a Fetch holds the claim gate looking for its file.
-	ClaimTimeout time.Duration
 
-	initOnce sync.Once
-	gate     chan struct{} // holds a token while one Fetch is looking for its temp file
-	mu       sync.Mutex
-	claimed  map[string]bool
+	mu      sync.Mutex
+	waiting []*tempWaiter   // fetches in progress, oldest first
+	seen    map[string]bool // temp files already handed out or present before anyone waited
 }
 
-const (
-	defaultBotPoll         = 500 * time.Millisecond
-	defaultBotClaimTimeout = 10 * time.Second
-)
+const defaultBotPoll = 500 * time.Millisecond
+
+type tempWaiter struct {
+	file string // the claimed temp file; "" until one is assigned
+}
 
 type getFileResult struct {
 	f   *tgbot.File
@@ -78,64 +76,29 @@ func (b *BotSource) Fetch(ctx context.Context, m *store.Media, dstBase string) (
 
 // getFileWatching runs getFile while reporting the size of its partial file in the temp dir.
 func (b *BotSource) getFileWatching(ctx context.Context, cl *tgbot.Client, m *store.Media) getFileResult {
-	poll, timeout := b.Poll, b.ClaimTimeout
-	if poll <= 0 {
-		poll = defaultBotPoll
-	}
-	if timeout <= 0 {
-		timeout = defaultBotClaimTimeout
-	}
-	b.initOnce.Do(func() {
-		b.gate = make(chan struct{}, 1)
-		b.claimed = map[string]bool{}
-	})
-	select {
-	case b.gate <- struct{}{}:
-	case <-ctx.Done():
-		return getFileResult{err: ctx.Err()}
-	}
-	gated := true
-	release := func() {
-		if gated {
-			gated = false
-			<-b.gate
-		}
-	}
-	defer release()
-	before := b.tempFiles()
-
 	done := make(chan getFileResult, 1)
 	go func() {
 		f, err := cl.GetFile(ctx, m.SourceRef)
 		done <- getFileResult{f, err}
 	}()
+	if b.Mapper.Local == "" {
+		return <-done
+	}
+	poll := b.Poll
+	if poll <= 0 {
+		poll = defaultBotPoll
+	}
+	w := b.enqueue()
+	defer b.dequeue(w)
 	tick := time.NewTicker(poll)
 	defer tick.Stop()
-	giveUp := time.After(timeout)
-	mine := ""
-	defer func() {
-		if mine != "" {
-			b.mu.Lock()
-			delete(b.claimed, mine)
-			b.mu.Unlock()
-		}
-	}()
 	for {
 		select {
 		case r := <-done:
 			return r
-		case <-giveUp:
-			release()
-			giveUp = nil
 		case <-tick.C:
-			if mine == "" && gated {
-				mine = b.claim(before)
-				if mine != "" {
-					release()
-				}
-			}
-			if mine != "" {
-				if st, err := os.Stat(mine); err == nil {
+			if file := b.assigned(w); file != "" {
+				if st, err := os.Stat(file); err == nil {
 					Report(ctx, st.Size(), m.Size)
 				}
 			}
@@ -143,37 +106,83 @@ func (b *BotSource) getFileWatching(ctx context.Context, cl *tgbot.Client, m *st
 	}
 }
 
+// enqueue adds a waiter. Files already in the temp dirs that no earlier waiter can take
+// belong to downloads nobody here is waiting for, so they are marked seen.
+func (b *BotSource) enqueue() *tempWaiter {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.assignLocked()
+	for p := range b.tempFiles() {
+		b.seen[p] = true
+	}
+	w := &tempWaiter{}
+	b.waiting = append(b.waiting, w)
+	return w
+}
+
+func (b *BotSource) dequeue(w *tempWaiter) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i, x := range b.waiting {
+		if x == w {
+			b.waiting = append(b.waiting[:i], b.waiting[i+1:]...)
+			break
+		}
+	}
+}
+
+// assigned hands out new temp files and returns the one w holds, if any.
+func (b *BotSource) assigned(w *tempWaiter) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.assignLocked()
+	return w.file
+}
+
+// assignLocked gives each temp file not seen before, oldest first, to the longest-waiting
+// fetch without one; files nobody is waiting for are just marked seen.
+func (b *BotSource) assignLocked() {
+	if b.seen == nil {
+		b.seen = map[string]bool{}
+	}
+	files := b.tempFiles()
+	for p := range b.seen {
+		if !files[p] {
+			delete(b.seen, p) // renamed away or removed: forget it
+		}
+	}
+	var fresh []string
+	for p := range files {
+		if !b.seen[p] {
+			fresh = append(fresh, p)
+		}
+	}
+	sort.Slice(fresh, func(i, j int) bool { return modTime(fresh[i]).Before(modTime(fresh[j])) })
+	for _, p := range fresh {
+		b.seen[p] = true
+		for _, w := range b.waiting {
+			if w.file == "" {
+				w.file = p
+				break
+			}
+		}
+	}
+}
+
+func modTime(p string) time.Time {
+	st, err := os.Stat(p)
+	if err != nil {
+		return time.Time{}
+	}
+	return st.ModTime()
+}
+
 // tempFiles lists the partial downloads currently in every bot's temp directory.
 func (b *BotSource) tempFiles() map[string]bool {
 	out := map[string]bool{}
-	if b.Mapper.Local == "" {
-		return out
-	}
 	matches, _ := filepath.Glob(filepath.Join(b.Mapper.Local, "*", "temp", "*"))
 	for _, p := range matches {
 		out[p] = true
 	}
 	return out
-}
-
-// claim takes the first temp file that is neither in before nor claimed by another Fetch.
-func (b *BotSource) claim(before map[string]bool) string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	var fresh []string
-	for p := range b.tempFiles() {
-		if !before[p] && !b.claimed[p] {
-			fresh = append(fresh, p)
-		}
-	}
-	if len(fresh) == 0 {
-		return ""
-	}
-	// Several at once means downloads started by someone else (another process, a retry in the
-	// Bot API server): attributing one would be a guess, so report nothing.
-	if len(fresh) > 1 {
-		return ""
-	}
-	b.claimed[fresh[0]] = true
-	return fresh[0]
 }

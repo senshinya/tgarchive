@@ -268,3 +268,34 @@ func TestListBotMedia(t *testing.T) {
 		t.Fatalf("bad type err = %v", err)
 	}
 }
+
+func TestListBotMessagesNoGapBelowACompletedAlbum(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	alice := model.Sender{TgUserID: 42, FirstName: "Alice"}
+	bob := model.Sender{TgUserID: 7, FirstName: "Bob"}
+	// Alice's album arrives interleaved with Bob's messages (ids: a1 b1 a2 b2 a3).
+	album := func(tg int64, key string) *model.Message {
+		m := photoMsg(tg, key)
+		m.MediaGroupID = "g"
+		return m
+	}
+	ingestAs(t, s, bot, alice, album(1, "bot:a1"))
+	ingestAs(t, s, bot, bob, textMsg(1, "b1"))
+	ingestAs(t, s, bot, alice, album(2, "bot:a2"))
+	ingestAs(t, s, bot, bob, textMsg(2, "b2"))
+	ingestAs(t, s, bot, alice, album(3, "bot:a3"))
+	page, _ := s.ListBotMessages(ctx, bot, 0, 1) // cuts inside the album
+	if len(page) != 5 {
+		var texts []string
+		for _, v := range page {
+			texts = append(texts, v.Text)
+		}
+		t.Fatalf("page has %d messages %v: Bob's messages between album parts were skipped", len(page), texts)
+	}
+	for i := 1; i < len(page); i++ {
+		if page[i].ID <= page[i-1].ID {
+			t.Fatal("page not ascending")
+		}
+	}
+}

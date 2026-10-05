@@ -90,9 +90,12 @@ export function connectEvents(
     };
   };
 
-  /** Replaces the stream now; its onopen then resyncs. */
+  let lastReconnect = 0;
+  /** Replaces the stream now; its onopen then resyncs. A bfcache restore fires both pageshow
+   * and visibilitychange, so a second request right after the first is dropped. */
   const reconnect = () => {
-    if (stopped) return;
+    if (stopped || Date.now() - lastReconnect < 2000) return;
+    lastReconnect = Date.now();
     clearTimeout(timer);
     es?.close();
     dropped = true;
