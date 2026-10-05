@@ -127,6 +127,37 @@ func TestReadEndpoints(t *testing.T) {
 	}
 }
 
+func TestBotTimelineEndpoints(t *testing.T) {
+	e := newReadEnv(t)
+	bots, _ := e.st.ListBots(bg)
+	bot := bots[0].ID
+	bob := &model.Message{TgMessageID: 1, Source: model.SourceBotUpdate, Date: 3, Kind: model.KindText, Text: "from bob", RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`)}
+	e.st.Ingest(bg, store.IngestInput{BotID: bot, Sender: model.Sender{TgUserID: 7, FirstName: "Bob"}, Msg: bob, Now: 3})
+	var msgs []store.MessageView
+	json.Unmarshal(do(e.h, "GET", fmt.Sprintf("/api/bots/%d/messages?limit=10", bot), nil).Body.Bytes(), &msgs)
+	if len(msgs) != 3 || msgs[2].Text != "from bob" || msgs[0].ChatID == msgs[2].ChatID {
+		t.Fatalf("bot messages = %+v", msgs)
+	}
+	json.Unmarshal(do(e.h, "GET", fmt.Sprintf("/api/bots/%d/messages?limit=1&before=%d", bot, msgs[2].ID), nil).Body.Bytes(), &msgs)
+	if len(msgs) != 1 || msgs[0].TgMessageID != 2 {
+		t.Fatalf("bot messages page 2 = %+v", msgs)
+	}
+	json.Unmarshal(do(e.h, "GET", fmt.Sprintf("/api/bots/%d/media?type=media", bot), nil).Body.Bytes(), &msgs)
+	if len(msgs) != 1 || msgs[0].Media[0].State != "done" {
+		t.Fatalf("bot media = %+v", msgs)
+	}
+	for _, p := range []string{
+		fmt.Sprintf("/api/bots/%d/media?type=bogus", bot),
+		fmt.Sprintf("/api/bots/%d/messages?limit=0", bot),
+		"/api/bots/abc/messages",
+		"/api/bots/abc/media?type=media",
+	} {
+		if w := do(e.h, "GET", p, nil); w.Code != 400 {
+			t.Fatalf("%s = %d %s", p, w.Code, w.Body)
+		}
+	}
+}
+
 func TestServeMedia(t *testing.T) {
 	e := newReadEnv(t)
 	p := fmt.Sprintf("/media/%d", e.media)
