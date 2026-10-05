@@ -134,13 +134,22 @@ describe('MediaViewer with an explicit list', () => {
   });
 });
 
+/** Reads the `viewer` marker off the current history entry, typed as the token string it now is
+ * (not the plain `true` the viewer used to push). */
+function viewerToken(): string | undefined {
+  return (history.state as { viewer?: string } | null)?.viewer;
+}
+
 describe('MediaViewer history (system back closes only the viewer)', () => {
-  it('pushes a history entry with viewer:true on open, preserving existing state, without navigating', async () => {
+  it('pushes a history entry with a unique viewer token on open, preserving existing state, without navigating', async () => {
     history.replaceState({ fromChat: true }, '', '/chat/10/article/1');
     const before = history.length;
     await setup();
     expect(history.length).toBe(before + 1);
-    expect(history.state).toEqual({ fromChat: true, viewer: true });
+    const token = viewerToken();
+    expect(typeof token).toBe('string');
+    expect(token).not.toBe(''); // not a bare boolean marker any more
+    expect(history.state).toEqual({ fromChat: true, viewer: token });
     expect(location.pathname).toBe('/chat/10/article/1');
   });
 
@@ -156,14 +165,15 @@ describe('MediaViewer history (system back closes only the viewer)', () => {
     fireEvent.click(screen.getByRole('button', { name: '关闭' }));
     expect(back).toHaveBeenCalledTimes(1);
     expect(store.viewer.value).toBeNull();
-    expect((history.state as { viewer?: boolean } | null)?.viewer).toBeUndefined();
+    expect(viewerToken()).toBeUndefined();
     back.mockRestore();
   });
 
   it('a popstate past the pushed entry closes the viewer without navigating elsewhere', async () => {
     history.replaceState({ fromChat: true }, '', '/chat/10/article/1');
     const { store } = await setup();
-    expect(history.state).toEqual({ fromChat: true, viewer: true });
+    const token = viewerToken();
+    expect(history.state).toEqual({ fromChat: true, viewer: token });
     await act(async () => {
       history.replaceState({ fromChat: true }, '', '/chat/10/article/1'); // what the browser restores on back: same path, no viewer
       window.dispatchEvent(new PopStateEvent('popstate'));
@@ -179,6 +189,21 @@ describe('MediaViewer history (system back closes only the viewer)', () => {
       store.viewer.value = null;
     });
     expect(back).toHaveBeenCalledTimes(1);
+    back.mockRestore();
+  });
+
+  it('closes on the first X press even when the entry below already carries an unrelated, stale viewer marker (e.g. left over from before a reload)', async () => {
+    const { store } = await setup();
+    // Simulates what a real history.back() lands on here: an older entry that still has its own
+    // (different) viewer token from a previous open, instead of a clean "no viewer" state. A
+    // plain boolean marker would see this as "still open" and require a second press.
+    const back = vi.spyOn(history, 'back').mockImplementation(() => {
+      history.replaceState({ viewer: 'stale-token-from-before-reload' }, '', location.href);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(store.viewer.value).toBeNull();
     back.mockRestore();
   });
 });

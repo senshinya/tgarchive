@@ -179,6 +179,89 @@ describe('ArticleReader', () => {
     expect(location.pathname).toBe('/chat/10');
     expect(history.length).toBe(before);
   });
+
+  it('refetches, debounced, on a media.updated event for this message even though it is not in any loaded conversation', async () => {
+    const article = vi.fn(async () => makeArticle({ content: everyNode, media: everyMedia }));
+    const api = fakeApi({ article });
+    const r = renderWithStore(<ArticleReader chatId={10} messageId={1} />, api);
+    await screen.findByRole('heading', { level: 1, name: 'Sample' });
+    expect(article).toHaveBeenCalledTimes(1);
+    expect(r.store.conv(10).loaded).toBe(false); // the deep-link case: no conversation has loaded this message
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        await r.store.handleEvent({ type: 'media.updated', data: { media_id: 201, message_ids: [1] } });
+      });
+      expect(article).toHaveBeenCalledTimes(1); // not yet — still debouncing
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(article).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('collapses several media.updated events in quick succession into exactly one refetch', async () => {
+    const article = vi.fn(async () => makeArticle({ content: everyNode, media: everyMedia }));
+    const api = fakeApi({ article });
+    const r = renderWithStore(<ArticleReader chatId={10} messageId={1} />, api);
+    await screen.findByRole('heading', { level: 1, name: 'Sample' });
+    expect(article).toHaveBeenCalledTimes(1);
+
+    vi.useFakeTimers();
+    try {
+      for (const mediaId of [201, 202, 203]) {
+        await act(async () => {
+          await r.store.handleEvent({ type: 'media.updated', data: { media_id: mediaId, message_ids: [1] } });
+        });
+        await act(async () => { await vi.advanceTimersByTimeAsync(200); }); // less than the 500ms debounce
+      }
+      expect(article).toHaveBeenCalledTimes(1); // the bursts kept resetting the debounce timer
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(article).toHaveBeenCalledTimes(2); // exactly one refetch for the whole burst
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refetches on a message.updated event for this message', async () => {
+    const article = vi.fn(async () => makeArticle({ content: everyNode, media: everyMedia }));
+    const api = fakeApi({ article });
+    const r = renderWithStore(<ArticleReader chatId={10} messageId={1} />, api);
+    await screen.findByRole('heading', { level: 1, name: 'Sample' });
+    expect(article).toHaveBeenCalledTimes(1);
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        await r.store.handleEvent({ type: 'message.updated', data: { chat_id: 10, message_id: 1 } });
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(article).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores events for other messages', async () => {
+    const article = vi.fn(async () => makeArticle({ content: everyNode, media: everyMedia }));
+    const api = fakeApi({ article });
+    const r = renderWithStore(<ArticleReader chatId={10} messageId={1} />, api);
+    await screen.findByRole('heading', { level: 1, name: 'Sample' });
+    expect(article).toHaveBeenCalledTimes(1);
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        await r.store.handleEvent({ type: 'media.updated', data: { media_id: 9, message_ids: [999] } });
+        await r.store.handleEvent({ type: 'message.updated', data: { chat_id: 10, message_id: 999 } });
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(article).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 class FakeES implements EventSourceLike {
@@ -227,7 +310,9 @@ describe('ArticleReader in the app', () => {
     // Open the viewer on one of the article's photos: pushes one more entry for the same URL.
     fireEvent.click(screen.getByRole('button', { name: '查看图片' }));
     await screen.findByRole('dialog', { name: '媒体查看器' });
-    expect(history.state).toEqual({ fromList: false, fromChat: true, viewer: true });
+    const viewerToken = (history.state as { viewer?: string } | null)?.viewer;
+    expect(typeof viewerToken).toBe('string');
+    expect(history.state).toEqual({ fromList: false, fromChat: true, viewer: viewerToken });
     expect(location.pathname).toBe('/chat/10/article/1');
 
     // System back while the viewer is open: closes only the viewer, not the reader underneath.

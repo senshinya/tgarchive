@@ -53,6 +53,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
   const sharedMediaOpen = signal(false); // right column
   let toastSeq = 0;
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+  const eventListeners = new Set<(ev: ArchiveEvent) => void>();
 
   const botsById = computed(() => new Map(bots.value.map((b) => [b.id, b])));
   // Falls back to "全部" when the selected bot was purged from `bots` but the reload that
@@ -168,7 +169,20 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
     }
   }
 
+  /** Subscribes to every SSE event as handleEvent receives it, regardless of whether handleEvent
+   * itself acts on it (e.g. it only refreshes a message that belongs to an already-loaded
+   * conversation). For components that need to react to an event concerning one specific id that
+   * may not be part of any loaded conversation — e.g. a deep-linked article reader. Returns an
+   * unsubscribe function. */
+  function onEvent(listener: (ev: ArchiveEvent) => void): () => void {
+    eventListeners.add(listener);
+    return () => {
+      eventListeners.delete(listener);
+    };
+  }
+
   async function handleEvent(ev: ArchiveEvent) {
+    for (const l of eventListeners) l(ev);
     switch (ev.type) {
       case 'message.created':
       case 'message.updated':
@@ -253,6 +267,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
     loadOlder,
     refreshMessage,
     handleEvent,
+    onEvent,
     resync,
     deleteMessage,
     retryMedia,

@@ -17,6 +17,13 @@ const ZOOM_STEP = 0.5;
 const SWIPE_H_THRESHOLD = 50; // px; horizontal drag past this (and past the vertical delta) navigates
 const SWIPE_V_THRESHOLD = 80; // px; downward drag past this closes the viewer
 
+/** A fresh, per-open id for the history entry the viewer pushes (see ViewerInner below): unique
+ * enough that it never collides with a stale `viewer` marker left on an older entry (e.g. from
+ * before a reload, or from a previous open that didn't get cleaned up). */
+function newViewerToken(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+}
+
 export function toViewerItems(msgs: Message[]): ViewerItem[] {
   const out: { id: number; item: ViewerItem }[] = [];
   for (const msg of msgs) {
@@ -30,31 +37,40 @@ export function toViewerItems(msgs: Message[]): ViewerItem[] {
 
 function ViewerInner({ target }: { target: ViewerTarget }) {
   const store = useStore();
+  // One unique id per open, not a bare boolean: history.state survives reload/forward, so a
+  // stale `viewer` marker can already sit on the entry this instance is about to push onto (or,
+  // after that push, on the entry it pops back to). Comparing against this specific token — not
+  // mere truthiness — means we only ever treat *our own* pushed entry as "the viewer is open",
+  // so a stale leftover marker elsewhere in history can't make the first Back/X press a no-op.
+  const tokenRef = useRef<string | undefined>(undefined);
+  if (tokenRef.current === undefined) tokenRef.current = newViewerToken();
+  const token = tokenRef.current;
+
   // Closing via UI: if the top history entry is the one we pushed on open (below), go back
   // through it instead of closing directly — the popstate handler below then closes the viewer,
   // keeping the hardware/system back button and these UI controls doing the same thing.
   const close = () => {
-    if ((history.state as { viewer?: boolean } | null)?.viewer) history.back();
+    if ((history.state as { viewer?: string } | null)?.viewer === token) history.back();
     else store.viewer.value = null;
   };
 
   // Opening the viewer pushes one history entry for the SAME url (preserving existing state
   // fields), so the system back button closes only the viewer instead of also leaving whatever
   // was underneath it (the article reader or the chat). Popping past that entry — i.e. a
-  // popstate where the current entry is no longer marked `viewer: true` — closes the viewer
-  // without navigating further; the router re-parses the same path on this pop, which is a
-  // no-op since the path never changed.
+  // popstate where the current entry's `viewer` marker is no longer this open's token — closes
+  // the viewer without navigating further; the router re-parses the same path on this pop, which
+  // is a no-op since the path never changed.
   useEffect(() => {
-    history.pushState({ ...(history.state ?? {}), viewer: true }, '', location.href);
+    history.pushState({ ...(history.state ?? {}), viewer: token }, '', location.href);
     const onPopState = () => {
-      if (!(history.state as { viewer?: boolean } | null)?.viewer) store.viewer.value = null;
+      if ((history.state as { viewer?: string } | null)?.viewer !== token) store.viewer.value = null;
     };
     window.addEventListener('popstate', onPopState);
     return () => {
       window.removeEventListener('popstate', onPopState);
       // Closed some other way (e.g. store.viewer cleared elsewhere) while our entry is still on
       // top: drop it, or the next system back would land on a dead "viewer" entry.
-      if ((history.state as { viewer?: boolean } | null)?.viewer) history.back();
+      if ((history.state as { viewer?: string } | null)?.viewer === token) history.back();
     };
   }, []);
   const listed = 'list' in target ? target : null;

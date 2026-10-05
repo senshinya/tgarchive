@@ -80,8 +80,22 @@ export function navigate(to: Route, opts: NavigateOptions = {}): void {
   route.value = to;
 }
 
+/** Drops a stale `viewer` marker from the current history entry, if one is there. The media
+ * viewer (MediaViewer.tsx) pushes `{ ..., viewer: <token> }` on open and pops it on close, but
+ * history.state survives a reload: reloading while the viewer was open lands back on an entry
+ * that still carries that marker even though nothing in the freshly started app has it open.
+ * Left in place, that marker could make a later open's first Back/X press land on it instead of
+ * closing cleanly. Called once at app start. */
+function stripStaleViewerMarker(): void {
+  const state = history.state as Record<string, unknown> | null;
+  if (!state || !('viewer' in state)) return;
+  const { viewer: _viewer, ...rest } = state;
+  history.replaceState(rest, '', location.href);
+}
+
 /** Keeps `route` in sync with browser back/forward. Returns an unsubscribe function. */
 export function startRouter(): () => void {
+  stripStaleViewerMarker();
   const onPop = () => {
     route.value = parseRoute(location.pathname);
   };

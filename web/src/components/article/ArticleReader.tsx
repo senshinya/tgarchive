@@ -37,6 +37,41 @@ export function ArticleReader({ chatId, messageId }: { chatId: number; messageId
     };
   }, [messageId, msg]);
 
+  // The effect above only reruns when `msg` (from the loaded conversation) changes, so a deep
+  // link to an older message that never gets loaded into any conversation would never see a
+  // later media.updated/message.updated for it. Subscribe directly to every SSE event instead,
+  // debounced ~500ms so a burst of media.updated (one per article image finishing) produces a
+  // single refetch rather than one per event.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = store.onEvent((ev) => {
+      const concerns =
+        (ev.type === 'message.updated' && ev.data.message_id === messageId) ||
+        (ev.type === 'media.updated' && (ev.data.message_ids ?? []).includes(messageId));
+      if (!concerns) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        store.api.article(messageId).then(
+          (a) => {
+            if (!cancelled) {
+              setArticle(a);
+              setError('');
+            }
+          },
+          (e) => {
+            if (!cancelled) setError(errorMessage(e));
+          },
+        );
+      }, 500);
+    });
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [messageId]);
+
   // Opened from the chat: go back through history, so the system back button and this one agree.
   // Deep link: there is nothing of ours to go back to, so replace the entry with the chat.
   const close = () => {

@@ -84,4 +84,19 @@ describe('router', () => {
     expect(location.pathname).toBe('/chat/5/article/6');
     expect(history.state).toEqual({ fromList: false, fromChat: true });
   });
+
+  it('strips a stale history.state.viewer marker on start (e.g. a reload while the media viewer was open left it on the current entry)', () => {
+    history.replaceState({ fromChat: true, viewer: 'token-from-before-reload' }, '', '/chat/5/article/6');
+    const stop = startRouter();
+    expect(history.state).toEqual({ fromChat: true });
+    expect(location.pathname).toBe('/chat/5/article/6'); // only the marker is stripped, nothing navigates
+    stop();
+  });
+
+  it('leaves history.state alone on start when there is no viewer marker', () => {
+    history.replaceState({ fromChat: true }, '', '/chat/5/article/6');
+    const stop = startRouter();
+    expect(history.state).toEqual({ fromChat: true });
+    stop();
+  });
 });
