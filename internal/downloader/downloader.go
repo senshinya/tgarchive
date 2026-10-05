@@ -51,6 +51,11 @@ type Downloader struct {
 	Concurrency int
 	Delays      []time.Duration
 	Now         func() time.Time
+	// Progress holds the byte progress of the downloads in flight.
+	Progress *Tracker
+	// ProgressEvery is how often Run reports progress through the OnProgress handler.
+	ProgressEvery time.Duration
+	onProgress    func(items []Progress, speed int64)
 
 	wake        chan struct{}
 	mu          sync.Mutex
@@ -61,13 +66,19 @@ type Downloader struct {
 func New(st *store.Store, mediaDir string, maxBytes int64, onSettled func(int64)) *Downloader {
 	return &Downloader{
 		st: st, mediaDir: mediaDir, maxBytes: maxBytes, sources: map[string]Source{}, onSettled: onSettled,
-		Concurrency: 4,
-		Delays:      []time.Duration{time.Minute, 5 * time.Minute, 30 * time.Minute},
-		Now:         time.Now,
-		wake:        make(chan struct{}, 1),
-		inflight:    map[int64]bool{},
+		Concurrency:   4,
+		Delays:        []time.Duration{time.Minute, 5 * time.Minute, 30 * time.Minute},
+		Now:           time.Now,
+		wake:          make(chan struct{}, 1),
+		inflight:      map[int64]bool{},
+		Progress:      NewTracker(),
+		ProgressEvery: time.Second,
 	}
 }
+
+// OnProgress sets the handler Run calls every ProgressEvery while downloads are in flight, and
+// once more with an empty list after the last one ends. Call it before Run.
+func (d *Downloader) OnProgress(fn func(items []Progress, speed int64)) { d.onProgress = fn }
 
 func (d *Downloader) Register(prefix string, s Source) { d.sources[prefix] = s }
 
@@ -84,6 +95,13 @@ func (d *Downloader) Run(ctx context.Context) {
 	defer wg.Wait()
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
+	if d.onProgress != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d.reportProgress(ctx)
+		}()
+	}
 	for {
 		due, err := d.st.DueMedia(ctx, d.Now().Unix(), 32)
 		if err != nil && ctx.Err() == nil {
@@ -116,6 +134,24 @@ func (d *Downloader) Run(ctx context.Context) {
 		case <-d.wake:
 		case <-tick.C:
 		}
+	}
+}
+
+func (d *Downloader) reportProgress(ctx context.Context) {
+	t := time.NewTicker(d.ProgressEvery)
+	defer t.Stop()
+	active := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		items, speed := d.Progress.Tick(d.Now())
+		if len(items) > 0 || active {
+			d.onProgress(items, speed)
+		}
+		active = len(items) > 0
 	}
 }
 
@@ -163,7 +199,10 @@ func (d *Downloader) Process(ctx context.Context, m *store.Media) {
 		d.retry(ctx, m, err)
 		return
 	}
-	final, size, err := src.Fetch(ctx, m, abs)
+	d.Progress.start(m.ID, m.Size, d.Now())
+	defer d.Progress.finish(m.ID)
+	fetchCtx := WithProgress(ctx, func(done, total int64) { d.Progress.update(m.ID, done, total) })
+	final, size, err := src.Fetch(fetchCtx, m, abs)
 	if err != nil {
 		if ctx.Err() != nil {
 			return // shutting down: leave it pending for the next start

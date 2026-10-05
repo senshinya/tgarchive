@@ -160,3 +160,142 @@ func TestGetMessageView(t *testing.T) {
 		t.Fatalf("missing message err = %v", err)
 	}
 }
+
+// ingestAs archives msg in the chat of bot × sender.
+func ingestAs(t *testing.T, s *Store, bot int64, sender model.Sender, msg *model.Message) *IngestResult {
+	t.Helper()
+	r, err := s.Ingest(ctx, IngestInput{BotID: bot, Sender: sender, Msg: msg, Now: msg.Date})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func chatIDs(vs []MessageView) []int64 {
+	out := []int64{}
+	for _, v := range vs {
+		out = append(out, v.ChatID)
+	}
+	return out
+}
+
+func TestListBotMessagesMergesSenders(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	other := seedBot(t, s, 888)
+	alice := model.Sender{TgUserID: 42, FirstName: "Alice"}
+	bob := model.Sender{TgUserID: 7, FirstName: "Bob"}
+	a := ingestAs(t, s, bot, alice, textMsg(1, "a1")).ChatID
+	b := ingestAs(t, s, bot, bob, textMsg(1, "b1")).ChatID
+	ingestAs(t, s, bot, alice, textMsg(2, "a2"))
+	ingestAs(t, s, other, alice, textMsg(1, "elsewhere"))
+	ingestAs(t, s, bot, bob, textMsg(2, "b2"))
+
+	page, err := s.ListBotMessages(ctx, bot, 0, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eq(chatIDs(page), []int64{b, a, b}) {
+		t.Fatalf("latest page chats = %v (alice %d bob %d)", chatIDs(page), a, b)
+	}
+	older, _ := s.ListBotMessages(ctx, bot, page[0].ID, 3)
+	if len(older) != 1 || older[0].ChatID != a || older[0].Text != "a1" {
+		t.Fatalf("older page = %+v", older)
+	}
+	if none, _ := s.ListBotMessages(ctx, bot+100, 0, 10); len(none) != 0 {
+		t.Fatalf("unknown bot = %+v", none)
+	}
+}
+
+func TestListBotMessagesAlbumStaysInItsChat(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	alice := model.Sender{TgUserID: 42, FirstName: "Alice"}
+	bob := model.Sender{TgUserID: 7, FirstName: "Bob"}
+	// Bob's message shares a media_group_id string with Alice's album; it must not be pulled in.
+	stray := photoMsg(1, "bot:stray")
+	stray.MediaGroupID = "g"
+	ingestAs(t, s, bot, bob, stray)
+	for i, k := range []string{"bot:a", "bot:b", "bot:c"} {
+		m := photoMsg(int64(1+i), k)
+		m.MediaGroupID = "g"
+		ingestAs(t, s, bot, alice, m)
+	}
+	page, _ := s.ListBotMessages(ctx, bot, 0, 2)
+	if len(page) != 3 {
+		t.Fatalf("album not completed or stray pulled in: %d messages", len(page))
+	}
+	for _, v := range page {
+		if v.Media[0].Kind != "photo" || v.ChatID != page[0].ChatID {
+			t.Fatalf("page mixes chats: %v", chatIDs(page))
+		}
+	}
+}
+
+func TestListBotMessagesResolvesRepliesPerChat(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	alice := model.Sender{TgUserID: 42, FirstName: "Alice"}
+	bob := model.Sender{TgUserID: 7, FirstName: "Bob"}
+	ingestAs(t, s, bot, alice, textMsg(1, "alice original"))
+	bobFirst := ingestAs(t, s, bot, bob, textMsg(1, "bob original"))
+	reply := textMsg(2, "re")
+	reply.ReplyToTgMessageID = 1
+	ingestAs(t, s, bot, bob, reply)
+	page, _ := s.ListBotMessages(ctx, bot, 0, 10)
+	last := page[len(page)-1]
+	if last.Reply == nil || last.Reply.ID != bobFirst.MessageID || last.Reply.Text != "bob original" {
+		t.Fatalf("reply = %+v", last.Reply)
+	}
+}
+
+func TestListBotMedia(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	alice := model.Sender{TgUserID: 42, FirstName: "Alice"}
+	bob := model.Sender{TgUserID: 7, FirstName: "Bob"}
+	ingestAs(t, s, bot, alice, photoMsg(1, "bot:p1"))
+	ingestAs(t, s, bot, bob, textMsg(1, "plain"))
+	ingestAs(t, s, bot, bob, photoMsg(2, "bot:p2"))
+	got, err := s.ListBotMedia(ctx, bot, "media", 0, 50)
+	if err != nil || len(got) != 2 || got[0].Media[0].State != StatePending {
+		t.Fatalf("bot media = %+v, %v", got, err)
+	}
+	if got[0].ChatID == got[1].ChatID {
+		t.Fatal("expected media from both senders")
+	}
+	if _, err := s.ListBotMedia(ctx, bot, "bogus", 0, 50); !errors.Is(err, ErrBadMediaType) {
+		t.Fatalf("bad type err = %v", err)
+	}
+}
+
+func TestListBotMessagesNoGapBelowACompletedAlbum(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	alice := model.Sender{TgUserID: 42, FirstName: "Alice"}
+	bob := model.Sender{TgUserID: 7, FirstName: "Bob"}
+	// Alice's album arrives interleaved with Bob's messages (ids: a1 b1 a2 b2 a3).
+	album := func(tg int64, key string) *model.Message {
+		m := photoMsg(tg, key)
+		m.MediaGroupID = "g"
+		return m
+	}
+	ingestAs(t, s, bot, alice, album(1, "bot:a1"))
+	ingestAs(t, s, bot, bob, textMsg(1, "b1"))
+	ingestAs(t, s, bot, alice, album(2, "bot:a2"))
+	ingestAs(t, s, bot, bob, textMsg(2, "b2"))
+	ingestAs(t, s, bot, alice, album(3, "bot:a3"))
+	page, _ := s.ListBotMessages(ctx, bot, 0, 1) // cuts inside the album
+	if len(page) != 5 {
+		var texts []string
+		for _, v := range page {
+			texts = append(texts, v.Text)
+		}
+		t.Fatalf("page has %d messages %v: Bob's messages between album parts were skipped", len(page), texts)
+	}
+	for i := 1; i < len(page); i++ {
+		if page[i].ID <= page[i-1].ID {
+			t.Fatal("page not ascending")
+		}
+	}
+}

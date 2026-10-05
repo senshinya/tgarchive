@@ -41,6 +41,16 @@ type Server struct {
 	AvatarDir  string
 	HTTP       *http.Client
 	Now        func() time.Time
+	PingEvery  time.Duration // SSE heartbeat interval; 0 means defaultPingEvery
+}
+
+const defaultPingEvery = 25 * time.Second
+
+func (s *Server) pingEvery() time.Duration {
+	if s.PingEvery > 0 {
+		return s.PingEvery
+	}
+	return defaultPingEvery
 }
 
 func (s *Server) Handler() http.Handler {
@@ -50,10 +60,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/chats", s.listChats)
 	mux.HandleFunc("GET /api/chats/{id}/messages", s.listMessages)
 	mux.HandleFunc("GET /api/chats/{id}/media", s.listChatMedia)
+	mux.HandleFunc("GET /api/bots/{id}/messages", s.listBotMessages)
+	mux.HandleFunc("GET /api/bots/{id}/media", s.listBotMedia)
 	mux.HandleFunc("GET /api/messages/{id}", s.getMessage)
 	mux.HandleFunc("GET /api/messages/{id}/article", s.getArticle)
 	mux.HandleFunc("DELETE /api/messages/{id}", s.deleteMessage)
 	mux.HandleFunc("POST /api/media/{id}/retry", s.retryMedia)
+	mux.HandleFunc("GET /api/downloads", s.downloads)
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("GET /media/{id}", s.serveMedia)
 	mux.HandleFunc("GET /avatars/{kind}/{id}", s.serveAvatar)

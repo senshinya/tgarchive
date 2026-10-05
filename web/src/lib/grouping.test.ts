@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../api/types';
 import { groupMessages, type ListEntry } from './grouping';
+import { makeMessage } from '../test/fixtures';
 
 const at = (d: number, h: number, m = 0) => new Date(2026, 9, d, h, m).getTime() / 1000;
 
@@ -70,5 +71,17 @@ describe('groupMessages', () => {
 
   it('returns nothing for an empty chat', () => {
     expect(groupMessages([], now)).toEqual([]);
+  });
+
+  it('starts a new group when the chat (sender) changes', () => {
+    const base = 1_790_000_000;
+    const msgs = [
+      makeMessage({ id: 1, chat_id: 10, date: base }),
+      makeMessage({ id: 2, chat_id: 11, date: base + 1 }),
+      makeMessage({ id: 3, chat_id: 11, date: base + 2 }),
+      makeMessage({ id: 4, chat_id: 10, date: base + 3 }),
+    ];
+    const groups = groupMessages(msgs).filter((e) => e.kind === 'group');
+    expect(groups.map((g) => (g.kind === 'group' ? g.bubbles.length : 0))).toEqual([1, 2, 1]);
   });
 });

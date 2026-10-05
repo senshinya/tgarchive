@@ -127,6 +127,37 @@ func TestReadEndpoints(t *testing.T) {
 	}
 }
 
+func TestBotTimelineEndpoints(t *testing.T) {
+	e := newReadEnv(t)
+	bots, _ := e.st.ListBots(bg)
+	bot := bots[0].ID
+	bob := &model.Message{TgMessageID: 1, Source: model.SourceBotUpdate, Date: 3, Kind: model.KindText, Text: "from bob", RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`)}
+	e.st.Ingest(bg, store.IngestInput{BotID: bot, Sender: model.Sender{TgUserID: 7, FirstName: "Bob"}, Msg: bob, Now: 3})
+	var msgs []store.MessageView
+	json.Unmarshal(do(e.h, "GET", fmt.Sprintf("/api/bots/%d/messages?limit=10", bot), nil).Body.Bytes(), &msgs)
+	if len(msgs) != 3 || msgs[2].Text != "from bob" || msgs[0].ChatID == msgs[2].ChatID {
+		t.Fatalf("bot messages = %+v", msgs)
+	}
+	json.Unmarshal(do(e.h, "GET", fmt.Sprintf("/api/bots/%d/messages?limit=1&before=%d", bot, msgs[2].ID), nil).Body.Bytes(), &msgs)
+	if len(msgs) != 1 || msgs[0].TgMessageID != 2 {
+		t.Fatalf("bot messages page 2 = %+v", msgs)
+	}
+	json.Unmarshal(do(e.h, "GET", fmt.Sprintf("/api/bots/%d/media?type=media", bot), nil).Body.Bytes(), &msgs)
+	if len(msgs) != 1 || msgs[0].Media[0].State != "done" {
+		t.Fatalf("bot media = %+v", msgs)
+	}
+	for _, p := range []string{
+		fmt.Sprintf("/api/bots/%d/media?type=bogus", bot),
+		fmt.Sprintf("/api/bots/%d/messages?limit=0", bot),
+		"/api/bots/abc/messages",
+		"/api/bots/abc/media?type=media",
+	} {
+		if w := do(e.h, "GET", p, nil); w.Code != 400 {
+			t.Fatalf("%s = %d %s", p, w.Code, w.Body)
+		}
+	}
+}
+
 func TestServeMedia(t *testing.T) {
 	e := newReadEnv(t)
 	p := fmt.Sprintf("/media/%d", e.media)
@@ -201,7 +232,11 @@ func TestSSE(t *testing.T) {
 		t.Fatalf("content-type = %q", ct)
 	}
 	rd := bufio.NewReader(resp.Body)
-	rd.ReadString('\n') // ": ok"
+	if line, _ := rd.ReadString('\n'); line != "event: ping\n" {
+		t.Fatalf("first line = %q, want an immediate ping event", line)
+	}
+	rd.ReadString('\n') // data
+	rd.ReadString('\n') // blank
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		e.hub.Publish(events.Event{Type: "message.created", Data: map[string]int64{"chat_id": 1, "message_id": 2}})
@@ -221,6 +256,35 @@ func TestSSE(t *testing.T) {
 		}
 	}
 	t.Fatal("event not received")
+}
+
+func TestSSEPeriodicPing(t *testing.T) {
+	e := newReadEnv(t)
+	e.srv.PingEvery = 20 * time.Millisecond
+	ts := httptest.NewServer(e.h)
+	defer ts.Close()
+	req, _ := http.NewRequest("GET", ts.URL+"/api/events", nil)
+	req.Header.Set("Remote-User", "shinya")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	rd := bufio.NewReader(resp.Body)
+	pings := 0
+	deadline := time.Now().Add(3 * time.Second)
+	for pings < 3 && time.Now().Before(deadline) {
+		line, err := rd.ReadString('\n')
+		if err != nil {
+			break
+		}
+		if line == "event: ping\n" {
+			pings++
+		}
+	}
+	if pings < 3 {
+		t.Fatalf("got %d ping events", pings)
+	}
 }
 
 func TestServeMediaContentSafety(t *testing.T) {
@@ -307,5 +371,81 @@ func TestGetMessage(t *testing.T) {
 	}
 	if w := do(e.h, "GET", fmt.Sprintf("/api/messages/%d", e.photoMsg), nil); w.Code != 404 || !strings.Contains(w.Body.String(), `"error"`) {
 		t.Fatalf("deleted = %d %s", w.Code, w.Body)
+	}
+}
+
+// heldSource reports half of a 10-byte file, then blocks until its context ends.
+type heldSource struct{ started chan struct{} }
+
+func (h heldSource) Fetch(c context.Context, _ *store.Media, _ string) (string, int64, error) {
+	downloader.Report(c, 5, 10)
+	close(h.started)
+	<-c.Done()
+	return "", 0, c.Err()
+}
+
+func TestDownloadsEndpoint(t *testing.T) {
+	e := newReadEnv(t)
+	bots, _ := e.st.ListBots(bg)
+	ingestPhoto := func(tgID int64, key string) *store.IngestResult {
+		m := &model.Message{TgMessageID: tgID, Source: model.SourceBotUpdate, Date: tgID, Kind: model.KindPhoto, RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`),
+			Media: []model.Media{{DedupeKey: key, Kind: "photo", Mime: "image/jpeg", Size: 10, Role: model.RoleMain}}}
+		r, err := e.st.Ingest(bg, store.IngestInput{BotID: bots[0].ID, Sender: model.Sender{TgUserID: 42}, Msg: m, Now: tgID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	active := ingestPhoto(10, "bot:active")
+	ingestPhoto(11, "bot:queued")
+	failed := ingestPhoto(12, "bot:failed")
+	due, _ := e.st.DueMedia(bg, 1<<40, 10)
+	byKey := map[string]store.Media{}
+	for _, m := range due {
+		byKey[m.DedupeKey] = m
+	}
+	e.st.MarkMediaFailed(bg, byKey["bot:failed"].ID, 3, "HTTP 500")
+
+	src := heldSource{started: make(chan struct{})}
+	e.srv.Downloader.Register("bot", src)
+	c, cancel := context.WithCancel(bg)
+	done := make(chan struct{})
+	m := byKey["bot:active"]
+	go func() { e.srv.Downloader.Process(c, &m); close(done) }()
+	<-src.started
+	defer func() { cancel(); <-done }()
+
+	w := do(e.h, "GET", "/api/downloads", nil)
+	var got struct {
+		Active []struct {
+			MediaID   int64  `json:"media_id"`
+			MessageID int64  `json:"message_id"`
+			ChatID    int64  `json:"chat_id"`
+			Done      int64  `json:"done"`
+			Total     int64  `json:"total"`
+			Kind      string `json:"kind"`
+		} `json:"active"`
+		Queued struct{ Count, Bytes int64 } `json:"queued"`
+		Failed []struct {
+			MessageID int64  `json:"message_id"`
+			Error     string `json:"error"`
+		} `json:"failed"`
+		Speed *int64 `json:"speed"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 {
+		t.Fatalf("downloads = %d %s", w.Code, w.Body)
+	}
+	if len(got.Active) != 1 || got.Active[0].MediaID != m.ID || got.Active[0].MessageID != active.MessageID ||
+		got.Active[0].ChatID != active.ChatID || got.Active[0].Done != 5 || got.Active[0].Total != 10 || got.Active[0].Kind != "photo" {
+		t.Fatalf("active = %+v", got.Active)
+	}
+	if got.Queued.Count != 1 || got.Queued.Bytes != 10 {
+		t.Fatalf("queued = %+v", got.Queued)
+	}
+	if len(got.Failed) != 1 || got.Failed[0].MessageID != failed.MessageID || got.Failed[0].Error != "HTTP 500" {
+		t.Fatalf("failed = %+v", got.Failed)
+	}
+	if got.Speed == nil {
+		t.Fatal("speed missing")
 	}
 }

@@ -81,6 +81,13 @@ export function formatSize(bytes: number): string {
   return `${v.toFixed(1).replace(/\.0$/, '')} ${units[i]}`;
 }
 
+/** Download progress: "12.3 MB / 1.2 GB"; just the size so far when the total is unknown;
+ * "下载中…" until the first byte. */
+export function formatProgress(done: number, total: number): string {
+  if (done <= 0) return total > 0 ? `下载中… · ${formatSize(total)}` : '下载中…';
+  return total > 0 ? `${formatSize(Math.min(done, total))} / ${formatSize(total)}` : `已下载 ${formatSize(done)}`;
+}
+
 /** 0:07 / 12:34 / 1:02:03 */
 export function formatDuration(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds || 0));

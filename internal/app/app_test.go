@@ -180,6 +180,13 @@ func TestRestartResumes(t *testing.T) {
 	dataDir := t.TempDir()
 
 	a1 := start(t, cfgFor(fake, dataDir))
+	a1Closed := false
+	t.Cleanup(func() { // on an early failure: release held getFiles so Close cannot hang
+		if !a1Closed {
+			fake.HoldFiles(false)
+			a1.Close()
+		}
+	})
 	addBotAndWhitelist(t, a1.Handler, 42)
 	fake.PushMessage(tgtest.PhotoMsg(1, 42, "ph"))
 	eventually(t, "👀 before restart", func() bool { e := emojis(fake); return len(e) == 1 && e[0] == "👀" })
@@ -192,6 +199,7 @@ func TestRestartResumes(t *testing.T) {
 		return false
 	})
 	a1.Close()
+	a1Closed = true
 
 	fake.HoldFiles(false)
 	n := len(fake.Calls("getUpdates"))

@@ -1,21 +1,24 @@
 import { ArrowDown, Copy, Download, Trash2 } from 'lucide-preact';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { errorMessage, mediaUrl } from '../../api/client';
-import type { Message } from '../../api/types';
+import { avatarUrl, errorMessage, mediaUrl } from '../../api/client';
+import type { Chat, Message } from '../../api/types';
 import { senderName } from '../../lib/format';
 import { groupMessages, type ListEntry } from '../../lib/grouping';
 import { useStore } from '../../state/store';
+import { Avatar } from '../../ui/Avatar';
 import { ContextMenu, type MenuItem } from '../../ui/ContextMenu';
 import { ConfirmDialog } from '../../ui/Modal';
 import { Spinner } from '../../ui/Spinner';
 import { mainMedia } from '../media/util';
-import { MessageBubble } from './MessageBubble';
+import { MessageBubble, type SenderInfo } from './MessageBubble';
 import './message.scss';
 
 /** Load older history when the user scrolls within this many px of the top. */
 export const LOAD_OLDER_THRESHOLD = 400;
 const AT_BOTTOM_PX = 100;
 const SHOW_DOWN_PX = 300;
+/** How many older pages a jump from the downloads panel may load looking for its message. */
+const JUMP_MAX_PAGES = 20;
 
 function download(href: string) {
   const a = document.createElement('a');
@@ -26,11 +29,18 @@ function download(href: string) {
   a.remove();
 }
 
+function senderInfo(chat: Chat | undefined, fallbackPeer: number): SenderInfo {
+  return chat ? { name: senderName(chat.sender), peerId: chat.sender.tg_user_id } : { name: '', peerId: fallbackPeer };
+}
+
+/** A conversation: one chat (positive chatId), or a bot's merged timeline (chatId = -botId), where
+ * each group of messages is labelled with its sender, Telegram group-chat style. */
 export function MessageList({ chatId }: { chatId: number }) {
   const store = useStore();
   const conv = store.conv(chatId);
-  const chat = store.chats.value.find((c) => c.id === chatId);
-  const sender = chat ? { name: senderName(chat.sender), peerId: chat.sender.tg_user_id } : { name: '', peerId: chatId };
+  const merged = chatId < 0;
+  const chatsById = new Map(store.chats.value.map((c) => [c.id, c]));
+  const senderOf = (msgChatId: number) => senderInfo(chatsById.get(msgChatId), msgChatId);
   const entries = useMemo(() => groupMessages(conv.items), [conv.items]);
   // Each day's pill must stick only within its own day (Web A behaviour): nest it as the
   // first child of a per-day container so the next day's container pushes it out, instead of
@@ -82,6 +92,40 @@ export function MessageList({ chatId }: { chatId: number }) {
     // A first page shorter than the viewport never fires scroll events: keep filling.
     if (conv.loaded && conv.hasMore && el.scrollHeight - el.clientHeight < LOAD_OLDER_THRESHOLD) void store.loadOlder(chatId);
   }, [conv.items]);
+
+  // The downloads panel asks for a message: load older pages until it shows up (up to
+  // JUMP_MAX_PAGES), then scroll to it and flash it. A request for another conversation, or one
+  // left over when this list goes away, is dropped.
+  const jumpPages = useRef({ for: null as unknown, pages: 0 }); // pages loaded for the current jump
+  const jump = store.jumpTo.value;
+  useEffect(() => {
+    if (!jump) return;
+    if (jump.key !== chatId) return;
+    if (jumpPages.current.for !== jump) jumpPages.current = { for: jump, pages: 0 };
+    const el = ref.current?.querySelector(`[data-message-id="${jump.messageId}"]`)?.closest('.Message') as HTMLElement | null | undefined;
+    if (conv.items.some((m) => m.id === jump.messageId) && el) {
+      store.jumpTo.value = null;
+      el.scrollIntoView?.({ block: 'center' });
+      el.classList.remove('highlight');
+      void el.offsetWidth;
+      el.classList.add('highlight');
+      return;
+    }
+    if (!conv.loaded || conv.loading) return;
+    const oldest = conv.items[0]?.id ?? 0;
+    if (conv.hasMore && jump.messageId < oldest && jumpPages.current.pages < JUMP_MAX_PAGES) {
+      jumpPages.current.pages++;
+      void store.loadOlder(chatId);
+    } else if (!conv.items.some((m) => m.id === jump.messageId)) {
+      store.jumpTo.value = null; // not in this conversation, deleted, or too far back
+    }
+  }, [conv.items, conv.loaded, conv.loading, jump]);
+  useEffect(
+    () => () => {
+      if (store.jumpTo.value?.key === chatId) store.jumpTo.value = null;
+    },
+    [],
+  );
 
   const onScroll = () => {
     const el = ref.current;
@@ -163,13 +207,36 @@ export function MessageList({ chatId }: { chatId: number }) {
               <div class="sticky-date">
                 <span>{d.label}</span>
               </div>
-              {d.groups.map((g) => (
-                <div class="message-group" key={g.key}>
-                  {g.bubbles.map((b) => (
-                    <MessageBubble key={b.key} bubble={b} sender={sender} onMenu={(x, y, msg) => setMenu({ x, y, msg })} />
-                  ))}
-                </div>
-              ))}
+              {d.groups.map((g) => {
+                const first = g.bubbles[0];
+                const groupChat = (first.kind === 'album' ? first.msgs[0] : first.msg).chat_id;
+                const sender = senderOf(groupChat);
+                const chat = chatsById.get(groupChat);
+                return (
+                  <div class={`message-group${merged ? ' with-avatar' : ''}`} key={g.key}>
+                    {merged && (
+                      <div class="message-group-avatar">
+                        <Avatar
+                          name={sender.name}
+                          peerId={sender.peerId}
+                          src={chat?.sender.has_avatar ? avatarUrl('senders', chat.sender.tg_user_id) : null}
+                          size="small"
+                        />
+                      </div>
+                    )}
+                    {g.bubbles.map((b) => (
+                      <MessageBubble
+                        key={b.key}
+                        bubble={b}
+                        sender={sender}
+                        convKey={chatId}
+                        showName={merged && b.first}
+                        onMenu={(x, y, msg) => setMenu({ x, y, msg })}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
             </section>
           ))}
         </div>

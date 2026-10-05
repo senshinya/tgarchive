@@ -138,24 +138,55 @@ func collectViews(rows *sql.Rows, err error) ([]MessageView, error) {
 	return out, rows.Err()
 }
 
+// scope selects the messages of one chat, or of every chat of one bot (the merged per-bot timeline).
+type scope struct {
+	cond string // SQL condition on messages, with one placeholder
+	arg  int64
+}
+
+func chatScope(chatID int64) scope { return scope{"chat_id = ?", chatID} }
+
+func botScope(botID int64) scope {
+	return scope{"chat_id IN (SELECT id FROM chats WHERE bot_id = ?)", botID}
+}
+
 func (s *Store) ListMessages(ctx context.Context, chatID, beforeID int64, limit int) ([]MessageView, error) {
+	return s.listMessages(ctx, chatScope(chatID), beforeID, limit)
+}
+
+// ListBotMessages pages through every chat of one bot as a single timeline.
+func (s *Store) ListBotMessages(ctx context.Context, botID, beforeID int64, limit int) ([]MessageView, error) {
+	return s.listMessages(ctx, botScope(botID), beforeID, limit)
+}
+
+func (s *Store) listMessages(ctx context.Context, sc scope, beforeID int64, limit int) ([]MessageView, error) {
 	views, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
-		WHERE chat_id = ? AND deleted_at = 0 AND (? = 0 OR id < ?) ORDER BY id DESC LIMIT ?`, chatID, beforeID, beforeID, limit))
+		WHERE `+sc.cond+` AND deleted_at = 0 AND (? = 0 OR id < ?) ORDER BY id DESC LIMIT ?`, sc.arg, beforeID, beforeID, limit))
 	if err != nil {
 		return nil, err
 	}
-	// Never cut an album at the page boundary: pull in the rest of the oldest message's group.
+	// Never cut an album at the page boundary: extend the page down to the lowest id of the
+	// oldest message's group (an album lives in one chat). Everything in scope above that id is
+	// included too, so a merged timeline whose albums interleave with other senders' messages
+	// has no gap for the next page (which starts below this page's oldest id) to skip over.
 	if n := len(views); n > 0 && views[n-1].MediaGroupID != "" {
 		oldest := views[n-1]
-		more, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
-			WHERE chat_id = ? AND deleted_at = 0 AND media_group_id = ? AND id < ? ORDER BY id DESC`, chatID, oldest.MediaGroupID, oldest.ID))
-		if err != nil {
+		var low sql.NullInt64
+		if err := s.db.QueryRowContext(ctx, `SELECT MIN(id) FROM messages
+			WHERE chat_id = ? AND deleted_at = 0 AND media_group_id = ? AND id < ?`, oldest.ChatID, oldest.MediaGroupID, oldest.ID).Scan(&low); err != nil {
 			return nil, err
 		}
-		views = append(views, more...)
+		if low.Valid {
+			more, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
+				WHERE `+sc.cond+` AND deleted_at = 0 AND id >= ? AND id < ? ORDER BY id DESC`, sc.arg, low.Int64, oldest.ID))
+			if err != nil {
+				return nil, err
+			}
+			views = append(views, more...)
+		}
 	}
 	slices.Reverse(views)
-	if err := s.hydrate(ctx, chatID, views); err != nil {
+	if err := s.hydrate(ctx, views); err != nil {
 		return nil, err
 	}
 	return views, nil
@@ -170,13 +201,22 @@ func (s *Store) GetMessageView(ctx context.Context, id int64) (MessageView, erro
 	if len(views) == 0 {
 		return MessageView{}, ErrNotFound
 	}
-	if err := s.hydrate(ctx, views[0].ChatID, views); err != nil {
+	if err := s.hydrate(ctx, views); err != nil {
 		return MessageView{}, err
 	}
 	return views[0], nil
 }
 
 func (s *Store) ListChatMedia(ctx context.Context, chatID int64, typ string, beforeID int64, limit int) ([]MessageView, error) {
+	return s.listMedia(ctx, chatScope(chatID), typ, beforeID, limit)
+}
+
+// ListBotMedia is ListChatMedia over every chat of one bot.
+func (s *Store) ListBotMedia(ctx context.Context, botID int64, typ string, beforeID int64, limit int) ([]MessageView, error) {
+	return s.listMedia(ctx, botScope(botID), typ, beforeID, limit)
+}
+
+func (s *Store) listMedia(ctx context.Context, sc scope, typ string, beforeID int64, limit int) ([]MessageView, error) {
 	var cond string
 	switch typ {
 	case "media":
@@ -191,18 +231,18 @@ func (s *Store) ListChatMedia(ctx context.Context, chatID int64, typ string, bef
 		return nil, ErrBadMediaType
 	}
 	views, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
-		WHERE chat_id = ? AND deleted_at = 0 AND (? = 0 OR id < ?) AND `+cond+` ORDER BY id DESC LIMIT ?`,
-		chatID, beforeID, beforeID, limit))
+		WHERE `+sc.cond+` AND deleted_at = 0 AND (? = 0 OR id < ?) AND `+cond+` ORDER BY id DESC LIMIT ?`,
+		sc.arg, beforeID, beforeID, limit))
 	if err != nil {
 		return nil, err
 	}
-	if err := s.hydrate(ctx, chatID, views); err != nil {
+	if err := s.hydrate(ctx, views); err != nil {
 		return nil, err
 	}
 	return views, nil
 }
 
-func (s *Store) hydrate(ctx context.Context, chatID int64, views []MessageView) error {
+func (s *Store) hydrate(ctx context.Context, views []MessageView) error {
 	if len(views) == 0 {
 		return nil
 	}
@@ -247,7 +287,7 @@ func (s *Store) hydrate(ctx context.Context, chatID int64, views []MessageView) 
 		}
 		var rv ReplyView
 		err := s.db.QueryRowContext(ctx, `SELECT id, kind, substr(text, 1, 200) FROM messages
-			WHERE chat_id = ? AND source = ? AND tg_message_id = ? AND deleted_at = 0`, chatID, model.SourceBotUpdate, r).Scan(&rv.ID, &rv.Kind, &rv.Text)
+			WHERE chat_id = ? AND source = ? AND tg_message_id = ? AND deleted_at = 0`, views[i].ChatID, model.SourceBotUpdate, r).Scan(&rv.ID, &rv.Kind, &rv.Text)
 		if err == nil {
 			views[i].Reply = &rv
 		} else if !errors.Is(err, sql.ErrNoRows) {

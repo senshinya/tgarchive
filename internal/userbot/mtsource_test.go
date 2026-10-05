@@ -13,6 +13,7 @@ import (
 	"github.com/gotd/td/tgmock"
 
 	"tgarchive/internal/convert/mtproto"
+	"tgarchive/internal/downloader"
 	"tgarchive/internal/store"
 )
 
@@ -53,9 +54,16 @@ func TestMTSourceDownloads(t *testing.T) {
 		return nil, nil
 	})
 	dir := t.TempDir()
-	path, size, err := src.Fetch(ctx, mtMedia(t, []byte{1}), filepath.Join(dir, "abc"))
+	m := mtMedia(t, []byte{1})
+	m.Size = int64(len(data))
+	var last [2]int64
+	pc := downloader.WithProgress(ctx, func(done, total int64) { last = [2]int64{done, total} })
+	path, size, err := src.Fetch(pc, m, filepath.Join(dir, "abc"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if last != [2]int64{size, size} {
+		t.Fatalf("progress = %v, want %d of %d", last, size, size)
 	}
 	got, _ := os.ReadFile(path)
 	if path != filepath.Join(dir, "abc.jpg") || size != int64(len(data)) || string(got) != string(data) {

@@ -87,6 +87,9 @@ func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer, w
 		ids, _ := st.MessagesForMedia(ctx, mediaID)
 		hub.Publish(events.Event{Type: "media.updated", Data: map[string]any{"media_id": mediaID, "message_ids": ids}})
 	})
+	dl.OnProgress(func(items []downloader.Progress, speed int64) {
+		hub.Publish(events.Event{Type: "download.progress", Data: map[string]any{"items": items, "speed": speed}})
+	})
 	dl.Register("bot", &downloader.BotSource{Clients: clients.Get, Mapper: mapper})
 	ub := userbot.New(st, box, tg, dialer, notifier)
 	dl.Register("mt", &userbot.MTSource{API: ub})

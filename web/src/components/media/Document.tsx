@@ -1,25 +1,29 @@
-import { CircleAlert, Download } from 'lucide-preact';
+import { CircleAlert, Clock, Download } from 'lucide-preact';
 import { mediaUrl } from '../../api/client';
 import type { Media, Message } from '../../api/types';
 import { fileColor, fileExtension, formatSize, kindLabel } from '../../lib/format';
-import { Spinner } from '../../ui/Spinner';
-import { RetryButton, inlineStatus } from './MediaStatus';
+import { useStore } from '../../state/store';
+import { ProgressRing } from '../../ui/ProgressRing';
+import { RetryButton, inlineStatus, progressFraction } from './MediaStatus';
 import { mainMedia, readyThumb } from './util';
 import './media.scss';
 
 /** File row: dog-eared extension tile (or thumbnail), name, size; downloads when archived. */
 export function Document({ msg, media }: { msg: Message; media?: Media }) {
+  const store = useStore();
   const main = media ?? mainMedia(msg);
   if (!main) return null;
+  const progress = store.progress.value.get(main.id);
   const ext = fileExtension(main.file_name, main.mime);
   const thumb = readyThumb(msg);
   const done = main.state === 'done';
-  const status = inlineStatus(main);
+  const status = inlineStatus(main, progress);
   const tile = (
     <>
       {thumb ? <img src={mediaUrl(thumb.id)} alt="" /> : <span class="File-ext">{ext}</span>}
       <span class="File-overlay">
-        {main.state === 'pending' && <Spinner size={24} color="#fff" />}
+        {main.state === 'pending' && progress && <ProgressRing value={progressFraction(progress)} size={36} />}
+        {main.state === 'pending' && !progress && <Clock size={24} />}
         {(main.state === 'failed' || main.state === 'too_large') && <CircleAlert size={24} />}
         {done && <Download size={24} class="File-download" />}
       </span>
@@ -50,7 +54,7 @@ export function Document({ msg, media }: { msg: Message; media?: Media }) {
           {status ? (
             <>
               <span class={main.state === 'pending' ? '' : 'File-error'}>{status}</span>
-              {main.size > 0 && <span> · {formatSize(main.size)}</span>}
+              {main.size > 0 && !progress && <span> · {formatSize(main.size)}</span>}
               {main.state === 'failed' && <RetryButton msg={msg} media={main} />}
             </>
           ) : (

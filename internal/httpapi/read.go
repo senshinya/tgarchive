@@ -89,6 +89,38 @@ func (s *Server) listChatMedia(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msgs)
 }
 
+func (s *Server) listBotMessages(w http.ResponseWriter, r *http.Request) {
+	botID, ok := pathID(r, "id")
+	before, ok2 := queryInt(r, "before", 0, 0, 1<<62)
+	limit, ok3 := queryInt(r, "limit", 50, 1, 100)
+	if !ok || !ok2 || !ok3 {
+		writeErr(w, http.StatusBadRequest, "bad bot id, before or limit")
+		return
+	}
+	msgs, err := s.Store.ListBotMessages(r.Context(), botID, before, int(limit))
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
+func (s *Server) listBotMedia(w http.ResponseWriter, r *http.Request) {
+	botID, ok := pathID(r, "id")
+	before, ok2 := queryInt(r, "before", 0, 0, 1<<62)
+	limit, ok3 := queryInt(r, "limit", 50, 1, 100)
+	if !ok || !ok2 || !ok3 {
+		writeErr(w, http.StatusBadRequest, "bad bot id, before or limit")
+		return
+	}
+	msgs, err := s.Store.ListBotMedia(r.Context(), botID, r.URL.Query().Get("type"), before, int(limit))
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
 func (s *Server) getMessage(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r, "id")
 	if !ok {
@@ -162,9 +194,12 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	ch, cancel := s.Hub.Subscribe()
 	defer cancel()
-	fmt.Fprint(w, ": ok\n\n")
+	// Heartbeats are named events, not SSE comments: the page cannot see comments, and it needs
+	// to notice a stream that a frozen background tab left silently dead.
+	const pingEvent = "event: ping\ndata: {}\n\n"
+	fmt.Fprint(w, pingEvent)
 	fl.Flush()
-	ping := time.NewTicker(25 * time.Second)
+	ping := time.NewTicker(s.pingEvery())
 	defer ping.Stop()
 	for {
 		select {
@@ -178,7 +213,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.Type, data)
 			fl.Flush()
 		case <-ping.C:
-			fmt.Fprint(w, ": ping\n\n")
+			fmt.Fprint(w, pingEvent)
 			fl.Flush()
 		}
 	}

@@ -1,7 +1,7 @@
-import { act, fireEvent, screen } from '@testing-library/preact';
+import { act, fireEvent, screen, waitFor } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { navigate, route } from '../../lib/router';
-import { fakeApi, makeChat } from '../../test/fixtures';
+import { fakeApi, makeBot, makeChat, makeMessage } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
 import { MiddleColumn } from './MiddleColumn';
 
@@ -49,5 +49,81 @@ describe('MiddleColumn back button', () => {
     expect(back).not.toHaveBeenCalled();
     expect(route.value).toEqual({ name: 'home' });
     back.mockRestore();
+  });
+});
+
+describe('MiddleColumn bot timeline', () => {
+  it('shows the bot and its sender count, and labels each sender group', async () => {
+    const api = fakeApi({
+      bots: vi.fn(async () => [makeBot({ id: 1, name: 'Alpha' })]),
+      chats: vi.fn(async () => [
+        makeChat({ id: 10, bot_id: 1 }),
+        makeChat({ id: 11, bot_id: 1, sender: { tg_user_id: 7, first_name: 'Bob', last_name: '', username: '', has_avatar: false } }),
+      ]),
+      botMessages: vi.fn(async () => [
+        makeMessage({ id: 1, chat_id: 10, text: 'from alice' }),
+        makeMessage({ id: 2, chat_id: 11, text: 'from bob' }),
+        makeMessage({ id: 3, chat_id: 11, text: 'bob again' }),
+      ]),
+    });
+    const r = renderWithStore(<MiddleColumn chatId={-1} />, api);
+    await act(async () => {
+      await r.store.loadBots();
+      await r.store.loadChats();
+    });
+    await screen.findByText('from bob');
+    expect(api.botMessages).toHaveBeenCalledWith(1, 0, 50);
+    expect(screen.getByText('2 位发送人')).toBeTruthy();
+    const names = [...r.container.querySelectorAll('.sender-title')].map((e) => e.textContent);
+    expect(names).toEqual(['Alice', 'Bob']);
+    expect(r.container.querySelectorAll('.message-group-avatar')).toHaveLength(2);
+  });
+
+  it('does not label senders in a single chat', async () => {
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChat({ id: 10 })]),
+      messages: vi.fn(async () => [makeMessage({ id: 1, chat_id: 10, text: 'hi' })]),
+    });
+    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    await screen.findByText('hi');
+    expect(r.container.querySelector('.sender-title')).toBeNull();
+    expect(r.container.querySelector('.message-group-avatar')).toBeNull();
+  });
+});
+
+describe('jump from the downloads panel', () => {
+  const pageOf = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => makeMessage({ id: from + i, chat_id: 10, text: `m${from + i}` }));
+
+  it('loads older pages until the message shows, then clears the request', async () => {
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChat({ id: 10 })]),
+      messages: vi.fn(async (_chat: number, before = 0) => (before ? pageOf(1, 50) : pageOf(51, 100))),
+    });
+    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    r.store.jumpTo.value = { key: 10, messageId: 5 };
+    await screen.findByText('m5');
+    expect(api.messages).toHaveBeenCalledWith(10, 51, 50);
+    await waitFor(() => expect(r.store.jumpTo.value).toBeNull());
+    expect(r.container.querySelector('.Message.highlight')?.textContent).toContain('m5');
+  });
+
+  it('gives up on a message the conversation does not have', async () => {
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChat({ id: 10 })]),
+      messages: vi.fn(async () => pageOf(1, 3)),
+    });
+    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    r.store.jumpTo.value = { key: 10, messageId: 999 };
+    await screen.findByText('m3');
+    await waitFor(() => expect(r.store.jumpTo.value).toBeNull());
+  });
+
+  it('ignores a request meant for another conversation', async () => {
+    const api = fakeApi({ chats: vi.fn(async () => [makeChat({ id: 10 })]), messages: vi.fn(async () => pageOf(1, 3)) });
+    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    r.store.jumpTo.value = { key: -1, messageId: 2 };
+    await screen.findByText('m3');
+    expect(r.store.jumpTo.value).toEqual({ key: -1, messageId: 2 });
   });
 });

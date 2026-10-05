@@ -59,10 +59,18 @@ describe('ArticleCard', () => {
     expect(route.value).toEqual({ name: 'article', chatId: 10, messageId: 1 });
   });
 
+  it('opens the reader over the bot timeline when shown there', () => {
+    route.value = { name: 'bot', botId: 3 };
+    renderWithStore(<ArticleCard msg={linkMsg(summary({ image_media_id: 7 }))} />);
+    fireEvent.click(screen.getByRole('button'));
+    expect(location.pathname).toBe('/bot/3/article/1');
+    expect(route.value).toEqual({ name: 'bot-article', botId: 3, messageId: 1 });
+  });
+
   it('renders inside the message bubble under the text', () => {
     const msg = linkMsg(summary());
     const { container } = renderWithStore(
-      <MessageBubble bubble={{ kind: 'message', key: '1', msg, first: true, last: true }} sender={{ name: 'Alice', peerId: 42 }} onMenu={vi.fn()} />,
+      <MessageBubble bubble={{ kind: 'message', key: '1', msg, first: true, last: true }} sender={{ name: "Alice", peerId: 42 }} convKey={10} onMenu={vi.fn()} />,
     );
     const text = container.querySelector('.text-content')!;
     expect(text.querySelector('.ArticleCard')).toBeTruthy();
@@ -129,7 +137,7 @@ describe('ArticleReader', () => {
     expect(placeholders).toHaveLength(3);
     expect(placeholders[0].textContent).toContain('下载失败');
     expect(placeholders[0].querySelector('a')!.getAttribute('href')).toBe('https://telegra.ph/file/c.jpg');
-    expect(placeholders[1].textContent).toContain('正在下载…');
+    expect(placeholders[1].textContent).toContain('排队中');
     expect(placeholders[1].querySelector('button')).toBeNull();
     expect(placeholders[2].querySelector('a')).toBeNull(); // javascript: original link dropped
     const embed = container.querySelector('a.ArticleEmbed')!;
@@ -141,7 +149,7 @@ describe('ArticleReader', () => {
     const { container, api } = await openReader();
     fireEvent.click(screen.getByRole('button', { name: '重试' }));
     await waitFor(() => expect(api.retryMedia).toHaveBeenCalledWith(203));
-    await waitFor(() => expect(container.querySelectorAll('.ArticleMedia-placeholder')[0].textContent).toContain('正在下载…'));
+    await waitFor(() => expect(container.querySelectorAll('.ArticleMedia-placeholder')[0].textContent).toContain('排队中'));
   });
 
   it('opens the media viewer on this article’s photos and videos only', async () => {
@@ -261,6 +269,23 @@ describe('ArticleReader', () => {
     try {
       await act(async () => {
         await r.store.handleEvent({ type: 'message.updated', data: { chat_id: 10, message_id: 1 } });
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(article).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refetches after the store resyncs', async () => {
+    const article = vi.fn(async () => makeArticle({ content: everyNode, media: everyMedia }));
+    const api = fakeApi({ article });
+    const r = renderWithStore(<ArticleReader chatId={10} messageId={1} />, api);
+    await screen.findByRole('heading', { level: 1, name: 'Sample' });
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        await r.store.resync();
       });
       await act(async () => { await vi.advanceTimersByTimeAsync(500); });
       expect(article).toHaveBeenCalledTimes(2);

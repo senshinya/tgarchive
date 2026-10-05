@@ -4,14 +4,15 @@ import { errorMessage } from '../../api/client';
 import type { Article } from '../../api/types';
 import { safeHref } from '../../lib/entities';
 import { formatFullDate } from '../../lib/format';
-import { navigate } from '../../lib/router';
+import { convRoute, navigate } from '../../lib/router';
 import { useStore, type ViewerItem } from '../../state/store';
 import { IconButton } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 import { ArticleContent } from './ArticleContent';
 import './article.scss';
 
-/** Instant View style reader for an archived Telegraph article, opened by the article route. */
+/** Instant View style reader for an archived Telegraph article, opened by the article route.
+ * `chatId` is the conversation key it overlays: a chat id, or -botId for a bot timeline. */
 export function ArticleReader({ chatId, messageId }: { chatId: number; messageId: number }) {
   const store = useStore();
   const [article, setArticle] = useState<Article | null>(null);
@@ -43,6 +44,7 @@ export function ArticleReader({ chatId, messageId }: { chatId: number; messageId
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = store.onEvent((ev) => {
       const concerns =
+        ev.type === 'resync' ||
         (ev.type === 'message.updated' && ev.data.message_id === messageId) ||
         (ev.type === 'media.updated' && (ev.data.message_ids ?? []).includes(messageId));
       if (!concerns) return;
@@ -73,7 +75,7 @@ export function ArticleReader({ chatId, messageId }: { chatId: number; messageId
   const close = () => {
     const state = history.state as { fromChat?: boolean } | null;
     if (state?.fromChat) history.back();
-    else navigate({ name: 'chat', chatId }, { replace: true });
+    else navigate(convRoute(chatId), { replace: true });
   };
 
   const media = new Map((article?.media ?? []).map((m) => [m.id, m]));
@@ -124,7 +126,7 @@ export function ArticleReader({ chatId, messageId }: { chatId: number; messageId
                 ))}
               <span>存档于 {formatFullDate(article.fetched_at)}</span>
             </div>
-            <ArticleContent nodes={article.content} media={media} onOpenMedia={openMedia} onRetry={retry} />
+            <ArticleContent nodes={article.content} media={media} onOpenMedia={openMedia} onRetry={retry} progress={store.progress.value} />
           </article>
         ) : (
           <div class="ArticleReader-state">{error || <Spinner />}</div>

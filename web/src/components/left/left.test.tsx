@@ -88,3 +88,30 @@ describe('ChatsPanel', () => {
     expect(route.value).toEqual({ name: 'settings' });
   });
 });
+
+describe('ChatsPanel bot mode', () => {
+  afterEach(() => localStorage.removeItem('tgarchive.listMode'));
+
+  it('switches to one row per bot, remembers it, and opens the merged timeline', async () => {
+    const { container, store } = await setup();
+    fireEvent.click(screen.getByRole('button', { name: '按 bot' }));
+    expect(store.listMode.value).toBe('bot');
+    expect(localStorage.getItem('tgarchive.listMode')).toBe('bot');
+    expect(screen.queryByRole('tab', { name: '全部' })).toBeNull();
+    const items = container.querySelectorAll('.ChatItem');
+    expect(items).toHaveLength(2);
+    const alpha = [...items].find((i) => i.textContent!.includes('Alpha'))!;
+    expect(alpha.textContent).toContain('Alice: hello');
+    fireEvent.click(alpha);
+    expect(route.value).toEqual({ name: 'bot', botId: 1 });
+    expect(alpha.getAttribute('aria-current')).toBe('page');
+    fireEvent.click(screen.getByRole('button', { name: '按人' }));
+    expect(container.querySelectorAll('.ChatItem')).toHaveLength(2);
+    expect(screen.getByRole('tab', { name: '全部' })).toBeTruthy();
+  });
+
+  it('shows the switch with a single bot', async () => {
+    await setup([makeBot({ id: 1, name: 'Alpha' })]);
+    expect(screen.getByRole('button', { name: '按 bot' }).getAttribute('aria-pressed')).toBe('false');
+  });
+});

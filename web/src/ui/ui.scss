@@ -22,6 +22,24 @@
   animation: spinner-rotate 1s linear infinite;
 }
 
+.ProgressRing {
+  flex-shrink: 0;
+
+  .ProgressRing-track {
+    stroke: currentColor;
+    opacity: 0.25;
+  }
+
+  .ProgressRing-arc {
+    stroke: currentColor;
+    transition: stroke-dashoffset 0.4s ease-out;
+  }
+
+  &.indeterminate {
+    animation: spinner-rotate 1s linear infinite;
+  }
+}
+
 @keyframes spinner-rotate {
   to {
     transform: rotate(360deg);

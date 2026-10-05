@@ -1,6 +1,6 @@
 import { act, fireEvent, screen } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fakeApi, makeMedia, makeMessage } from '../../test/fixtures';
+import { fakeApi, makeChat, makeMedia, makeMessage } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
 import { MediaViewer } from './MediaViewer';
 
@@ -40,6 +40,33 @@ function mockBack() {
     window.dispatchEvent(new PopStateEvent('popstate'));
   });
 }
+
+describe('MediaViewer in a bot timeline', () => {
+  it('walks the bot media and titles each item with its own sender', async () => {
+    const bobPhoto = makeMessage({ id: 3, chat_id: 11, kind: 'photo', media: [makeMedia({ id: 103, role: 'main', kind: 'photo' })] });
+    const api = fakeApi({
+      chats: vi.fn(async () => [
+        makeChat({ id: 10, bot_id: 1 }),
+        makeChat({ id: 11, bot_id: 1, sender: { tg_user_id: 7, first_name: 'Bob', last_name: '', username: '', has_avatar: false } }),
+      ]),
+      botMedia: vi.fn(async () => [bobPhoto, photoMsg(1, 101)]),
+    });
+    const r = renderWithStore(<MediaViewer />, api);
+    await act(async () => {
+      await r.store.loadChats();
+    });
+    act(() => {
+      r.store.viewer.value = { chatId: -1, messageId: 1, mediaId: 101 };
+    });
+    await screen.findByText('1 / 2', { exact: false });
+    expect(api.botMedia).toHaveBeenCalledWith(1, 'media', 0, expect.any(Number));
+    expect(api.chatMedia).not.toHaveBeenCalled();
+    expect(r.container.querySelector('.MediaViewer-name')!.textContent).toBe('Alice');
+    swipe(r.container.querySelector('.MediaViewer-content')!, { x: 300, y: 300 }, { x: 200, y: 300 });
+    expect(r.container.querySelector('img')!.getAttribute('src')).toBe('/media/103');
+    expect(r.container.querySelector('.MediaViewer-name')!.textContent).toBe('Bob');
+  });
+});
 
 describe('MediaViewer swipe gestures', () => {
   it('swiping left (dx < -50, mostly horizontal) goes to the next item', async () => {

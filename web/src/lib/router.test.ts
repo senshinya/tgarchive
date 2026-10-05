@@ -1,5 +1,17 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { isSettings, navigate, parseRoute, route, routeChatId, routePath, startRouter, type Route } from './router';
+import {
+  articleRoute,
+  convRoute,
+  isSettings,
+  navigate,
+  parseRoute,
+  route,
+  routeArticleId,
+  routeConvKey,
+  routePath,
+  startRouter,
+  type Route,
+} from './router';
 
 describe('router', () => {
   afterEach(() => history.replaceState(null, '', '/'));
@@ -9,6 +21,9 @@ describe('router', () => {
       { name: 'home' },
       { name: 'chat', chatId: 12 },
       { name: 'article', chatId: 12, messageId: 345 },
+      { name: 'bot', botId: 3 },
+      { name: 'bot-article', botId: 3, messageId: 345 },
+      { name: 'downloads' },
       { name: 'settings' },
       { name: 'settings-add-bot' },
       { name: 'settings-bot', botId: 3 },
@@ -31,6 +46,13 @@ describe('router', () => {
       '/chat/1/article/0',
       '/chat/1/articles/2',
       '/chat/1/article/2/3',
+      '/bot',
+      '/bot/0',
+      '/bot/x',
+      '/bot/1/2',
+      '/bot/1/article',
+      '/bot/1/article/0',
+      '/downloads/1',
     ]) {
       expect(parseRoute(p)).toEqual({ name: 'home' });
     }
@@ -73,10 +95,23 @@ describe('router', () => {
     expect(history.state).toEqual({ fromList: false });
   });
 
-  it('maps routes to the chat they show', () => {
-    expect(routeChatId({ name: 'chat', chatId: 4 })).toBe(4);
-    expect(routeChatId({ name: 'article', chatId: 4, messageId: 9 })).toBe(4);
-    expect(routeChatId({ name: 'settings' })).toBe(0);
+  it('maps routes to the conversation they show: chat id, or the negated bot id for a bot timeline', () => {
+    expect(routeConvKey({ name: 'chat', chatId: 4 })).toBe(4);
+    expect(routeConvKey({ name: 'article', chatId: 4, messageId: 9 })).toBe(4);
+    expect(routeConvKey({ name: 'bot', botId: 2 })).toBe(-2);
+    expect(routeConvKey({ name: 'bot-article', botId: 2, messageId: 9 })).toBe(-2);
+    expect(routeConvKey({ name: 'settings' })).toBe(0);
+    expect(routeConvKey({ name: 'downloads' })).toBe(0);
+    expect(routeArticleId({ name: 'article', chatId: 4, messageId: 9 })).toBe(9);
+    expect(routeArticleId({ name: 'bot-article', botId: 2, messageId: 8 })).toBe(8);
+    expect(routeArticleId({ name: 'chat', chatId: 4 })).toBe(0);
+  });
+
+  it('builds conversation and article routes from a conversation key', () => {
+    expect(convRoute(4)).toEqual({ name: 'chat', chatId: 4 });
+    expect(convRoute(-2)).toEqual({ name: 'bot', botId: 2 });
+    expect(articleRoute(4, 9)).toEqual({ name: 'article', chatId: 4, messageId: 9 });
+    expect(articleRoute(-2, 9)).toEqual({ name: 'bot-article', botId: 2, messageId: 9 });
   });
 
   it('marks an article opened from its chat with fromChat', () => {

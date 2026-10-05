@@ -3,6 +3,7 @@ import type {
   Article,
   Bot,
   Chat,
+  Downloads,
   Message,
   RejectedSender,
   SharedMediaType,
@@ -74,8 +75,12 @@ export interface Api {
   message(id: number): Promise<Message>;
   article(messageId: number): Promise<Article>;
   chatMedia(chatId: number, type: SharedMediaType, before?: number, limit?: number): Promise<Message[]>;
+  /** A bot's merged timeline: every chat of the bot. */
+  botMessages(botId: number, before?: number, limit?: number): Promise<Message[]>;
+  botMedia(botId: number, type: SharedMediaType, before?: number, limit?: number): Promise<Message[]>;
   deleteMessage(id: number): Promise<void>;
   retryMedia(id: number): Promise<void>;
+  downloads(): Promise<Downloads>;
   addBot(token: string): Promise<AddBotResult>;
   setBotEnabled(id: number, enabled: boolean): Promise<Bot>;
   deleteBot(id: number, purge: boolean): Promise<void>;
@@ -101,8 +106,13 @@ export const api: Api = {
   article: (messageId) => request('GET', `/api/messages/${messageId}/article`),
   chatMedia: (chatId, type, before = 0, limit = PAGE_SIZE) =>
     request('GET', `/api/chats/${chatId}/media${qs({ type, before, limit })}`),
+  botMessages: (botId, before = 0, limit = PAGE_SIZE) =>
+    request('GET', `/api/bots/${botId}/messages${qs({ before, limit })}`),
+  botMedia: (botId, type, before = 0, limit = PAGE_SIZE) =>
+    request('GET', `/api/bots/${botId}/media${qs({ type, before, limit })}`),
   deleteMessage: (id) => request('DELETE', `/api/messages/${id}`),
   retryMedia: (id) => request('POST', `/api/media/${id}/retry`),
+  downloads: () => request('GET', '/api/downloads'),
   addBot: (token) => request('POST', '/api/admin/bots', { token }),
   setBotEnabled: (id, enabled) => request('PATCH', `/api/admin/bots/${id}`, { enabled }),
   deleteBot: (id, purge) => request('DELETE', `/api/admin/bots/${id}${purge ? '?purge=1' : ''}`),
@@ -119,6 +129,16 @@ export const api: Api = {
   userbotPassword: (password) => request('POST', '/api/admin/userbot/password', { password }),
   userbotLogout: () => request('POST', '/api/admin/userbot/logout'),
 };
+
+/** A conversation's messages: a chat for a positive key, a bot's merged timeline for -botId. */
+export function convMessages(api: Api, key: number, before = 0, limit = PAGE_SIZE): Promise<Message[]> {
+  return key < 0 ? api.botMessages(-key, before, limit) : api.messages(key, before, limit);
+}
+
+/** A conversation's shared media; keys as in convMessages. */
+export function convMedia(api: Api, key: number, type: SharedMediaType, before = 0, limit = PAGE_SIZE): Promise<Message[]> {
+  return key < 0 ? api.botMedia(-key, type, before, limit) : api.chatMedia(key, type, before, limit);
+}
 
 export function mediaUrl(id: number, download = false): string {
   return `/media/${id}${download ? '?download=1' : ''}`;

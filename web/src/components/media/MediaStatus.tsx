@@ -1,8 +1,9 @@
-import { CircleAlert, FileWarning, RotateCw } from 'lucide-preact';
+import { CircleAlert, Clock, FileWarning, RotateCw } from 'lucide-preact';
 import { mediaUrl } from '../../api/client';
 import type { Media, Message } from '../../api/types';
-import { useStore } from '../../state/store';
-import { Spinner } from '../../ui/Spinner';
+import { formatProgress } from '../../lib/format';
+import { useStore, type MediaProgress } from '../../state/store';
+import { ProgressRing } from '../../ui/ProgressRing';
 import './media.scss';
 
 interface Props {
@@ -11,17 +12,34 @@ interface Props {
   thumb?: Media;
 }
 
-/** Placeholder for media that is not downloaded: pending / failed (with retry) / too_large. */
+/** Fraction for a progress ring: undefined (spinning) until the first byte or without a total. */
+export function progressFraction(p: MediaProgress): number | undefined {
+  return p.done > 0 && p.total > 0 ? p.done / p.total : undefined;
+}
+
+/** Placeholder for media that is not downloaded: downloading (with progress) or queued /
+ * failed (with retry) / too_large. */
 export function MediaStatus({ msg, media, thumb }: Props) {
   const store = useStore();
+  const progress = store.progress.value.get(media.id);
   return (
     <div class={`MediaStatus state-${media.state}`}>
       {thumb && <img class="MediaStatus-thumb" src={mediaUrl(thumb.id)} alt="" />}
       <div class="MediaStatus-body">
-        {media.state === 'pending' && (
+        {media.state === 'pending' && progress && (
           <>
-            <Spinner size={32} />
-            <span class="MediaStatus-text">正在下载…</span>
+            <span class="MediaStatus-ring">
+              <ProgressRing value={progressFraction(progress)} size={44} stroke={2.5} />
+            </span>
+            <span class="MediaStatus-text MediaStatus-pill">{formatProgress(progress.done, progress.total || media.size)}</span>
+          </>
+        )}
+        {media.state === 'pending' && !progress && (
+          <>
+            <span class="MediaStatus-ring">
+              <Clock size={24} />
+            </span>
+            <span class="MediaStatus-text MediaStatus-pill">排队中</span>
           </>
         )}
         {media.state === 'failed' && (
@@ -55,10 +73,10 @@ export function MediaStatus({ msg, media, thumb }: Props) {
 }
 
 /** One-line status used inside file rows; null when the media is downloaded. */
-export function inlineStatus(media: Media): string | null {
+export function inlineStatus(media: Media, progress?: MediaProgress): string | null {
   switch (media.state) {
     case 'pending':
-      return '正在下载…';
+      return progress ? formatProgress(progress.done, progress.total || media.size) : '排队中';
     case 'failed':
       return media.error ? `下载失败：${media.error}` : '下载失败';
     case 'too_large':

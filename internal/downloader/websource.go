@@ -171,7 +171,7 @@ func (w *WebSource) Fetch(ctx context.Context, m *store.Media, dstBase string) (
 	if limit > 0 {
 		body = io.LimitReader(resp.Body, limit+1)
 	}
-	n, err := io.Copy(f, body)
+	n, err := io.Copy(CountingWriter(ctx, f, max(resp.ContentLength, 0)), body)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

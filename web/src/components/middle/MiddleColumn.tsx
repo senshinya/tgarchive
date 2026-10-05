@@ -9,11 +9,48 @@ import { ArticleReader } from '../article/ArticleReader';
 import { MessageList } from '../message/MessageList';
 import './middle.scss';
 
-function MiddleHeader({ chatId }: { chatId: number }) {
+/** Avatar, title and subtitle of the conversation: a sender's chat, or a bot's merged timeline. */
+function HeaderPeer({ chatId }: { chatId: number }) {
   const store = useStore();
+  if (chatId < 0) {
+    const bot = store.botsById.value.get(-chatId);
+    const senders = store.chats.value.filter((c) => c.bot_id === -chatId).length;
+    const name = bot ? botName(bot) : '机器人';
+    return (
+      <>
+        {bot && (
+          <Avatar name={name} peerId={bot.tg_bot_id} src={bot.has_avatar ? avatarUrl('bots', bot.tg_bot_id) : null} size="medium" />
+        )}
+        <span class="MiddleHeader-text">
+          <span class="MiddleHeader-title">{name}</span>
+          <span class="MiddleHeader-status">{senders} 位发送人</span>
+        </span>
+      </>
+    );
+  }
   const chat = store.chats.value.find((c) => c.id === chatId);
   const bot = chat ? store.botsById.value.get(chat.bot_id) : undefined;
   const name = chat ? senderName(chat.sender) : '会话';
+  return (
+    <>
+      {chat && (
+        <Avatar
+          name={name}
+          peerId={chat.sender.tg_user_id}
+          src={chat.sender.has_avatar ? avatarUrl('senders', chat.sender.tg_user_id) : null}
+          size="medium"
+        />
+      )}
+      <span class="MiddleHeader-text">
+        <span class="MiddleHeader-title">{name}</span>
+        {bot && <span class="MiddleHeader-status">机器人 {bot.username ? `@${bot.username}` : botName(bot)}</span>}
+      </span>
+    </>
+  );
+}
+
+function MiddleHeader({ chatId }: { chatId: number }) {
+  const store = useStore();
   const toggleShared = () => {
     store.sharedMediaOpen.value = !store.sharedMediaOpen.value;
   };
@@ -32,18 +69,7 @@ function MiddleHeader({ chatId }: { chatId: number }) {
         <ArrowLeft size={24} />
       </IconButton>
       <button type="button" class="MiddleHeader-info" onClick={toggleShared}>
-        {chat && (
-          <Avatar
-            name={name}
-            peerId={chat.sender.tg_user_id}
-            src={chat.sender.has_avatar ? avatarUrl('senders', chat.sender.tg_user_id) : null}
-            size="medium"
-          />
-        )}
-        <span class="MiddleHeader-text">
-          <span class="MiddleHeader-title">{name}</span>
-          {bot && <span class="MiddleHeader-status">机器人 {bot.username ? `@${bot.username}` : botName(bot)}</span>}
-        </span>
+        <HeaderPeer chatId={chatId} />
       </button>
       <IconButton label="共享媒体" onClick={toggleShared}>
         <Images size={24} />
@@ -52,7 +78,8 @@ function MiddleHeader({ chatId }: { chatId: number }) {
   );
 }
 
-/** The chat; with articleId, the article reader on top of it. */
+/** The conversation (a chat id, or -botId for a bot's merged timeline); with articleId, the
+ * article reader on top of it. */
 export function MiddleColumn({ chatId, articleId = 0 }: { chatId: number; articleId?: number }) {
   if (!chatId) {
     return (

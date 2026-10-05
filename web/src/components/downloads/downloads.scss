@@ -1,0 +1,192 @@
+.DownloadsPanel-loading,
+.DownloadsPanel-empty {
+  display: flex;
+  justify-content: center;
+  padding: 2rem 1rem;
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.9375rem;
+  background: var(--color-background);
+}
+
+.DownloadsSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  padding: 1.25rem 1rem;
+  background: var(--color-background);
+  border-bottom: 0.625rem solid var(--color-background-secondary);
+}
+
+.DownloadsSummary-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.DownloadsSummary-value {
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.DownloadsSummary-label {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}
+
+.DownloadRow {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: var(--border-radius-default, 0.75rem);
+
+  &:hover {
+    background: var(--color-chat-hover, var(--color-background-secondary));
+  }
+}
+
+.DownloadRow-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 0.875rem;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  text-align: start;
+}
+
+.DownloadRow-icon {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.625rem;
+  color: #fff;
+}
+
+.DownloadRow-info {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.1875rem;
+  min-width: 0;
+}
+
+.DownloadRow-title {
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.DownloadRow-subtitle {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.DownloadRow-subtitle.error {
+  color: var(--color-error);
+}
+
+.DownloadRow-sender {
+  color: var(--color-text);
+
+  &::after {
+    content: ' · ';
+    color: var(--color-text-secondary);
+  }
+}
+
+.DownloadRow-bar {
+  position: relative;
+  height: 0.1875rem;
+  border-radius: 0.125rem;
+  background: color-mix(in srgb, var(--color-text-secondary) 22%, transparent);
+  overflow: hidden;
+
+  > span {
+    display: block;
+    height: 100%;
+    background: var(--color-primary);
+    transition: width 0.4s ease-out;
+  }
+
+  &.indeterminate > span {
+    width: 30% !important;
+    animation: download-bar-slide 1.2s ease-in-out infinite;
+  }
+}
+
+@keyframes download-bar-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
+.DownloadRow-retry {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin-right: 0.5rem;
+  border-radius: 50%;
+  color: var(--color-primary);
+
+  &:hover {
+    background: var(--color-background-secondary);
+  }
+}
+
+.DownloadsButton {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  color: var(--color-text-secondary);
+
+  &:hover {
+    background: var(--color-background-secondary);
+  }
+
+  &.active {
+    color: var(--color-primary);
+  }
+
+  .ProgressRing {
+    position: absolute;
+    inset: 0.125rem;
+  }
+}
+
+.DownloadsButton-dot {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.375rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--color-error);
+  box-shadow: 0 0 0 2px var(--color-background);
+}
