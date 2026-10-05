@@ -26,6 +26,11 @@ const (
 	webUserAgent    = "tgarchive/1.0"
 	webMaxRedirects = 5
 	webTimeout      = 5 * time.Minute
+
+	// DefaultWebMaxBytes is the cap WebSource enforces on its own when MEDIA_MAX_BYTES is unset
+	// (MaxBytes == 0, meaning "unlimited" for Telegram media). Telegraph article authors are
+	// untrusted, so "unlimited" must not apply to web-sourced media.
+	DefaultWebMaxBytes = 2 << 30
 )
 
 var (
@@ -37,6 +42,12 @@ var (
 	nat64     = mustCIDR("64:ff9b::/96")
 	nat64WKP  = mustCIDR("64:ff9b:1::/48")
 	sixToFour = mustCIDR("2002::/16")
+	// thisNetwork, ietfProtocol, benchmark and reservedClassE are additional non-routable IPv4
+	// ranges (RFC 791, RFC 6890, RFC 2544, RFC 1112) that net.IP's own classifiers do not cover.
+	thisNetwork    = mustCIDR("0.0.0.0/8")
+	ietfProtocol   = mustCIDR("192.0.0.0/24")
+	benchmark      = mustCIDR("198.18.0.0/15")
+	reservedClassE = mustCIDR("240.0.0.0/4") // includes the 255.255.255.255 broadcast address
 )
 
 func mustCIDR(s string) *net.IPNet {
@@ -51,7 +62,8 @@ func mustCIDR(s string) *net.IPNet {
 func PublicIP(ip net.IP) error {
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() || cgnat.Contains(ip) ||
-		nat64.Contains(ip) || nat64WKP.Contains(ip) || sixToFour.Contains(ip) {
+		nat64.Contains(ip) || nat64WKP.Contains(ip) || sixToFour.Contains(ip) ||
+		thisNetwork.Contains(ip) || ietfProtocol.Contains(ip) || benchmark.Contains(ip) || reservedClassE.Contains(ip) {
 		return ErrAddrNotAllowed
 	}
 	return nil
@@ -61,9 +73,13 @@ func PublicIP(ip net.IP) error {
 // The address check runs on every connection after DNS resolution, so redirects and DNS
 // rebinding cannot reach an internal address.
 type WebSource struct {
-	MaxBytes int64         // 0 = unlimited; larger bodies fail with ErrTooLarge
+	MaxBytes int64         // 0 = use defaultMaxBytes instead of unlimited; larger bodies fail with ErrTooLarge
 	Timeout  time.Duration // whole request, default 5 min
 	client   *http.Client
+
+	// defaultMaxBytes is the cap applied when MaxBytes is 0. It is DefaultWebMaxBytes in
+	// production; tests override it to exercise the oversize path without streaming 2 GiB.
+	defaultMaxBytes int64
 }
 
 // NewWebSource builds the source. allow checks each dialed IP; nil means PublicIP. Only tests
@@ -108,7 +124,7 @@ func NewWebSource(maxBytes int64, allow func(net.IP) error) *WebSource {
 			return nil
 		},
 	}
-	return &WebSource{MaxBytes: maxBytes, Timeout: webTimeout, client: client}
+	return &WebSource{MaxBytes: maxBytes, Timeout: webTimeout, client: client, defaultMaxBytes: DefaultWebMaxBytes}
 }
 
 func (w *WebSource) Fetch(ctx context.Context, m *store.Media, dstBase string) (string, int64, error) {
@@ -138,7 +154,11 @@ func (w *WebSource) Fetch(ctx context.Context, m *store.Media, dstBase string) (
 		}
 		return "", 0, err
 	}
-	if w.MaxBytes > 0 && resp.ContentLength > w.MaxBytes {
+	limit := w.MaxBytes
+	if limit <= 0 {
+		limit = w.defaultMaxBytes
+	}
+	if limit > 0 && resp.ContentLength > limit {
 		return "", 0, ErrTooLarge
 	}
 	dst := dstBase + webExt(resp.Header.Get("Content-Type"), u.Path)
@@ -148,14 +168,14 @@ func (w *WebSource) Fetch(ctx context.Context, m *store.Media, dstBase string) (
 		return "", 0, err
 	}
 	var body io.Reader = resp.Body
-	if w.MaxBytes > 0 {
-		body = io.LimitReader(resp.Body, w.MaxBytes+1)
+	if limit > 0 {
+		body = io.LimitReader(resp.Body, limit+1)
 	}
 	n, err := io.Copy(f, body)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
-	if err == nil && w.MaxBytes > 0 && n > w.MaxBytes {
+	if err == nil && limit > 0 && n > limit {
 		err = ErrTooLarge
 	}
 	if err == nil {

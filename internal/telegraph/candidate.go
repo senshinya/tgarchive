@@ -40,7 +40,7 @@ func Candidate(text string) (string, bool) {
 		return "", false
 	}
 	p := strings.Trim(u.Path, "/")
-	if p == "" || strings.Contains(p, "/") || reserved[strings.ToLower(p)] {
+	if p == "" || p == "." || p == ".." || strings.Contains(p, "/") || reserved[strings.ToLower(p)] {
 		return "", false
 	}
 	return p, true

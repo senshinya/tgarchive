@@ -21,6 +21,11 @@ import (
 
 var ErrTooLarge = errors.New("file exceeds the archive size limit")
 
+// maxWebInFlight caps how many "web:" (Telegraph article) downloads Run dispatches at once, out
+// of the shared Concurrency-sized pool, so a burst of article media can never starve Telegram
+// media of a slot.
+const maxWebInFlight = 2
+
 // permanentError marks a failure that retrying cannot fix (e.g. a forbidden address).
 type permanentError struct{ err error }
 
@@ -46,9 +51,10 @@ type Downloader struct {
 	Delays      []time.Duration
 	Now         func() time.Time
 
-	wake     chan struct{}
-	mu       sync.Mutex
-	inflight map[int64]bool
+	wake        chan struct{}
+	mu          sync.Mutex
+	inflight    map[int64]bool
+	webInFlight int
 }
 
 func New(st *store.Store, mediaDir string, maxBytes int64, onSettled func(int64)) *Downloader {
@@ -84,20 +90,22 @@ func (d *Downloader) Run(ctx context.Context) {
 		}
 		for i := range due {
 			m := due[i]
-			if !d.claim(m.ID) {
+			prefix, _, _ := strings.Cut(m.DedupeKey, ":")
+			isWeb := prefix == "web"
+			if !d.claim(m.ID, isWeb) {
 				continue
 			}
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				d.release(m.ID)
+				d.release(m.ID, isWeb)
 				return
 			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				defer func() { <-sem }()
-				defer d.release(m.ID)
+				defer d.release(m.ID, isWeb)
 				d.Process(ctx, &m)
 			}()
 		}
@@ -110,20 +118,32 @@ func (d *Downloader) Run(ctx context.Context) {
 	}
 }
 
-func (d *Downloader) claim(id int64) bool {
+// claim marks id in-flight, refusing a web item once maxWebInFlight web downloads are already
+// running — the caller should skip it for this batch and leave it due for the next pass instead
+// of occupying a pool slot waiting.
+func (d *Downloader) claim(id int64, isWeb bool) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.inflight[id] {
 		return false
 	}
+	if isWeb && d.webInFlight >= maxWebInFlight {
+		return false
+	}
 	d.inflight[id] = true
+	if isWeb {
+		d.webInFlight++
+	}
 	return true
 }
 
-func (d *Downloader) release(id int64) {
+func (d *Downloader) release(id int64, isWeb bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	delete(d.inflight, id)
+	if isWeb {
+		d.webInFlight--
+	}
 }
 
 func (d *Downloader) Process(ctx context.Context, m *store.Media) {

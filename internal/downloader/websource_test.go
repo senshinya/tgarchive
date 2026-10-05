@@ -122,6 +122,42 @@ func TestWebSourceSizeLimit(t *testing.T) {
 	}
 }
 
+// TestWebSourceDefaultCapWhenUnset is the production case (MEDIA_MAX_BYTES unset, so
+// NewWebSource is called with maxBytes=0): article authors are untrusted, so WebSource must
+// still enforce its own default cap instead of streaming an unbounded body. The test overrides
+// the unexported default (DefaultWebMaxBytes is 2 GiB in production, far too large to stream
+// here) so the oversize body in the test server actually exceeds it.
+func TestWebSourceDefaultCapWhenUnset(t *testing.T) {
+	srv := webServer(t)
+	src := NewWebSource(0, allowAll)
+	src.defaultMaxBytes = 50
+	dir := t.TempDir()
+	for _, p := range []string{"/big", "/stream"} {
+		_, _, err := src.Fetch(ctx, webMedia(srv.URL+p), filepath.Join(dir, "x"))
+		if !errors.Is(err, ErrTooLarge) {
+			t.Fatalf("%s: err = %v, want ErrTooLarge", p, err)
+		}
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("partial files left: %v", entries)
+	}
+	// Below the overridden default: still downloads normally.
+	p, n, err := src.Fetch(ctx, webMedia(srv.URL+"/img"), filepath.Join(dir, "y"))
+	if err != nil || n != 7 {
+		t.Fatalf("Fetch under cap = %q %d %v", p, n, err)
+	}
+}
+
+func TestDefaultWebMaxBytesIs2GiB(t *testing.T) {
+	if DefaultWebMaxBytes != 2<<30 {
+		t.Fatalf("DefaultWebMaxBytes = %d, want 2 GiB", DefaultWebMaxBytes)
+	}
+	src := NewWebSource(0, allowAll)
+	if src.defaultMaxBytes != DefaultWebMaxBytes {
+		t.Fatalf("defaultMaxBytes = %d, want %d", src.defaultMaxBytes, DefaultWebMaxBytes)
+	}
+}
+
 func TestWebSourceStatus(t *testing.T) {
 	srv := webServer(t)
 	src := NewWebSource(0, allowAll)
@@ -155,12 +191,14 @@ func TestWebSourceRefusesInternalAddresses(t *testing.T) {
 func TestPublicIP(t *testing.T) {
 	for _, s := range []string{"127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "224.0.0.1",
 		"0.0.0.0", "100.64.0.1", "100.127.255.255", "::1", "fe80::1", "fc00::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "ff02::1", "::",
-		"64:ff9b::a9fe:a9fe", "64:ff9b:1::7f00:1", "2002:7f00:1::1"} {
+		"64:ff9b::a9fe:a9fe", "64:ff9b:1::7f00:1", "2002:7f00:1::1",
+		"0.1.2.3", "0.255.255.255", "192.0.0.0", "192.0.0.255", "198.18.0.0", "198.19.255.255", "240.0.0.1", "255.255.255.255"} {
 		if err := PublicIP(net.ParseIP(s)); !errors.Is(err, ErrAddrNotAllowed) {
 			t.Errorf("PublicIP(%s) = %v, want ErrAddrNotAllowed", s, err)
 		}
 	}
-	for _, s := range []string{"1.1.1.1", "149.154.167.99", "100.128.0.1", "100.63.255.255", "2606:4700::1111"} {
+	for _, s := range []string{"1.1.1.1", "149.154.167.99", "100.128.0.1", "100.63.255.255", "2606:4700::1111",
+		"192.0.1.0", "198.17.255.255", "198.20.0.0"} {
 		if err := PublicIP(net.ParseIP(s)); err != nil {
 			t.Errorf("PublicIP(%s) = %v, want nil", s, err)
 		}

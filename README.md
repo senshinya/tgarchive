@@ -32,7 +32,7 @@ cd web && npm run dev   # Vite 开发服务器，/api、/media、/avatars 代理
 | `DATA_DIR` | `/data` | 数据根目录（`db/`、`media/`、`avatars/`、`botapi/`、`botapi-tmp/`） |
 | `REQUIRE_FORWARD_AUTH` | `true` | 除 `/healthz` 外要求请求带 `Remote-User`，否则 401 |
 | `BARK_NOTIFY_FILE` | 空 | Bark 配置（`endpoint` + `device_keys`），机器人或 userbot 出错时推送；空则不推 |
-| `MEDIA_MAX_BYTES` | `0` | 单文件存档上限，0 为不限 |
+| `MEDIA_MAX_BYTES` | `0` | 单文件存档上限，0 为不限；Telegraph 文章的网页媒体此时仍有 2 GiB 的默认上限（作者不可信） |
 | `BOT_API_MANAGED` | `true` | 是否托管 `telegram-bot-api` 子进程 |
 | `BOT_API_BINARY` | `telegram-bot-api` | 子进程可执行文件 |
 | `BOT_API_URL` | `http://127.0.0.1:8081` | Bot API 服务器地址 |

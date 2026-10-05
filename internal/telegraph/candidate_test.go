@@ -26,6 +26,7 @@ func TestCandidate(t *testing.T) {
 		"https://telegra.ph/file/abc.jpg", "https://telegra.ph/api", "https://telegra.ph/edit", "https://telegra.ph/FILE",
 		"https://telegra.ph/a%2Fb", "https://example.com/Sample", "https://telegra.ph.evil.com/Sample",
 		"https://telegra.ph:8443/Sample", "https://user@telegra.ph/Sample", "ftp://telegra.ph/Sample", "https://t.me/durov/1",
+		"https://telegra.ph/..", "https://telegra.ph/.", "https://telegra.ph/%2e%2e", "https://telegra.ph/%2e",
 	}
 	for _, in := range bad {
 		if got, isOK := Candidate(in); isOK {
