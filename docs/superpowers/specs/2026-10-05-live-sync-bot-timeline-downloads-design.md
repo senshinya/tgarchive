@@ -64,7 +64,7 @@ bot 列表、会话列表、所有已加载的会话（含合并时间线）、�
   - 全局认领闸门：调用 `getFile` 前加锁并快照 `<botapi>/*/temp/` 下的文件名；`getFile` 在后台进行，每 500ms 扫描一次，出现的第一个「不在快照中、未被其他下载认领」的文件即归本次下载，认领后放闸
   - `getFile` 返回或 10s 内未出现新文件 → 放闸，本次只有「下载中」无字节进度
   - 认领后每 1s 读该文件大小上报，`total = media.size`；文件消失忽略
-  - 实施时先在本地用真实 Bot API 验证 TDLib 把下载中的文件写在 `temp/`；不成立则删去本机制，bot 渠道只报「下载中」
+  - 依据：TDLib `FileLoaderUtils.cpp` 的 `open_temp_file` 把下载中的文件建在 `get_files_temp_dir` = `<files_dir>/temp/`，完成后 `create_from_temp` 改名移入类型目录；本地 Bot API 的 files_dir 即 `<dir>/<bot token>/`。上线后用真实大文件冒烟确认
 
 ### 推送与接口
 - SSE `download.progress`：`{items:[{media_id, done, total}], speed}`（bytes/s）
