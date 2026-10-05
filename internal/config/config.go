@@ -21,16 +21,18 @@ type Config struct {
 	MediaMaxBytes      int64
 	BarkNotifyFile     string
 	PollTimeoutSec     int
+	TelegraphAPIURL    string // Telegraph API; only tests point it elsewhere
 }
 
 func Load(getenv func(string) string) (*Config, error) {
 	c := &Config{
-		Listen:         or(getenv("LISTEN"), ":8080"),
-		DataDir:        or(getenv("DATA_DIR"), "/data"),
-		BotAPIURL:      or(getenv("BOT_API_URL"), "http://127.0.0.1:8081"),
-		CloudAPIURL:    or(getenv("CLOUD_API_URL"), "https://api.telegram.org"),
-		BarkNotifyFile: getenv("BARK_NOTIFY_FILE"),
-		PollTimeoutSec: 50,
+		Listen:          or(getenv("LISTEN"), ":8080"),
+		DataDir:         or(getenv("DATA_DIR"), "/data"),
+		BotAPIURL:       or(getenv("BOT_API_URL"), "http://127.0.0.1:8081"),
+		CloudAPIURL:     or(getenv("CLOUD_API_URL"), "https://api.telegram.org"),
+		BarkNotifyFile:  getenv("BARK_NOTIFY_FILE"),
+		PollTimeoutSec:  50,
+		TelegraphAPIURL: or(getenv("TELEGRAPH_API_URL"), "https://api.telegra.ph"),
 	}
 	c.BotAPIDirLocal = or(getenv("BOT_API_DIR_LOCAL"), c.DataDir+"/botapi")
 	c.BotAPIDirRemote = or(getenv("BOT_API_DIR_REMOTE"), c.BotAPIDirLocal)

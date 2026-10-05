@@ -51,6 +51,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/chats/{id}/messages", s.listMessages)
 	mux.HandleFunc("GET /api/chats/{id}/media", s.listChatMedia)
 	mux.HandleFunc("GET /api/messages/{id}", s.getMessage)
+	mux.HandleFunc("GET /api/messages/{id}/article", s.getArticle)
 	mux.HandleFunc("DELETE /api/messages/{id}", s.deleteMessage)
 	mux.HandleFunc("POST /api/media/{id}/retry", s.retryMedia)
 	mux.HandleFunc("GET /api/events", s.events)

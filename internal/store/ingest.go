@@ -15,14 +15,18 @@ type IngestInput struct {
 	Msg    *model.Message
 	Offset int64 // when > 0, bots.update_offset advances to it in the same transaction
 	Now    int64
+	// TelegraphPath, when set, queues a Telegraph job for the message in the same transaction,
+	// but only if the message is newly created (an edit never queues a second snapshot).
+	TelegraphPath string
 }
 
 type IngestResult struct {
-	MessageID   int64
-	ChatID      int64
-	ChatCreated bool
-	Created     bool     // false when an existing message was updated (edit)
-	OrphanPaths []string // media files no longer referenced; caller deletes them
+	MessageID       int64
+	ChatID          int64
+	ChatCreated     bool
+	Created         bool     // false when an existing message was updated (edit)
+	OrphanPaths     []string // media files no longer referenced; caller deletes them
+	TelegraphQueued bool     // a Telegraph job was created for this message
 }
 
 func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, error) {
@@ -80,6 +84,13 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 				return err
 			}
 			res.Created = true
+			if in.TelegraphPath != "" {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO telegraph_jobs (message_id, path, state, created_at, updated_at)
+					VALUES (?, ?, 'queued', ?, ?)`, res.MessageID, in.TelegraphPath, in.Now, in.Now); err != nil {
+					return err
+				}
+				res.TelegraphQueued = true
+			}
 		case err != nil:
 			return err
 		case existingDeletedAt != 0:
@@ -99,7 +110,8 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 				m.EditDate, string(m.Kind), m.Text, string(entJSON), string(m.Extra), string(m.Raw), existing); err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, "DELETE FROM message_media WHERE message_id = ?", existing); err != nil {
+			// Article media belong to the message's Telegraph snapshot, not to its Telegram content.
+			if _, err := tx.ExecContext(ctx, "DELETE FROM message_media WHERE message_id = ? AND role != 'article'", existing); err != nil {
 				return err
 			}
 		}
@@ -210,8 +222,16 @@ func (s *Store) DeleteMessage(ctx context.Context, id, now int64) (int64, []stri
 		if _, err := tx.ExecContext(ctx, "UPDATE messages SET deleted_at = ? WHERE id = ?", now, id); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM message_media WHERE message_id = ?", id); err != nil {
-			return err
+		// Unlinking the media (article media included) lets collectOrphans drop unshared files; the
+		// Telegraph snapshot and its job go with the message (the FK cascade only fires on a hard delete).
+		for _, q := range []string{
+			"DELETE FROM message_media WHERE message_id = ?",
+			"DELETE FROM articles WHERE message_id = ?",
+			"DELETE FROM telegraph_jobs WHERE message_id = ?",
+		} {
+			if _, err := tx.ExecContext(ctx, q, id); err != nil {
+				return err
+			}
 		}
 		orphans, err = collectOrphans(ctx, tx)
 		return err

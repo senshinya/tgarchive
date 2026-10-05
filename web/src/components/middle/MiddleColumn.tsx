@@ -5,6 +5,7 @@ import { navigate } from '../../lib/router';
 import { useStore } from '../../state/store';
 import { Avatar } from '../../ui/Avatar';
 import { IconButton } from '../../ui/Button';
+import { ArticleReader } from '../article/ArticleReader';
 import { MessageList } from '../message/MessageList';
 import './middle.scss';
 
@@ -51,7 +52,8 @@ function MiddleHeader({ chatId }: { chatId: number }) {
   );
 }
 
-export function MiddleColumn({ chatId }: { chatId: number }) {
+/** The chat; with articleId, the article reader on top of it. */
+export function MiddleColumn({ chatId, articleId = 0 }: { chatId: number; articleId?: number }) {
   if (!chatId) {
     return (
       <div id="MiddleColumn" class="empty">
@@ -67,6 +69,7 @@ export function MiddleColumn({ chatId }: { chatId: number }) {
       <div class="Wallpaper" aria-hidden="true" />
       <MiddleHeader chatId={chatId} />
       <MessageList key={chatId} chatId={chatId} />
+      {articleId > 0 && <ArticleReader key={articleId} chatId={chatId} messageId={articleId} />}
     </div>
   );
 }

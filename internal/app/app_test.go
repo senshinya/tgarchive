@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"tgarchive/internal/store"
 	"tgarchive/internal/tgapp"
 	"tgarchive/internal/tgtest"
+	"tgarchive/internal/userbot"
 )
 
 const token = "777:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
@@ -260,7 +262,7 @@ func TestUserbotFetchEndToEnd(t *testing.T) {
 	fake := tgtest.New(t)
 	cfg := cfgFor(fake, t.TempDir())
 	photo := []byte("protected-photo-bytes")
-	a, err := newApp(context.Background(), cfg, &mtDialer{photo: photo})
+	a, err := newApp(context.Background(), cfg, &mtDialer{photo: photo}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,5 +306,89 @@ func TestUserbotFetchEndToEnd(t *testing.T) {
 		if int64(c.Params["message_id"].(float64)) != 1 {
 			t.Fatalf("reaction on wrong message: %+v", c.Params)
 		}
+	}
+}
+
+func TestTelegraphEndToEnd(t *testing.T) {
+	fake := tgtest.New(t)
+	var base string // the fake Telegraph server's URL, also the host of the article's images
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /getPage/Sample-10-05", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"ok":true,"result":{"path":"Sample-10-05","url":"https://telegra.ph/Sample-10-05","title":"Sample",
+			"author_name":"Anon","image_url":"%[1]s/cover.jpg","views":1,"content":[{"tag":"p","children":["Hello"]},
+			{"tag":"img","attrs":{"src":"%[1]s/cover.jpg"}},{"tag":"img","attrs":{"src":"%[1]s/missing.jpg"}}]}}`, base)
+	})
+	mux.HandleFunc("GET /getPage/Gone", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"ok":false,"error":"PAGE_NOT_FOUND"}`)
+	})
+	mux.HandleFunc("GET /cover.jpg", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write([]byte("COVER"))
+	})
+	srv := httptest.NewServer(mux) // /missing.jpg answers 404
+	defer srv.Close()
+	base = srv.URL
+
+	dataDir := t.TempDir()
+	cfg := cfgFor(fake, dataDir)
+	cfg.TelegraphAPIURL = srv.URL
+	// The fake serves images from 127.0.0.1, which the production dial check refuses.
+	a, err := newApp(context.Background(), cfg, userbot.GotdDialer{}, func(net.IP) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	h := a.Handler
+	addBotAndWhitelist(t, h, 42)
+
+	fake.PushMessage(tgtest.TextMsg(1, 42, "https://telegra.ph/Sample-10-05"))
+	eventually(t, "👀 then 👌 on the link message", func() bool {
+		e := emojis(fake)
+		return len(e) == 2 && e[0] == "👀" && e[1] == "👌"
+	})
+	msgs := firstChatMessages(t, h)
+	if len(msgs) != 1 || msgs[0].Text != "https://telegra.ph/Sample-10-05" || len(msgs[0].Media) != 0 {
+		t.Fatalf("messages = %+v", msgs)
+	}
+	art := msgs[0].Article
+	if art == nil || art.State != store.TelegraphFetched || art.Title != "Sample" || art.ImageMediaID == 0 {
+		t.Fatalf("article summary = %+v", art)
+	}
+	code, body := req(t, h, "GET", fmt.Sprintf("/api/messages/%d/article", msgs[0].ID), nil)
+	var av store.ArticleView
+	if code != 200 || json.Unmarshal(body, &av) != nil || len(av.Media) != 2 {
+		t.Fatalf("article = %d %s", code, body)
+	}
+	if av.Media[0].State != store.StateDone || av.Media[1].State != store.StateFailed || av.Media[0].ID != art.ImageMediaID {
+		t.Fatalf("article media = %+v", av.Media)
+	}
+	if !strings.Contains(string(av.Content), fmt.Sprintf(`"data-media-id":"%d"`, av.Media[0].ID)) {
+		t.Fatalf("content = %s", av.Content)
+	}
+	code, body = req(t, h, "GET", fmt.Sprintf("/media/%d", av.Media[0].ID), nil)
+	if code != 200 || string(body) != "COVER" {
+		t.Fatalf("cover = %d %q", code, body)
+	}
+	if files, _ := filepath.Glob(filepath.Join(dataDir, "media", "web", "*", "*", "*.jpg")); len(files) != 1 {
+		t.Fatalf("archived web files = %v", files)
+	}
+	if n := len(fake.Calls("sendMessage")); n != 0 {
+		t.Fatalf("a failed article image must not reply (%d replies)", n)
+	}
+
+	fake.PushMessage(tgtest.TextMsg(2, 42, "telegra.ph/Gone"))
+	eventually(t, "failure reply", func() bool {
+		for _, c := range fake.Calls("sendMessage") {
+			if c.Params["text"] == "⚠️ 存档失败：文章不存在" {
+				return true
+			}
+		}
+		return false
+	})
+	if e := emojis(fake); len(e) != 3 || e[2] != "👀" {
+		t.Fatalf("reactions = %v (a failed article keeps 👀)", e)
 	}
 }

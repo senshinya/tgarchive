@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { isSettings, navigate, parseRoute, route, routePath, startRouter, type Route } from './router';
+import { isSettings, navigate, parseRoute, route, routeChatId, routePath, startRouter, type Route } from './router';
 
 describe('router', () => {
   afterEach(() => history.replaceState(null, '', '/'));
@@ -8,6 +8,7 @@ describe('router', () => {
     const all: Route[] = [
       { name: 'home' },
       { name: 'chat', chatId: 12 },
+      { name: 'article', chatId: 12, messageId: 345 },
       { name: 'settings' },
       { name: 'settings-add-bot' },
       { name: 'settings-bot', botId: 3 },
@@ -18,7 +19,19 @@ describe('router', () => {
   });
 
   it('falls back to home for unknown or malformed paths', () => {
-    for (const p of ['/nope', '/chat', '/chat/0', '/chat/abc', '/chat/1/2', '/settings/bots/x', '/settings/zzz']) {
+    for (const p of [
+      '/nope',
+      '/chat',
+      '/chat/0',
+      '/chat/abc',
+      '/chat/1/2',
+      '/settings/bots/x',
+      '/settings/zzz',
+      '/chat/1/article',
+      '/chat/1/article/0',
+      '/chat/1/articles/2',
+      '/chat/1/article/2/3',
+    ]) {
       expect(parseRoute(p)).toEqual({ name: 'home' });
     }
     expect(parseRoute('/chat/7/')).toEqual({ name: 'chat', chatId: 7 });
@@ -58,5 +71,32 @@ describe('router', () => {
     expect(location.pathname).toBe('/settings');
     expect(history.length).toBe(before);
     expect(history.state).toEqual({ fromList: false });
+  });
+
+  it('maps routes to the chat they show', () => {
+    expect(routeChatId({ name: 'chat', chatId: 4 })).toBe(4);
+    expect(routeChatId({ name: 'article', chatId: 4, messageId: 9 })).toBe(4);
+    expect(routeChatId({ name: 'settings' })).toBe(0);
+  });
+
+  it('marks an article opened from its chat with fromChat', () => {
+    navigate({ name: 'article', chatId: 5, messageId: 6 }, { fromChat: true });
+    expect(location.pathname).toBe('/chat/5/article/6');
+    expect(history.state).toEqual({ fromList: false, fromChat: true });
+  });
+
+  it('strips a stale history.state.viewer marker on start (e.g. a reload while the media viewer was open left it on the current entry)', () => {
+    history.replaceState({ fromChat: true, viewer: 'token-from-before-reload' }, '', '/chat/5/article/6');
+    const stop = startRouter();
+    expect(history.state).toEqual({ fromChat: true });
+    expect(location.pathname).toBe('/chat/5/article/6'); // only the marker is stripped, nothing navigates
+    stop();
+  });
+
+  it('leaves history.state alone on start when there is no viewer marker', () => {
+    history.replaceState({ fromChat: true }, '', '/chat/5/article/6');
+    const stop = startRouter();
+    expect(history.state).toEqual({ fromChat: true });
+    stop();
   });
 });

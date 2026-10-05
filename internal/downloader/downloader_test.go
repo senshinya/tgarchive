@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -227,5 +228,98 @@ func TestRemoveFilesStaysInside(t *testing.T) {
 	}
 	if _, err := os.Stat(outside); err != nil {
 		t.Fatal("RemoveFiles escaped mediaDir")
+	}
+}
+
+// TestWebDownloadsDoNotStarveBotSlots pins 4 slow "web:" media due at once (more than the
+// per-source web cap of 2) alongside one "bot:" media in the same batch. Without the cap, Run's
+// dispatch loop fills the whole 4-slot pool with blocked web downloads and then blocks
+// synchronously trying to hand the bot item a pool slot, so the bot item never gets processed
+// while the web items are stuck. With the cap, only 2 web items are dispatched (the rest are
+// skipped for this pass, left due for the next one) and the bot item gets a free slot promptly.
+func TestWebDownloadsDoNotStarveBotSlots(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	bot, _ := st.UpsertBot(ctx, &store.Bot{TgBotID: 777, TokenEnc: []byte("x"), CreatedAt: 1})
+
+	for i := 0; i < 4; i++ {
+		msg := &model.Message{TgMessageID: int64(i + 1), Source: model.SourceBotUpdate, Date: 1, Kind: model.KindPhoto, RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`),
+			Media: []model.Media{{DedupeKey: fmt.Sprintf("web:%d", i), SourceRef: "x", Kind: "photo", Role: model.RoleMain}}}
+		if _, err := st.Ingest(ctx, store.IngestInput{BotID: bot, Sender: model.Sender{TgUserID: 42}, Msg: msg, Now: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	botMsg := &model.Message{TgMessageID: 5, Source: model.SourceBotUpdate, Date: 1, Kind: model.KindPhoto, RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`),
+		Media: []model.Media{{DedupeKey: "bot:k", SourceRef: "fid", Kind: "photo", Role: model.RoleMain}}}
+	if _, err := st.Ingest(ctx, store.IngestInput{BotID: bot, Sender: model.Sender{TgUserID: 42}, Msg: botMsg, Now: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	due, err := st.DueMedia(ctx, 0, 10)
+	if err != nil || len(due) != 5 {
+		t.Fatalf("due = %v %v", due, err)
+	}
+	var botMediaID int64
+	for _, m := range due {
+		if m.DedupeKey == "bot:k" {
+			botMediaID = m.ID
+		}
+	}
+	if botMediaID == 0 {
+		t.Fatal("bot media not found among due")
+	}
+
+	mediaDir := t.TempDir()
+	d := New(st, mediaDir, 0, func(int64) {})
+	d.Now = func() time.Time { return time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC) }
+
+	block := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-block:
+		default:
+			close(block)
+		}
+	})
+	d.Register("web", &fakeSource{hook: func() { <-block }})
+	d.Register("bot", &fakeSource{})
+
+	c, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { d.Run(c); close(done) }()
+	d.Wake()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, _ := st.GetMedia(ctx, botMediaID)
+		if got.State == store.StateDone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("bot media was not processed while web downloads were in flight (starved by the shared pool)")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	close(block)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not shut down after the blocked web downloads were released")
+	}
+}
+
+func TestPermanentErrorFailsAtOnce(t *testing.T) {
+	f, _, m := setup(t, 4)
+	d := f.newDL(0)
+	d.Register("bot", &fakeSource{errs: []error{Permanent(errors.New("地址不允许"))}})
+	d.Process(ctx, m)
+	got, _ := f.st.GetMedia(ctx, m.ID)
+	if got.State != store.StateFailed || got.Attempts != 1 || got.Error != "地址不允许" || len(f.settled) != 1 {
+		t.Fatalf("media = %+v settled = %v", got, f.settled)
 	}
 }

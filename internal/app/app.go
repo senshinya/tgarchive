@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	"tgarchive/internal/receipt"
 	"tgarchive/internal/seal"
 	"tgarchive/internal/store"
+	"tgarchive/internal/telegraph"
 	"tgarchive/internal/tgapp"
 	"tgarchive/internal/userbot"
 	"tgarchive/web"
@@ -43,14 +45,17 @@ type App struct {
 	sup     *botapiserver.Supervisor
 	ub      *userbot.Service
 	fetcher *userbot.Fetcher
+	tw      *telegraph.Worker
 	wg      sync.WaitGroup
 }
 
 func New(parent context.Context, cfg *config.Config) (*App, error) {
-	return newApp(parent, cfg, userbot.GotdDialer{})
+	return newApp(parent, cfg, userbot.GotdDialer{}, nil)
 }
 
-func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer) (*App, error) {
+// newApp takes the userbot dialer and the web media dial check (nil = downloader.PublicIP) so
+// tests can run against in-process fakes; production always uses New.
+func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer, webDialCheck func(net.IP) error) (*App, error) {
 	mediaDir := filepath.Join(cfg.DataDir, "media")
 	avatarDir := filepath.Join(cfg.DataDir, "avatars")
 	for _, d := range []string{mediaDir, avatarDir, filepath.Join(cfg.DataDir, "db")} {
@@ -83,11 +88,13 @@ func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer) (
 	dl.Register("bot", &downloader.BotSource{Clients: clients.Get, Mapper: mapper})
 	ub := userbot.New(st, box, tg, dialer, notifier)
 	dl.Register("mt", &userbot.MTSource{API: ub})
+	dl.Register("web", downloader.NewWebSource(cfg.MediaMaxBytes, webDialCheck))
 	fetcher := userbot.NewFetcher(ub, st, rc, clients, hub, dl.Wake, mediaDir)
+	tw := telegraph.NewWorker(st, telegraph.NewClient(cfg.TelegraphAPIURL), rc, hub, dl.Wake)
 	av := &avatars.Refresher{Store: st, Clients: clients, Mapper: mapper, Dir: avatarDir}
 	mgr := collector.New(ctx, collector.Deps{
 		Store: st, Clients: clients, Downloader: dl, Receipts: rc, Hub: hub,
-		Notifier: notifier, Avatars: av, Links: fetcher,
+		Notifier: notifier, Avatars: av, Links: fetcher, Telegraph: tw,
 		MediaDir: mediaDir, PollTimeoutSec: cfg.PollTimeoutSec,
 	})
 	var sup *botapiserver.Supervisor
@@ -100,16 +107,17 @@ func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer) (
 		Web: web.FS(), MediaDir: mediaDir, AvatarDir: avatarDir, HTTP: hc, Now: time.Now,
 	}
 	return &App{Handler: srv.Handler(), ctx: ctx, cancel: cancel, st: st, mgr: mgr, dl: dl, av: av, mapper: mapper, tg: tg, sup: sup,
-		ub: ub, fetcher: fetcher}, nil
+		ub: ub, fetcher: fetcher, tw: tw}, nil
 }
 
 func (a *App) Start() error {
 	a.wg.Add(2)
 	go func() { defer a.wg.Done(); a.dl.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.maintain() }()
-	a.wg.Add(2)
+	a.wg.Add(3)
 	go func() { defer a.wg.Done(); a.ub.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.fetcher.Run(a.ctx) }()
+	go func() { defer a.wg.Done(); a.tw.Run(a.ctx) }()
 	if a.sup != nil {
 		creds, err := a.tg.Load(a.ctx)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {

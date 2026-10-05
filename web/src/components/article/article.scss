@@ -1,0 +1,338 @@
+// Telegraph article card (link-preview look, webA-design.md §5.9) and the Instant View style
+// reader. Sizes for the reader come from the Telegraph spec §8.
+
+.ArticleCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 29rem;
+  margin: 0.375rem 0 0.25rem;
+  padding: 0.1875rem 0.5rem 0.25rem 0.625rem;
+  border-radius: 0.25rem;
+  font-size: calc(var(--message-text-size) - 1px);
+  line-height: 1.125rem;
+  text-align: start;
+  white-space: normal;
+  color: var(--color-text);
+  background: var(--accent-background-color, var(--color-primary-tint));
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 2px;
+    border-radius: 2px 0 0 2px;
+    background: var(--accent-color, var(--color-primary));
+  }
+}
+
+button.ArticleCard {
+  cursor: pointer;
+}
+
+.ArticleCard-site {
+  font-weight: var(--font-weight-semibold);
+  color: var(--accent-color, var(--color-primary));
+}
+
+.ArticleCard-title {
+  margin-top: 0.125rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.ArticleCard-description {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.ArticleCard-image {
+  display: block;
+  width: 100%;
+  max-height: 20rem;
+  margin: 0.25rem 0 0.1875rem;
+  border-radius: var(--border-radius-messages-small);
+  object-fit: cover;
+}
+
+.ArticleCard-status {
+  color: var(--color-text-secondary);
+
+  &.error {
+    color: var(--color-error);
+  }
+}
+
+.ArticleCard-link {
+  color: var(--color-links);
+  overflow-wrap: anywhere;
+}
+
+// Covers the middle column on desktop; the middle column itself is full screen at <=600px
+// (layout.scss), so the reader is too.
+.ArticleReader {
+  position: absolute;
+  inset: 0;
+  z-index: 10; // above MiddleHeader (5)
+  display: flex;
+  flex-direction: column;
+  background: var(--color-background);
+  animation: fade-in 0.2s ease-out;
+}
+
+.ArticleReader-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 3.5rem;
+  padding: 0 0.75rem 0 0.5rem;
+  border-bottom: 1px solid var(--color-borders);
+}
+
+.ArticleReader-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.ArticleReader-open {
+  flex-shrink: 0;
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--border-radius-button-tiny);
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-primary);
+  text-decoration: none;
+
+  &:hover {
+    background: var(--color-primary-tint);
+  }
+}
+
+.ArticleReader-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ArticleReader-state {
+  display: flex;
+  justify-content: center;
+  padding: 3rem 1rem;
+  color: var(--color-text-secondary);
+}
+
+.ArticleReader-body {
+  max-width: 732px;
+  margin: 0 auto;
+  padding: 1.5rem 1.5rem 3rem;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+
+  @media (max-width: 600px) {
+    padding: 1rem 1rem 2.5rem;
+  }
+
+  p {
+    margin: 0 0 1rem;
+  }
+
+  h3 {
+    margin: 1.75rem 0 0.75rem;
+    font-size: 22px;
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.3;
+  }
+
+  h4 {
+    margin: 1.5rem 0 0.5rem;
+    font-size: 19px;
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.3;
+  }
+
+  a {
+    color: var(--color-links);
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  blockquote {
+    margin: 1rem 0;
+    padding: 0.125rem 0 0.125rem 1rem;
+    border-left: 3px solid var(--color-primary);
+    font-style: italic;
+  }
+
+  aside {
+    margin: 1.5rem 0;
+    font-size: 22px;
+    font-style: italic;
+    line-height: 1.45;
+    text-align: center;
+  }
+
+  ul,
+  ol {
+    margin: 0 0 1rem;
+    padding-left: 1.5rem;
+  }
+
+  li {
+    margin-bottom: 0.25rem;
+  }
+
+  pre {
+    margin: 0 0 1rem;
+    padding: 0.75rem 1rem;
+    border-radius: 0.5rem;
+    font-family: var(--font-family-monospace);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    white-space: pre;
+    overflow-x: auto;
+    background: var(--color-code-bg);
+  }
+
+  code {
+    font-family: var(--font-family-monospace);
+    font-size: 0.9em;
+  }
+
+  figure {
+    margin: 1.25rem 0;
+  }
+
+  figcaption {
+    margin-top: 0.5rem;
+    font-size: 14px;
+    line-height: 1.4;
+    text-align: center;
+    color: var(--color-text-secondary);
+  }
+
+  hr {
+    width: 30%;
+    margin: 2rem auto;
+    border: none;
+    border-top: 1px solid var(--color-dividers);
+  }
+}
+
+.ArticleReader-heading {
+  margin: 0 0 0.5rem;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.ArticleReader-byline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.75rem;
+  margin-bottom: 1.5rem;
+  font-size: 15px;
+  color: var(--color-text-secondary);
+}
+
+.ArticleMedia {
+  display: block;
+  width: 100%;
+  max-height: 80vh;
+  margin: 0 auto 1rem;
+  border-radius: 0.5rem;
+  background: var(--color-background-secondary);
+}
+
+.ArticleMedia-photo {
+  padding: 0;
+  cursor: zoom-in;
+  overflow: hidden;
+
+  img {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 80vh;
+    object-fit: contain;
+  }
+}
+
+.ArticleMedia-placeholder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem 1rem;
+  min-height: 8rem;
+  margin: 0 0 1rem;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  font-size: 15px;
+  color: var(--color-text-secondary);
+  background: var(--color-background-secondary);
+}
+
+.ArticleMedia-retry {
+  padding: 0.25rem 0.75rem;
+  border-radius: var(--border-radius-button-tiny);
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
+  color: #fff;
+  background: var(--color-primary);
+}
+
+.ArticleEmbed {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-borders);
+  border-radius: 0.5rem;
+  text-decoration: none !important;
+  color: var(--color-text) !important;
+
+  &:hover {
+    background: var(--color-interactive-element-hover);
+  }
+}
+
+.ArticleEmbed-icon {
+  flex-shrink: 0;
+  color: var(--color-primary);
+}
+
+.ArticleEmbed-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ArticleEmbed-source {
+  font-weight: var(--font-weight-semibold);
+}
+
+.ArticleEmbed-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}

@@ -1,5 +1,6 @@
 import type {
   AddBotResult,
+  Article,
   Bot,
   Chat,
   Message,
@@ -71,6 +72,7 @@ export interface Api {
   chats(): Promise<Chat[]>;
   messages(chatId: number, before?: number, limit?: number): Promise<Message[]>;
   message(id: number): Promise<Message>;
+  article(messageId: number): Promise<Article>;
   chatMedia(chatId: number, type: SharedMediaType, before?: number, limit?: number): Promise<Message[]>;
   deleteMessage(id: number): Promise<void>;
   retryMedia(id: number): Promise<void>;
@@ -96,6 +98,7 @@ export const api: Api = {
   messages: (chatId, before = 0, limit = PAGE_SIZE) =>
     request('GET', `/api/chats/${chatId}/messages${qs({ before, limit })}`),
   message: (id) => request('GET', `/api/messages/${id}`),
+  article: (messageId) => request('GET', `/api/messages/${messageId}/article`),
   chatMedia: (chatId, type, before = 0, limit = PAGE_SIZE) =>
     request('GET', `/api/chats/${chatId}/media${qs({ type, before, limit })}`),
   deleteMessage: (id) => request('DELETE', `/api/messages/${id}`),

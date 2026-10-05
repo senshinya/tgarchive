@@ -21,6 +21,20 @@ import (
 
 var ErrTooLarge = errors.New("file exceeds the archive size limit")
 
+// maxWebInFlight caps how many "web:" (Telegraph article) downloads Run dispatches at once, out
+// of the shared Concurrency-sized pool, so a burst of article media can never starve Telegram
+// media of a slot.
+const maxWebInFlight = 2
+
+// permanentError marks a failure that retrying cannot fix (e.g. a forbidden address).
+type permanentError struct{ err error }
+
+func (p *permanentError) Error() string { return p.err.Error() }
+func (p *permanentError) Unwrap() error { return p.err }
+
+// Permanent wraps err so Process fails the media at once instead of scheduling retries.
+func Permanent(err error) error { return &permanentError{err: err} }
+
 type Source interface {
 	// Fetch stores the file for m at dstBase plus an extension of the source's choosing.
 	Fetch(ctx context.Context, m *store.Media, dstBase string) (path string, size int64, err error)
@@ -37,9 +51,10 @@ type Downloader struct {
 	Delays      []time.Duration
 	Now         func() time.Time
 
-	wake     chan struct{}
-	mu       sync.Mutex
-	inflight map[int64]bool
+	wake        chan struct{}
+	mu          sync.Mutex
+	inflight    map[int64]bool
+	webInFlight int
 }
 
 func New(st *store.Store, mediaDir string, maxBytes int64, onSettled func(int64)) *Downloader {
@@ -75,20 +90,22 @@ func (d *Downloader) Run(ctx context.Context) {
 		}
 		for i := range due {
 			m := due[i]
-			if !d.claim(m.ID) {
+			prefix, _, _ := strings.Cut(m.DedupeKey, ":")
+			isWeb := prefix == "web"
+			if !d.claim(m.ID, isWeb) {
 				continue
 			}
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				d.release(m.ID)
+				d.release(m.ID, isWeb)
 				return
 			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				defer func() { <-sem }()
-				defer d.release(m.ID)
+				defer d.release(m.ID, isWeb)
 				d.Process(ctx, &m)
 			}()
 		}
@@ -101,20 +118,32 @@ func (d *Downloader) Run(ctx context.Context) {
 	}
 }
 
-func (d *Downloader) claim(id int64) bool {
+// claim marks id in-flight, refusing a web item once maxWebInFlight web downloads are already
+// running — the caller should skip it for this batch and leave it due for the next pass instead
+// of occupying a pool slot waiting.
+func (d *Downloader) claim(id int64, isWeb bool) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.inflight[id] {
 		return false
 	}
+	if isWeb && d.webInFlight >= maxWebInFlight {
+		return false
+	}
 	d.inflight[id] = true
+	if isWeb {
+		d.webInFlight++
+	}
 	return true
 }
 
-func (d *Downloader) release(id int64) {
+func (d *Downloader) release(id int64, isWeb bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	delete(d.inflight, id)
+	if isWeb {
+		d.webInFlight--
+	}
 }
 
 func (d *Downloader) Process(ctx context.Context, m *store.Media) {
@@ -142,6 +171,11 @@ func (d *Downloader) Process(ctx context.Context, m *store.Media) {
 			d.tooLarge(ctx, m)
 			return
 		}
+		var pe *permanentError
+		if errors.As(err, &pe) {
+			d.fail(ctx, m, m.Attempts+1, err)
+			return
+		}
 		d.retry(ctx, m, err)
 		return
 	}
@@ -165,17 +199,21 @@ func (d *Downloader) Process(ctx context.Context, m *store.Media) {
 func (d *Downloader) retry(ctx context.Context, m *store.Media, cause error) {
 	n := m.Attempts + 1
 	if n > len(d.Delays) {
-		if err := d.st.MarkMediaFailed(ctx, m.ID, n, botapifs.RedactPath(cause.Error())); err != nil {
-			log.Printf("downloader: mark media %d failed: %v", m.ID, err)
-			return
-		}
-		d.settle(m.ID)
+		d.fail(ctx, m, n, cause)
 		return
 	}
 	next := d.Now().Add(d.Delays[n-1]).Unix()
 	if err := d.st.MarkMediaRetry(ctx, m.ID, n, next, botapifs.RedactPath(cause.Error())); err != nil {
 		log.Printf("downloader: schedule retry for media %d: %v", m.ID, err)
 	}
+}
+
+func (d *Downloader) fail(ctx context.Context, m *store.Media, attempts int, cause error) {
+	if err := d.st.MarkMediaFailed(ctx, m.ID, attempts, botapifs.RedactPath(cause.Error())); err != nil {
+		log.Printf("downloader: mark media %d failed: %v", m.ID, err)
+		return
+	}
+	d.settle(m.ID)
 }
 
 func (d *Downloader) tooLarge(ctx context.Context, m *store.Media) {

@@ -25,11 +25,13 @@ describe('api client', () => {
     await api.messages(7, 120, 50);
     await api.chatMedia(7, 'file', 33);
     await api.chats();
+    await api.article(55);
     expect(calls.map((c) => c.url)).toEqual([
       '/api/chats/7/messages?limit=50',
       '/api/chats/7/messages?before=120&limit=50',
       '/api/chats/7/media?type=file&before=33&limit=50',
       '/api/chats',
+      '/api/messages/55/article',
     ]);
     expect(calls[0].init.method).toBe('GET');
     expect(calls[0].init.body).toBeUndefined();

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+
+	"tgarchive/internal/model"
 )
 
 type Media struct {
@@ -112,10 +114,17 @@ func (s *Store) MessagesForMedia(ctx context.Context, mediaID int64) ([]int64, e
 
 type MediaStatus struct{ State, Error string }
 
+// ArticleReceipt is the Telegraph job of a link message and the states of its article media.
+type ArticleReceipt struct {
+	State, Error string
+	Media        []MediaStatus
+}
+
 type ReceiptInfo struct {
 	MessageID, BotID, TgChatID, TgMessageID int64
 	Source, Receipt                         string
 	Main                                    []MediaStatus
+	Article                                 *ArticleReceipt // nil when the message has no Telegraph job
 }
 
 func (s *Store) GetReceiptInfo(ctx context.Context, messageID int64) (*ReceiptInfo, error) {
@@ -130,21 +139,42 @@ func (s *Store) GetReceiptInfo(ctx context.Context, messageID int64) (*ReceiptIn
 	if err != nil {
 		return nil, err
 	}
+	if ri.Main, err = s.mediaStatuses(ctx, messageID, model.RoleMain); err != nil {
+		return nil, err
+	}
+	var a ArticleReceipt
+	err = s.db.QueryRowContext(ctx, "SELECT state, error FROM telegraph_jobs WHERE message_id = ?", messageID).Scan(&a.State, &a.Error)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return &ri, nil
+	case err != nil:
+		return nil, err
+	}
+	if a.Media, err = s.mediaStatuses(ctx, messageID, RoleArticle); err != nil {
+		return nil, err
+	}
+	ri.Article = &a
+	return &ri, nil
+}
+
+// mediaStatuses lists the states of a message's media with the given role, in position order.
+func (s *Store) mediaStatuses(ctx context.Context, messageID int64, role string) ([]MediaStatus, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT md.state, md.error FROM message_media mm JOIN media md ON md.id = mm.media_id
-		WHERE mm.message_id = ? AND mm.role = 'main' ORDER BY mm.position`, messageID)
+		WHERE mm.message_id = ? AND mm.role = ? ORDER BY mm.position`, messageID, role)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	var out []MediaStatus
 	for rows.Next() {
 		var ms MediaStatus
 		if err := rows.Scan(&ms.State, &ms.Error); err != nil {
 			return nil, err
 		}
-		ri.Main = append(ri.Main, ms)
+		out = append(out, ms)
 	}
-	return &ri, rows.Err()
+	return out, rows.Err()
 }
 
 func (s *Store) SetReceipt(ctx context.Context, messageID int64, receipt string) error {

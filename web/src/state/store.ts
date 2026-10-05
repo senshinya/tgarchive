@@ -2,7 +2,7 @@ import { computed, signal } from '@preact/signals';
 import { createContext } from 'preact';
 import { useContext } from 'preact/hooks';
 import { ApiError, PAGE_SIZE, errorMessage, type Api } from '../api/client';
-import type { ArchiveEvent, Bot, Chat, Message } from '../api/types';
+import type { ArchiveEvent, Bot, Chat, Entity, Message } from '../api/types';
 
 export interface Conversation {
   items: Message[]; // ascending by id
@@ -14,11 +14,20 @@ export interface Conversation {
 
 const EMPTY: Conversation = { items: [], hasMore: true, loading: false, loaded: false, error: '' };
 
-export interface ViewerTarget {
-  chatId: number;
-  messageId: number;
+/** One photo/video/GIF the media viewer can show. */
+export interface ViewerItem {
   mediaId: number;
+  kind: string; // photo / video / animation
+  date: number;
+  text: string; // caption, '' for none
+  entities: Entity[];
 }
+
+/** Opens the viewer on a chat's media (walking the whole chat), or on an explicit list such as
+ * the media of one archived article (walking only that list). */
+export type ViewerTarget =
+  | { chatId: number; messageId: number; mediaId: number }
+  | { list: ViewerItem[]; mediaId: number; title: string };
 
 export interface Toast {
   id: number;
@@ -44,6 +53,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
   const sharedMediaOpen = signal(false); // right column
   let toastSeq = 0;
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+  const eventListeners = new Set<(ev: ArchiveEvent) => void>();
 
   const botsById = computed(() => new Map(bots.value.map((b) => [b.id, b])));
   // Falls back to "全部" when the selected bot was purged from `bots` but the reload that
@@ -159,7 +169,20 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
     }
   }
 
+  /** Subscribes to every SSE event as handleEvent receives it, regardless of whether handleEvent
+   * itself acts on it (e.g. it only refreshes a message that belongs to an already-loaded
+   * conversation). For components that need to react to an event concerning one specific id that
+   * may not be part of any loaded conversation — e.g. a deep-linked article reader. Returns an
+   * unsubscribe function. */
+  function onEvent(listener: (ev: ArchiveEvent) => void): () => void {
+    eventListeners.add(listener);
+    return () => {
+      eventListeners.delete(listener);
+    };
+  }
+
   async function handleEvent(ev: ArchiveEvent) {
+    for (const l of eventListeners) l(ev);
     switch (ev.type) {
       case 'message.created':
       case 'message.updated':
@@ -244,6 +267,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
     loadOlder,
     refreshMessage,
     handleEvent,
+    onEvent,
     resync,
     deleteMessage,
     retryMedia,

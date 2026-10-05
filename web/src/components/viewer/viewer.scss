@@ -4,6 +4,10 @@
   z-index: 40;
   display: grid;
   grid-template-rows: auto 1fr auto;
+  // Without an explicit column the implicit track sizes to its widest item's min-content, so a
+  // long nowrap title/name would widen the header past the viewport and push the close button
+  // off-screen on phones. minmax(0, 1fr) pins the column to the viewer's width.
+  grid-template-columns: minmax(0, 1fr);
   background: rgba(0, 0, 0, 0.9);
   color: #fff;
   animation: fade-in 0.3s cubic-bezier(0.33, 1, 0.68, 1);
@@ -25,6 +29,7 @@
 }
 
 .MediaViewer-sender {
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -40,15 +45,13 @@
 .MediaViewer-date {
   font-size: 0.875rem;
   opacity: 0.75;
-
-  @media (max-width: 600px) {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .MediaViewer-actions {
+  flex-shrink: 0;
   display: flex;
   gap: 0.25rem;
 

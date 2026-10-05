@@ -2,6 +2,8 @@
 
 集中管理多个 Telegram 机器人，把白名单用户私聊发给机器人的消息（文本与全部媒体）存档到服务器，用仿 Telegram Web A 的只读 WebUI 浏览；受保护群组 / 频道的内容可以贴消息链接，由用户账号（userbot）代取。设计见 [`docs/superpowers/specs/2026-10-04-tgarchive-design.md`](docs/superpowers/specs/2026-10-04-tgarchive-design.md)。
 
+消息整条就是一个 Telegraph 文章链接（`telegra.ph` / `graph.org`）时，文章正文与其中的图片、视频会离线存档，WebUI 在该消息下显示文章卡片，点开为仿 Instant View 的阅读页。设计见 [`docs/superpowers/specs/2026-10-05-telegraph-archive-design.md`](docs/superpowers/specs/2026-10-05-telegraph-archive-design.md)。文章图片从原站直接下载，容器需要能访问外网。
+
 单个 Go 二进制内嵌 Preact 前端，并以子进程托管官方 [telegram-bot-api](https://github.com/tdlib/telegram-bot-api) 本地服务器（`--local`，只监听 127.0.0.1:8081）。
 
 ## 开发
@@ -30,12 +32,13 @@ cd web && npm run dev   # Vite 开发服务器，/api、/media、/avatars 代理
 | `DATA_DIR` | `/data` | 数据根目录（`db/`、`media/`、`avatars/`、`botapi/`、`botapi-tmp/`） |
 | `REQUIRE_FORWARD_AUTH` | `true` | 除 `/healthz` 外要求请求带 `Remote-User`，否则 401 |
 | `BARK_NOTIFY_FILE` | 空 | Bark 配置（`endpoint` + `device_keys`），机器人或 userbot 出错时推送；空则不推 |
-| `MEDIA_MAX_BYTES` | `0` | 单文件存档上限，0 为不限 |
+| `MEDIA_MAX_BYTES` | `0` | 单文件存档上限，0 为不限；Telegraph 文章的网页媒体此时仍有 2 GiB 的默认上限（作者不可信） |
 | `BOT_API_MANAGED` | `true` | 是否托管 `telegram-bot-api` 子进程 |
 | `BOT_API_BINARY` | `telegram-bot-api` | 子进程可执行文件 |
 | `BOT_API_URL` | `http://127.0.0.1:8081` | Bot API 服务器地址 |
 | `BOT_API_DIR_LOCAL` / `BOT_API_DIR_REMOTE` | `$DATA_DIR/botapi` | 本容器内 / Bot API 服务器内的同一目录（外部服务器时用于路径映射） |
 | `CLOUD_API_URL` | `https://api.telegram.org` | 云端 Bot API，只用于添加机器人时的 `getMe` 与 `logOut` |
+| `TELEGRAPH_API_URL` | `https://api.telegra.ph` | Telegraph API 地址，仅测试时指向假服务器 |
 
 机器人 token、`api_id` / `api_hash` 与 userbot 登录都在 WebUI「管理」页设置并加密入库，不经过环境变量。
 

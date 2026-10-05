@@ -310,6 +310,7 @@ userbot 违反 Telegram 使用条款，存在账号受限风险。session 等同
 | GET | `/api/chats/:id/messages?before=&limit=50` | 游标分页，含媒体与 sender |
 | GET | `/api/chats/:id/media?type=media\|file\|link&before=` | 共享媒体 |
 | GET | `/api/messages/:id` | 单条消息（含媒体、回复预览与 `chat_id`），SSE 增量更新用；已删除 404 |
+| GET | `/api/messages/:id/article` | 该链接消息存档的 Telegraph 文章（正文节点树与文章媒体状态）；无文章或消息已删 404。见 `2026-10-05-telegraph-archive-design.md` §7 |
 | DELETE | `/api/messages/:id` | 删除存档（软删 + 清理孤立媒体） |
 | POST | `/api/media/:id/retry` | 重试失败媒体 |
 | GET | `/api/events` | SSE：`message.created/updated/deleted`、`media.updated`、`bot.status` |

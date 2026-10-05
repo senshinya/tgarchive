@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 import type { Api } from '../api/client';
-import type { Bot, Chat, Media, Message } from '../api/types';
+import type { Article, ArticleMedia, Bot, Chat, Media, Message } from '../api/types';
 
 export function makeBot(over: Partial<Bot> = {}): Bot {
   return {
@@ -65,6 +65,25 @@ export function makeMessage(over: Partial<Message> = {}): Message {
   };
 }
 
+export function makeArticleMedia(over: Partial<ArticleMedia> = {}): ArticleMedia {
+  return { id: 200, kind: 'photo', state: 'done', width: 0, height: 0, duration: 0, mime: 'image/jpeg', ...over };
+}
+
+export function makeArticle(over: Partial<Article> = {}): Article {
+  return {
+    url: 'https://telegra.ph/Sample-10-05',
+    title: 'Sample',
+    description: 'A sample article',
+    author_name: 'Anon',
+    author_url: 'https://t.me/anon',
+    views: 7,
+    fetched_at: 1_790_000_000,
+    content: [{ tag: 'p', children: ['Hello'] }],
+    media: [],
+    ...over,
+  };
+}
+
 /** An Api whose every method is a vi.fn with an empty-but-valid default result. */
 export function fakeApi(over: Partial<Api> = {}): Api {
   const base: Api = {
@@ -72,6 +91,7 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     chats: vi.fn(async () => []),
     messages: vi.fn(async () => []),
     message: vi.fn(async (id: number) => makeMessage({ id })),
+    article: vi.fn(async () => makeArticle()),
     chatMedia: vi.fn(async () => []),
     deleteMessage: vi.fn(async () => undefined),
     retryMedia: vi.fn(async () => undefined),
