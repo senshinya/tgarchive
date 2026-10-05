@@ -110,7 +110,8 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 				m.EditDate, string(m.Kind), m.Text, string(entJSON), string(m.Extra), string(m.Raw), existing); err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, "DELETE FROM message_media WHERE message_id = ?", existing); err != nil {
+			// Article media belong to the message's Telegraph snapshot, not to its Telegram content.
+			if _, err := tx.ExecContext(ctx, "DELETE FROM message_media WHERE message_id = ? AND role != 'article'", existing); err != nil {
 				return err
 			}
 		}

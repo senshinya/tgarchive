@@ -69,6 +69,7 @@ type MessageView struct {
 	OriginLink         string          `json:"origin_link"`
 	Extra              json.RawMessage `json:"extra,omitempty"`
 	Media              []MediaView     `json:"media"`
+	Article            *ArticleSummary `json:"article,omitempty"`
 }
 
 func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) {
@@ -217,7 +218,7 @@ func (s *Store) hydrate(ctx context.Context, chatID int64, views []MessageView) 
 		SELECT mm.message_id, mm.role, md.id, md.kind, md.mime, md.file_name, md.size, md.width, md.height, md.duration,
 			md.waveform, md.state, md.error
 		FROM message_media mm JOIN media md ON md.id = mm.media_id
-		WHERE mm.message_id IN (`+ph+`) ORDER BY mm.message_id, mm.position`, args...)
+		WHERE mm.message_id IN (`+ph+`) AND mm.role != 'article' ORDER BY mm.message_id, mm.position`, args...)
 	if err != nil {
 		return err
 	}
@@ -236,6 +237,9 @@ func (s *Store) hydrate(ctx context.Context, chatID int64, views []MessageView) 
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	if err := s.hydrateArticles(ctx, views, idx, ph, args); err != nil {
+		return err
+	}
 	for i := range views {
 		r := views[i].ReplyToTgMessageID
 		if r == 0 {
@@ -251,4 +255,30 @@ func (s *Store) hydrate(ctx context.Context, chatID int64, views []MessageView) 
 		}
 	}
 	return nil
+}
+
+// hydrateArticles attaches the Telegraph card summary to messages that have a job.
+func (s *Store) hydrateArticles(ctx context.Context, views []MessageView, idx map[int64]int, ph string, args []any) error {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT j.message_id, j.state, j.error, j.path, COALESCE(a.url, ''), COALESCE(a.title, ''), COALESCE(a.description, ''),
+			COALESCE(a.author_name, ''), COALESCE((SELECT md.id FROM media md WHERE md.id = a.image_media_id AND md.state = 'done'), 0)
+		FROM telegraph_jobs j LEFT JOIN articles a ON a.message_id = j.message_id
+		WHERE j.message_id IN (`+ph+`)`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var msgID int64
+		var path string
+		a := &ArticleSummary{}
+		if err := rows.Scan(&msgID, &a.State, &a.Error, &path, &a.URL, &a.Title, &a.Description, &a.AuthorName, &a.ImageMediaID); err != nil {
+			return err
+		}
+		if a.URL == "" {
+			a.URL = articleURL(path)
+		}
+		views[idx[msgID]].Article = a
+	}
+	return rows.Err()
 }
