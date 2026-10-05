@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/preact';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/preact';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -208,6 +208,42 @@ describe('ArticleReader in the app', () => {
     });
     expect(screen.queryByRole('dialog', { name: '文章' })).toBeNull();
     expect(screen.getByText('https://telegra.ph/Sample-10-05')).toBeTruthy(); // still in the chat
+  });
+
+  it('system back while the media viewer is open (inside the reader) closes only the viewer; the reader back button still works afterwards', async () => {
+    history.replaceState({ fromList: true }, '', '/chat/10');
+    const api = fakeApi({
+      bots: vi.fn(async () => [makeBot({ id: 1 })]),
+      chats: vi.fn(async () => [makeChat({ id: 10 })]),
+      messages: vi.fn(async () => [linkMsg(summary())]),
+      article: vi.fn(async () => makeArticle({ content: everyNode, media: everyMedia })),
+    });
+    const store = createStore(api, { chatsReloadDelay: 0 });
+    render(<App store={store} eventSource={() => new FakeES()} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Sample/ }));
+    expect(await screen.findByRole('dialog', { name: '文章' })).toBeTruthy();
+    expect(history.state).toEqual({ fromList: false, fromChat: true });
+
+    // Open the viewer on one of the article's photos: pushes one more entry for the same URL.
+    fireEvent.click(screen.getByRole('button', { name: '查看图片' }));
+    await screen.findByRole('dialog', { name: '媒体查看器' });
+    expect(history.state).toEqual({ fromList: false, fromChat: true, viewer: true });
+    expect(location.pathname).toBe('/chat/10/article/1');
+
+    // System back while the viewer is open: closes only the viewer, not the reader underneath.
+    await act(async () => {
+      history.replaceState({ fromList: false, fromChat: true }, '', '/chat/10/article/1'); // what the browser restores
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    expect(screen.queryByRole('dialog', { name: '媒体查看器' })).toBeNull();
+    expect(screen.getByRole('dialog', { name: '文章' })).toBeTruthy(); // reader still open
+    expect(location.pathname).toBe('/chat/10/article/1'); // did not navigate away
+
+    // The reader's own back button still relies on history.state.fromChat, preserved above.
+    const back = vi.spyOn(history, 'back').mockImplementation(() => {});
+    fireEvent.click(within(screen.getByRole('dialog', { name: '文章' })).getByRole('button', { name: '返回' }));
+    expect(back).toHaveBeenCalledTimes(1);
+    back.mockRestore();
   });
 
   it('deep-links straight into the reader', async () => {

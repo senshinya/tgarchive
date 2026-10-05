@@ -30,9 +30,28 @@ export function toViewerItems(msgs: Message[]): ViewerItem[] {
 
 function ViewerInner({ target }: { target: ViewerTarget }) {
   const store = useStore();
+  // Closing via UI: if the top history entry is the one we pushed on open (below), go back
+  // through it instead of closing directly — the popstate handler below then closes the viewer,
+  // keeping the hardware/system back button and these UI controls doing the same thing.
   const close = () => {
-    store.viewer.value = null;
+    if ((history.state as { viewer?: boolean } | null)?.viewer) history.back();
+    else store.viewer.value = null;
   };
+
+  // Opening the viewer pushes one history entry for the SAME url (preserving existing state
+  // fields), so the system back button closes only the viewer instead of also leaving whatever
+  // was underneath it (the article reader or the chat). Popping past that entry — i.e. a
+  // popstate where the current entry is no longer marked `viewer: true` — closes the viewer
+  // without navigating further; the router re-parses the same path on this pop, which is a
+  // no-op since the path never changed.
+  useEffect(() => {
+    history.pushState({ ...(history.state ?? {}), viewer: true }, '', location.href);
+    const onPopState = () => {
+      if (!(history.state as { viewer?: boolean } | null)?.viewer) store.viewer.value = null;
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
   const listed = 'list' in target ? target : null;
   const inChat = 'list' in target ? null : target;
   const chatId = inChat?.chatId ?? 0;

@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/preact';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/client';
 import type { Message } from '../../api/types';
 import { fakeApi, makeMedia, makeMessage } from '../../test/fixtures';
@@ -9,6 +9,21 @@ import { SharedMedia } from './SharedMedia';
 
 const oct = new Date(2026, 9, 3).getTime() / 1000;
 const sep = new Date(2026, 8, 3).getTime() / 1000;
+
+afterEach(() => {
+  history.replaceState(null, '', '/');
+});
+
+/** The media viewer pushes a history entry on open (see MediaViewer.tsx) and closes by going
+ * back through it; this replaces the real (asynchronous in jsdom) `history.back()` with a
+ * synchronous one so closing can be asserted immediately. */
+function mockBack() {
+  return vi.spyOn(history, 'back').mockImplementation(() => {
+    const { viewer: _viewer, ...rest } = (history.state as Record<string, unknown> | null) ?? {};
+    history.replaceState(rest, '', location.href);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+}
 
 describe('SharedMedia', () => {
   it('groups media by month and opens the viewer from a tile', async () => {
@@ -96,8 +111,11 @@ describe('MediaViewer', () => {
     expect(screen.queryByRole('button', { name: '上一个' })).toBeNull();
     fireEvent.keyDown(window, { key: 'ArrowRight' });
     expect(container.querySelector('.MediaViewer-content img')!.getAttribute('src')).toBe('/media/30');
+    const back = mockBack();
     fireEvent.keyDown(window, { key: 'Escape' });
+    expect(back).toHaveBeenCalledTimes(1);
     expect(store.viewer.value).toBeNull();
+    back.mockRestore();
   });
 
   it('zooms photos within bounds', async () => {
@@ -118,10 +136,13 @@ describe('MediaViewer', () => {
   it('closes itself when the target media is not available', async () => {
     const api = fakeApi({ chatMedia: vi.fn(async () => []) });
     const { store } = renderWithStore(<MediaViewer />, api);
+    const back = mockBack();
     act(() => {
       store.viewer.value = { chatId: 10, messageId: 9, mediaId: 99 };
     });
     await waitFor(() => expect(store.viewer.value).toBeNull());
+    expect(back).toHaveBeenCalledTimes(1);
+    back.mockRestore();
   });
 
   it('toasts a background refresh error but keeps the viewer open when content was already seeded', async () => {

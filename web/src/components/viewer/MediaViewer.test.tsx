@@ -1,8 +1,12 @@
 import { act, fireEvent, screen } from '@testing-library/preact';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeApi, makeMedia, makeMessage } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
 import { MediaViewer } from './MediaViewer';
+
+afterEach(() => {
+  history.replaceState(null, '', '/');
+});
 
 function photoMsg(id: number, mediaId: number) {
   return makeMessage({ id, chat_id: 10, kind: 'photo', media: [makeMedia({ id: mediaId, role: 'main', kind: 'photo' })] });
@@ -24,6 +28,17 @@ async function setup() {
 function swipe(el: Element, from: { x: number; y: number }, to: { x: number; y: number }) {
   fireEvent.pointerDown(el, { clientX: from.x, clientY: from.y, pointerId: 1 });
   fireEvent.pointerUp(el, { clientX: to.x, clientY: to.y, pointerId: 1 });
+}
+
+/** Replaces the real (asynchronous in jsdom) `history.back()` with a synchronous one that does
+ * what the browser would: restores the entry below (dropping `viewer: true`) and fires
+ * `popstate`. Used so UI-triggered closes (X, Escape, swipe-down) can be asserted immediately. */
+function mockBack() {
+  return vi.spyOn(history, 'back').mockImplementation(() => {
+    const { viewer: _viewer, ...rest } = (history.state as Record<string, unknown> | null) ?? {};
+    history.replaceState(rest, '', location.href);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
 }
 
 describe('MediaViewer swipe gestures', () => {
@@ -48,11 +63,14 @@ describe('MediaViewer swipe gestures', () => {
     expect(container.querySelector('img')!.getAttribute('src')).toBe('/media/102');
   });
 
-  it('swiping down more than 80px closes the viewer', async () => {
+  it('swiping down more than 80px closes the viewer (via history.back(), since it pushed an entry on open)', async () => {
     const { container, store } = await setup();
+    const back = mockBack();
     const content = container.querySelector('.MediaViewer-content')!;
     swipe(content, { x: 300, y: 200 }, { x: 300, y: 290 }); // dy = +90
+    expect(back).toHaveBeenCalledTimes(1);
     expect(store.viewer.value).toBeNull();
+    back.mockRestore();
   });
 
   it('a downward drag under the 80px threshold does not close', async () => {
@@ -108,7 +126,49 @@ describe('MediaViewer with an explicit list', () => {
     expect(r.container.querySelector('.MediaViewer-content img')!.getAttribute('src')).toBe('/media/201');
     await act(async () => {}); // flush effects: no chat-media request in list mode
     expect(api.chatMedia).not.toHaveBeenCalled();
+    const back = mockBack();
     fireEvent.keyDown(window, { key: 'Escape' });
+    expect(back).toHaveBeenCalledTimes(1);
     expect(r.store.viewer.value).toBeNull();
+    back.mockRestore();
+  });
+});
+
+describe('MediaViewer history (system back closes only the viewer)', () => {
+  it('pushes a history entry with viewer:true on open, preserving existing state, without navigating', async () => {
+    history.replaceState({ fromChat: true }, '', '/chat/10/article/1');
+    const before = history.length;
+    await setup();
+    expect(history.length).toBe(before + 1);
+    expect(history.state).toEqual({ fromChat: true, viewer: true });
+    expect(location.pathname).toBe('/chat/10/article/1');
+  });
+
+  it('closing via the X button goes back through history (pops the pushed entry) rather than closing immediately', async () => {
+    const { store } = await setup();
+    const noopBack = vi.spyOn(history, 'back').mockImplementation(() => {});
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+    expect(noopBack).toHaveBeenCalledTimes(1);
+    expect(store.viewer.value).not.toBeNull(); // nothing closes it until the popstate actually arrives
+    noopBack.mockRestore();
+
+    const back = mockBack(); // now let a (synchronously simulated) back() actually pop the entry
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(store.viewer.value).toBeNull();
+    expect((history.state as { viewer?: boolean } | null)?.viewer).toBeUndefined();
+    back.mockRestore();
+  });
+
+  it('a popstate past the pushed entry closes the viewer without navigating elsewhere', async () => {
+    history.replaceState({ fromChat: true }, '', '/chat/10/article/1');
+    const { store } = await setup();
+    expect(history.state).toEqual({ fromChat: true, viewer: true });
+    await act(async () => {
+      history.replaceState({ fromChat: true }, '', '/chat/10/article/1'); // what the browser restores on back: same path, no viewer
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    expect(store.viewer.value).toBeNull();
+    expect(location.pathname).toBe('/chat/10/article/1'); // closing the viewer did not navigate
   });
 });
