@@ -39,6 +39,7 @@ const defaultBotPoll = 500 * time.Millisecond
 
 type tempWaiter struct {
 	file string // the claimed temp file; "" until one is assigned
+	size int64  // the expected size of the download, 0 when unknown
 }
 
 type getFileResult struct {
@@ -77,19 +78,22 @@ func (b *BotSource) Fetch(ctx context.Context, m *store.Media, dstBase string) (
 // getFileWatching runs getFile while reporting the size of its partial file in the temp dir.
 func (b *BotSource) getFileWatching(ctx context.Context, cl *tgbot.Client, m *store.Media) getFileResult {
 	done := make(chan getFileResult, 1)
-	go func() {
+	getFile := func() {
 		f, err := cl.GetFile(ctx, m.SourceRef)
 		done <- getFileResult{f, err}
-	}()
+	}
 	if b.Mapper.Local == "" {
+		getFile()
 		return <-done
 	}
 	poll := b.Poll
 	if poll <= 0 {
 		poll = defaultBotPoll
 	}
-	w := b.enqueue()
+	// Queue up before getFile starts, so its temp file cannot appear before we wait for it.
+	w := b.enqueue(m.Size)
 	defer b.dequeue(w)
+	go getFile()
 	tick := time.NewTicker(poll)
 	defer tick.Stop()
 	for {
@@ -99,7 +103,11 @@ func (b *BotSource) getFileWatching(ctx context.Context, cl *tgbot.Client, m *st
 		case <-tick.C:
 			if file := b.assigned(w); file != "" {
 				if st, err := os.Stat(file); err == nil {
-					Report(ctx, st.Size(), m.Size)
+					done := st.Size()
+					if m.Size > 0 {
+						done = min(done, m.Size)
+					}
+					Report(ctx, done, m.Size)
 				}
 			}
 		}
@@ -108,14 +116,14 @@ func (b *BotSource) getFileWatching(ctx context.Context, cl *tgbot.Client, m *st
 
 // enqueue adds a waiter. Files already in the temp dirs that no earlier waiter can take
 // belong to downloads nobody here is waiting for, so they are marked seen.
-func (b *BotSource) enqueue() *tempWaiter {
+func (b *BotSource) enqueue(size int64) *tempWaiter {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.assignLocked()
 	for p := range b.tempFiles() {
 		b.seen[p] = true
 	}
-	w := &tempWaiter{}
+	w := &tempWaiter{size: size}
 	b.waiting = append(b.waiting, w)
 	return w
 }
@@ -131,11 +139,16 @@ func (b *BotSource) dequeue(w *tempWaiter) {
 	}
 }
 
-// assigned hands out new temp files and returns the one w holds, if any.
+// assigned hands out new temp files and returns the one w holds, if any. A file that has grown
+// past w's expected size was not w's after all: w gives it up and waits for another.
 func (b *BotSource) assigned(w *tempWaiter) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.assignLocked()
+	if w.file != "" && w.size > 0 && fileSize(w.file) > w.size {
+		w.file = ""
+		b.assignLocked()
+	}
 	return w.file
 }
 
@@ -160,13 +173,22 @@ func (b *BotSource) assignLocked() {
 	sort.Slice(fresh, func(i, j int) bool { return modTime(fresh[i]).Before(modTime(fresh[j])) })
 	for _, p := range fresh {
 		b.seen[p] = true
+		size := fileSize(p)
 		for _, w := range b.waiting {
-			if w.file == "" {
+			if w.file == "" && (w.size == 0 || size <= w.size) {
 				w.file = p
 				break
 			}
 		}
 	}
+}
+
+func fileSize(p string) int64 {
+	st, err := os.Stat(p)
+	if err != nil {
+		return 0
+	}
+	return st.Size()
 }
 
 func modTime(p string) time.Time {

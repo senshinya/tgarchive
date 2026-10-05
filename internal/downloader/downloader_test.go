@@ -627,3 +627,27 @@ func TestBotSourceCancellation(t *testing.T) {
 		t.Fatal("Fetch ignored cancellation")
 	}
 }
+
+func TestBotSourceGivesUpAFileLargerThanExpected(t *testing.T) {
+	fake, src, ms, temp := botSourceEnv(t)
+	ms[0].Size = 100
+	var a, b progressLog
+	errA := fetchAsync(src, a.ctx(), ms[0], filepath.Join(t.TempDir(), "a"))
+	time.Sleep(30 * time.Millisecond)
+	errB := fetchAsync(src, b.ctx(), ms[1], filepath.Join(t.TempDir(), "b")) // expects 1000
+	time.Sleep(30 * time.Millisecond)
+	// B's file shows up first: A (oldest) takes it while it is small...
+	big := filepath.Join(temp, "file_b")
+	writeTemp(t, big, 50)
+	a.waitFor(t, [2]int64{50, 100})
+	// ...and gives it up once it outgrows A's size. It stays seen, so B does not get it either;
+	// both wait for their own next file.
+	writeTemp(t, big, 500)
+	writeTemp(t, filepath.Join(temp, "file_a"), 60)
+	a.waitFor(t, [2]int64{60, 100})
+	writeTemp(t, filepath.Join(temp, "file_c"), 70)
+	b.waitFor(t, [2]int64{70, 1000})
+	fake.HoldFiles(false)
+	<-errA
+	<-errB
+}

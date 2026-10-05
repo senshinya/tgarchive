@@ -96,11 +96,12 @@ export function MessageList({ chatId }: { chatId: number }) {
   // The downloads panel asks for a message: load older pages until it shows up (up to
   // JUMP_MAX_PAGES), then scroll to it and flash it. A request for another conversation, or one
   // left over when this list goes away, is dropped.
-  const jumpPages = useRef(0);
+  const jumpPages = useRef({ for: null as unknown, pages: 0 }); // pages loaded for the current jump
   const jump = store.jumpTo.value;
   useEffect(() => {
     if (!jump) return;
     if (jump.key !== chatId) return;
+    if (jumpPages.current.for !== jump) jumpPages.current = { for: jump, pages: 0 };
     const el = ref.current?.querySelector(`[data-message-id="${jump.messageId}"]`)?.closest('.Message') as HTMLElement | null | undefined;
     if (conv.items.some((m) => m.id === jump.messageId) && el) {
       store.jumpTo.value = null;
@@ -112,8 +113,8 @@ export function MessageList({ chatId }: { chatId: number }) {
     }
     if (!conv.loaded || conv.loading) return;
     const oldest = conv.items[0]?.id ?? 0;
-    if (conv.hasMore && jump.messageId < oldest && jumpPages.current < JUMP_MAX_PAGES) {
-      jumpPages.current++;
+    if (conv.hasMore && jump.messageId < oldest && jumpPages.current.pages < JUMP_MAX_PAGES) {
+      jumpPages.current.pages++;
       void store.loadOlder(chatId);
     } else if (!conv.items.some((m) => m.id === jump.messageId)) {
       store.jumpTo.value = null; // not in this conversation, deleted, or too far back
