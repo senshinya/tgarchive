@@ -22,6 +22,14 @@
   white-space: nowrap;
 }
 
+.left-header .DownloadsButton {
+  margin-left: auto;
+}
+
+.DownloadsButton + .ListModeSwitch {
+  margin-left: 0.25rem;
+}
+
 .ListModeSwitch {
   display: flex;
   flex-shrink: 0;

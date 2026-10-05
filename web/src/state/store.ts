@@ -2,7 +2,7 @@ import { computed, signal } from '@preact/signals';
 import { createContext } from 'preact';
 import { useContext } from 'preact/hooks';
 import { ApiError, PAGE_SIZE, convMessages, errorMessage, type Api } from '../api/client';
-import type { ArchiveEvent, Bot, Chat, Entity, Message } from '../api/types';
+import type { ArchiveEvent, Bot, Chat, Downloads, Entity, Message } from '../api/types';
 
 export interface Conversation {
   items: Message[]; // ascending by id
@@ -64,8 +64,24 @@ function mergeById(a: Message[], b: Message[]): Message[] {
   return [...map.values()].sort((x, y) => x.id - y.id);
 }
 
-export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) {
+/** Byte progress of one download in flight (total 0 while unknown). */
+export interface MediaProgress {
+  done: number;
+  total: number;
+}
+
+/** What the left header's downloads button shows. */
+export interface DownloadSummary {
+  active: number;
+  /** Fraction done over the active downloads with a known size; undefined when none has one. */
+  fraction?: number;
+  queued: number;
+  failed: number;
+}
+
+export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloadsReloadDelay?: number } = {}) {
   const delay = opts.chatsReloadDelay ?? 300;
+  const downloadsDelay = opts.downloadsReloadDelay ?? 1000;
   const bots = signal<Bot[]>([]);
   const chats = signal<Chat[]>([]);
   const chatsLoaded = signal(false);
@@ -75,6 +91,11 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
   const viewer = signal<ViewerTarget | null>(null); // media viewer target
   const sharedMediaOpen = signal(false); // right column
   const listMode = signal<ListMode>(readListMode());
+  const progress = signal<Map<number, MediaProgress>>(new Map()); // media id → bytes, from download.progress
+  const downloads = signal<Downloads | null>(null); // the downloads panel snapshot
+  /** A message to scroll to once its conversation shows it (set by the downloads panel). */
+  const jumpTo = signal(0);
+  let downloadsTimer: ReturnType<typeof setTimeout> | undefined;
   let toastSeq = 0;
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
   const eventListeners = new Set<(ev: ArchiveEvent) => void>();
@@ -98,6 +119,36 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
     }
     return out.sort((a, b) => (b.last?.last_message_at ?? -1) - (a.last?.last_message_at ?? -1));
   });
+
+  const downloadSummary = computed<DownloadSummary>(() => {
+    let done = 0;
+    let total = 0;
+    for (const p of progress.value.values()) {
+      if (p.total > 0) {
+        done += Math.min(p.done, p.total);
+        total += p.total;
+      }
+    }
+    return {
+      active: progress.value.size,
+      fraction: total > 0 ? done / total : undefined,
+      queued: downloads.value?.queued.count ?? 0,
+      failed: downloads.value?.failed.length ?? 0,
+    };
+  });
+
+  async function loadDownloads() {
+    try {
+      downloads.value = await api.downloads();
+    } catch {
+      // Keep the last snapshot; the next event or resync tries again.
+    }
+  }
+
+  function scheduleDownloadsReload() {
+    clearTimeout(downloadsTimer);
+    downloadsTimer = setTimeout(() => void loadDownloads(), downloadsDelay);
+  }
 
   function setListMode(mode: ListMode) {
     listMode.value = mode;
@@ -271,10 +322,20 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
         scheduleChatsReload();
         return;
       case 'media.updated':
+        scheduleDownloadsReload();
         for (const id of ev.data.message_ids ?? []) {
           if (chatOfMessage(id) !== undefined) await refreshMessage(id);
         }
         return;
+      case 'download.progress': {
+        const next = new Map(ev.data.items.map((p) => [p.media_id, { done: p.done, total: p.total }]));
+        progress.value = next;
+        // The snapshot names what is downloading; refresh it when that set changes.
+        const listed = new Set((downloads.value?.active ?? []).map((a) => a.media_id));
+        if (listed.size !== next.size || [...next.keys()].some((id) => !listed.has(id))) scheduleDownloadsReload();
+        if (downloads.value) downloads.value = { ...downloads.value, speed: ev.data.speed };
+        return;
+      }
       case 'bot.status': {
         const { bot_id, status, error } = ev.data;
         if (!botsById.value.has(bot_id)) {
@@ -288,7 +349,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
   }
 
   async function resync() {
-    await Promise.all([loadBots(), loadChats()]);
+    await Promise.all([loadBots(), loadChats(), loadDownloads()]);
     const loaded = Object.entries(conversations.value)
       .filter(([, c]) => c.loaded)
       .map(([id]) => Number(id));
@@ -311,14 +372,32 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
     try {
       await api.retryMedia(mediaId);
       markMediaPending(mediaId);
+      scheduleDownloadsReload();
     } catch (e) {
       showToast(errorMessage(e));
       await refreshMessage(m.id, m.chat_id);
     }
   }
 
+  /** Retries a failed media from the downloads panel, where no message object is at hand. */
+  async function retryDownload(mediaId: number) {
+    try {
+      await api.retryMedia(mediaId);
+      markMediaPending(mediaId);
+    } catch (e) {
+      showToast(errorMessage(e));
+    }
+    await loadDownloads();
+  }
+
   return {
     api,
+    progress,
+    downloads,
+    downloadSummary,
+    jumpTo,
+    loadDownloads,
+    retryDownload,
     bots,
     chats,
     chatsLoaded,

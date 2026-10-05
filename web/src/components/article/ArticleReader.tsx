@@ -126,7 +126,7 @@ export function ArticleReader({ chatId, messageId }: { chatId: number; messageId
                 ))}
               <span>存档于 {formatFullDate(article.fetched_at)}</span>
             </div>
-            <ArticleContent nodes={article.content} media={media} onOpenMedia={openMedia} onRetry={retry} />
+            <ArticleContent nodes={article.content} media={media} onOpenMedia={openMedia} onRetry={retry} progress={store.progress.value} />
           </article>
         ) : (
           <div class="ArticleReader-state">{error || <Spinner />}</div>

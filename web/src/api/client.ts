@@ -3,6 +3,7 @@ import type {
   Article,
   Bot,
   Chat,
+  Downloads,
   Message,
   RejectedSender,
   SharedMediaType,
@@ -79,6 +80,7 @@ export interface Api {
   botMedia(botId: number, type: SharedMediaType, before?: number, limit?: number): Promise<Message[]>;
   deleteMessage(id: number): Promise<void>;
   retryMedia(id: number): Promise<void>;
+  downloads(): Promise<Downloads>;
   addBot(token: string): Promise<AddBotResult>;
   setBotEnabled(id: number, enabled: boolean): Promise<Bot>;
   deleteBot(id: number, purge: boolean): Promise<void>;
@@ -110,6 +112,7 @@ export const api: Api = {
     request('GET', `/api/bots/${botId}/media${qs({ type, before, limit })}`),
   deleteMessage: (id) => request('DELETE', `/api/messages/${id}`),
   retryMedia: (id) => request('POST', `/api/media/${id}/retry`),
+  downloads: () => request('GET', '/api/downloads'),
   addBot: (token) => request('POST', '/api/admin/bots', { token }),
   setBotEnabled: (id, enabled) => request('PATCH', `/api/admin/bots/${id}`, { enabled }),
   deleteBot: (id, purge) => request('DELETE', `/api/admin/bots/${id}${purge ? '?purge=1' : ''}`),

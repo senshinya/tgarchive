@@ -30,9 +30,24 @@ describe('Photo', () => {
 
   it('shows pending and too_large placeholders', () => {
     renderWithStore(<Photo msg={photoMsg({}, 'pending')} onOpen={() => {}} />);
-    expect(screen.getByText('正在下载…')).toBeTruthy();
+    expect(screen.getByText('排队中')).toBeTruthy();
     renderWithStore(<Photo msg={photoMsg({}, 'too_large')} onOpen={() => {}} />);
     expect(screen.getByText('文件超过存档上限')).toBeTruthy();
+  });
+
+  it('shows a progress ring and bytes while downloading', () => {
+    const r = renderWithStore(<Photo msg={photoMsg({}, 'pending')} onOpen={() => {}} />);
+    act(() => {
+      r.store.progress.value = new Map([[100, { done: 512 * 1024, total: 2 * 1024 * 1024 }]]);
+    });
+    expect(screen.getByText('512 KB / 2 MB')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('25');
+    act(() => {
+      r.store.progress.value = new Map([[100, { done: 0, total: 2 * 1024 * 1024 }]]);
+    });
+    // Nothing received yet (e.g. a bot download whose progress is unknown): spin, show the size.
+    expect(screen.getByText('下载中… · 2 MB')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBeNull();
   });
 
   it('retries failed media through the store', async () => {
@@ -75,7 +90,7 @@ describe('Video', () => {
       media: [makeMedia({ id: 5, kind: 'video', duration: 75, state: 'pending' }), makeMedia({ id: 6, role: 'thumb' })],
     });
     renderWithStore(<Video msg={msg} onOpen={() => {}} />);
-    expect(screen.getByText('正在下载…')).toBeTruthy();
+    expect(screen.getByText('排队中')).toBeTruthy();
   });
 
   it('shows a retry button for failed media that calls the store', async () => {
@@ -111,6 +126,21 @@ describe('Document', () => {
     expect(screen.getByText('report.pdf')).toBeTruthy();
     expect(screen.getByText('1.5 KB')).toBeTruthy();
     expect(screen.getByText('pdf')).toBeTruthy();
+  });
+
+  it('shows download progress in place of the size', () => {
+    const pending = makeMessage({
+      kind: 'document',
+      media: [makeMedia({ id: 9, kind: 'document', file_name: 'big.zip', size: 4096, state: 'pending' })],
+    });
+    const r = renderWithStore(<Document msg={pending} />);
+    expect(screen.getByText('排队中')).toBeTruthy();
+    expect(screen.getByText('· 4 KB', { exact: false })).toBeTruthy();
+    act(() => {
+      r.store.progress.value = new Map([[9, { done: 1024, total: 4096 }]]);
+    });
+    expect(screen.getByText('1 KB / 4 KB')).toBeTruthy();
+    expect(screen.queryByText('· 4 KB', { exact: false })).toBeNull();
   });
 
   it('shows failure with retry and the too_large note', () => {

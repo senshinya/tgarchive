@@ -7,6 +7,7 @@ import { useStore, type BotEntry, type ListMode } from '../../state/store';
 import { Avatar } from '../../ui/Avatar';
 import { Spinner } from '../../ui/Spinner';
 import { Tabs } from '../../ui/Tabs';
+import { DownloadsButton } from '../downloads/DownloadsPanel';
 import './left.scss';
 
 function BotTabs() {
@@ -138,6 +139,7 @@ export function ChatsPanel() {
     <div class="ChatsPanel">
       <div class="left-header">
         <h3 class="left-header-title">tgarchive</h3>
+        <DownloadsButton />
         <ListModeSwitch />
       </div>
       {!byBot && <BotTabs />}

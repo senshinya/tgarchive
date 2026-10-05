@@ -91,6 +91,19 @@ export function MessageList({ chatId }: { chatId: number }) {
     if (conv.loaded && conv.hasMore && el.scrollHeight - el.clientHeight < LOAD_OLDER_THRESHOLD) void store.loadOlder(chatId);
   }, [conv.items]);
 
+  // The downloads panel asks for a message: scroll to it and flash it once this list shows it.
+  useEffect(() => {
+    const id = store.jumpTo.value;
+    if (!id || !conv.items.some((m) => m.id === id)) return;
+    store.jumpTo.value = 0;
+    const el = ref.current?.querySelector(`[data-message-id="${id}"]`)?.closest('.Message') as HTMLElement | null | undefined;
+    if (!el) return;
+    el.scrollIntoView?.({ block: 'center' });
+    el.classList.remove('highlight');
+    void el.offsetWidth;
+    el.classList.add('highlight');
+  }, [conv.items, store.jumpTo.value]);
+
   const onScroll = () => {
     const el = ref.current;
     if (!el) return;

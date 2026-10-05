@@ -3,6 +3,10 @@ import { Fragment, h, type ComponentChild } from 'preact';
 import { mediaUrl } from '../../api/client';
 import type { ArticleElement, ArticleMedia, ArticleNode } from '../../api/types';
 import { safeHref } from '../../lib/entities';
+import { formatProgress } from '../../lib/format';
+import type { MediaProgress } from '../../state/store';
+import { ProgressRing } from '../../ui/ProgressRing';
+import { progressFraction } from '../media/MediaStatus';
 
 /** Telegraph tags rendered as plain elements (b/i map to their semantic twins). Anything not
  * listed here and not handled below is unwrapped to its children: no attributes are ever copied
@@ -33,6 +37,8 @@ export interface ArticleContentProps {
   media: Map<number, ArticleMedia>;
   onOpenMedia: (mediaId: number) => void;
   onRetry: (mediaId: number) => void;
+  /** Byte progress of media downloading now, by media id. */
+  progress?: Map<number, MediaProgress>;
 }
 
 export function ArticleContent(props: ArticleContentProps) {
@@ -81,9 +87,13 @@ function ArticleMediaBlock({ node, ctx }: { node: ArticleElement; ctx: ArticleCo
     );
   }
   const original = safeHref(node.attrs?.['data-src'] ?? '');
-  const label = !m || m.state === 'pending' ? '正在下载…' : m.state === 'too_large' ? '文件超过存档上限' : '下载失败';
+  const progress = ctx.progress?.get(id);
+  const pending = !m || m.state === 'pending';
+  let label = m?.state === 'too_large' ? '文件超过存档上限' : '下载失败';
+  if (pending) label = progress ? formatProgress(progress.done, progress.total) : '排队中';
   return (
     <div class="ArticleMedia-placeholder">
+      {pending && progress && <ProgressRing value={progressFraction(progress)} size={32} />}
       <span>{label}</span>
       {m?.state === 'failed' && (
         <button type="button" class="ArticleMedia-retry" onClick={() => ctx.onRetry(id)}>

@@ -317,3 +317,83 @@ describe('bot timelines', () => {
     }
   });
 });
+
+describe('download progress', () => {
+  const snapshot = (over = {}) => ({
+    active: [{ media_id: 7, message_id: 1, chat_id: 10, kind: 'video', file_name: '', size: 100, done: 10, total: 100, started_at: 1 }],
+    queued: { count: 2, bytes: 300 },
+    failed: [{ media_id: 9, message_id: 2, chat_id: 10, kind: 'photo', file_name: '', size: 4, error: 'x' }],
+    speed: 5,
+    ...over,
+  });
+
+  it('tracks progress events and summarises them', async () => {
+    const api = fakeApi({ downloads: vi.fn(async () => snapshot()) });
+    const s = createStore(api, { downloadsReloadDelay: 0 });
+    await s.loadDownloads();
+    await s.handleEvent({
+      type: 'download.progress',
+      data: {
+        items: [
+          { media_id: 7, done: 50, total: 100, started_at: 1 },
+          { media_id: 8, done: 10, total: 0, started_at: 2 },
+        ],
+        speed: 42,
+      },
+    });
+    expect(s.progress.value.get(7)).toEqual({ done: 50, total: 100 });
+    expect(s.downloadSummary.value).toEqual({ active: 2, fraction: 0.5, queued: 2, failed: 1 });
+    expect(s.downloads.value?.speed).toBe(42);
+  });
+
+  it('refreshes the snapshot, debounced, when the set of downloads changes', async () => {
+    vi.useFakeTimers();
+    try {
+      const api = fakeApi({ downloads: vi.fn(async () => snapshot()) });
+      const s = createStore(api, { downloadsReloadDelay: 1000 });
+      await s.loadDownloads();
+      const tick = (ids: number[]) =>
+        s.handleEvent({ type: 'download.progress', data: { items: ids.map((id) => ({ media_id: id, done: 1, total: 2, started_at: 1 })), speed: 0 } });
+      await tick([7]); // same set as the snapshot
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(api.downloads).toHaveBeenCalledTimes(1);
+      await tick([7, 8]);
+      await tick([7, 8]);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(api.downloads).toHaveBeenCalledTimes(2);
+      await tick([]); // all done: the final empty event also refreshes
+      expect(s.downloadSummary.value.active).toBe(0);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(api.downloads).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the last snapshot when loading fails', async () => {
+    const api = fakeApi({ downloads: vi.fn(async () => snapshot()) });
+    const s = createStore(api);
+    await s.loadDownloads();
+    api.downloads = vi.fn(async () => Promise.reject(new Error('down')));
+    await s.loadDownloads();
+    expect(s.downloads.value?.queued.count).toBe(2);
+  });
+
+  it('retries from the panel and reloads', async () => {
+    const api = fakeApi({ downloads: vi.fn(async () => snapshot()) });
+    const s = createStore(api);
+    await s.retryDownload(9);
+    expect(api.retryMedia).toHaveBeenCalledWith(9);
+    expect(api.downloads).toHaveBeenCalledTimes(1);
+    api.retryMedia = vi.fn(async () => Promise.reject(new ApiError(409, 'media is not in failed state', null)));
+    await s.retryDownload(9);
+    expect(s.toast.value?.text).toBe('media is not in failed state');
+  });
+
+  it('resync reloads the snapshot', async () => {
+    const api = fakeApi();
+    const s = createStore(api);
+    await s.resync();
+    expect(api.downloads).toHaveBeenCalledTimes(1);
+  });
+});

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { NETWORK_ERROR } from './api/client';
+import { DownloadsPanel } from './components/downloads/DownloadsPanel';
 import { ChatsPanel } from './components/left/ChatsPanel';
 import { MiddleColumn } from './components/middle/MiddleColumn';
 import { SharedMedia } from './components/right/SharedMedia';
@@ -22,6 +23,7 @@ export function App({ store, eventSource }: Props) {
     const stopRouter = startRouter();
     void store.loadBots();
     void store.loadChats();
+    void store.loadDownloads();
     const stopEvents = connectEvents(
       (ev) => void store.handleEvent(ev),
       () => void store.resync(),
@@ -64,7 +66,9 @@ export function App({ store, eventSource }: Props) {
   return (
     <StoreContext.Provider value={store}>
       <div id="Main" class={cls}>
-        <div id="LeftColumn">{isSettings(r) ? <SettingsPanel route={r} /> : <ChatsPanel />}</div>
+        <div id="LeftColumn">
+          {isSettings(r) ? <SettingsPanel route={r} /> : r.name === 'downloads' ? <DownloadsPanel /> : <ChatsPanel />}
+        </div>
         {showScrim && (
           <button
             type="button"

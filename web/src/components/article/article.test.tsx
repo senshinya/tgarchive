@@ -137,7 +137,7 @@ describe('ArticleReader', () => {
     expect(placeholders).toHaveLength(3);
     expect(placeholders[0].textContent).toContain('下载失败');
     expect(placeholders[0].querySelector('a')!.getAttribute('href')).toBe('https://telegra.ph/file/c.jpg');
-    expect(placeholders[1].textContent).toContain('正在下载…');
+    expect(placeholders[1].textContent).toContain('排队中');
     expect(placeholders[1].querySelector('button')).toBeNull();
     expect(placeholders[2].querySelector('a')).toBeNull(); // javascript: original link dropped
     const embed = container.querySelector('a.ArticleEmbed')!;
@@ -149,7 +149,7 @@ describe('ArticleReader', () => {
     const { container, api } = await openReader();
     fireEvent.click(screen.getByRole('button', { name: '重试' }));
     await waitFor(() => expect(api.retryMedia).toHaveBeenCalledWith(203));
-    await waitFor(() => expect(container.querySelectorAll('.ArticleMedia-placeholder')[0].textContent).toContain('正在下载…'));
+    await waitFor(() => expect(container.querySelectorAll('.ArticleMedia-placeholder')[0].textContent).toContain('排队中'));
   });
 
   it('opens the media viewer on this article’s photos and videos only', async () => {

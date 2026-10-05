@@ -214,10 +214,44 @@ export interface MessageRef {
   message_id: number;
 }
 
+/** Byte progress of one download in flight; total is 0 while unknown. */
+export interface DownloadProgress {
+  media_id: number;
+  done: number;
+  total: number;
+  started_at: number;
+}
+
+/** A media row in the downloads panel, with the newest message using it. */
+export interface DownloadItem {
+  media_id: number;
+  message_id: number;
+  chat_id: number;
+  kind: string;
+  file_name: string;
+  size: number;
+  error?: string;
+}
+
+export interface ActiveDownload extends DownloadItem {
+  done: number;
+  total: number;
+  started_at: number;
+}
+
+export interface Downloads {
+  active: ActiveDownload[];
+  queued: { count: number; bytes: number };
+  failed: DownloadItem[];
+  /** Bytes per second over the last few seconds. */
+  speed: number;
+}
+
 export type ArchiveEvent =
   | { type: 'message.created' | 'message.updated' | 'message.deleted'; data: MessageRef }
   | { type: 'media.updated'; data: { media_id: number; message_ids: number[] | null } }
   | { type: 'bot.status'; data: { bot_id: number; status: string; error: string } }
+  | { type: 'download.progress'; data: { items: DownloadProgress[]; speed: number } }
   /** Synthetic, never sent by the server: the store broadcasts it to `onEvent` listeners after it
    * resynced following a reconnect, so views holding their own fetched data refetch it. */
   | { type: 'resync'; data: null };
@@ -228,4 +262,5 @@ export const EVENT_TYPES = [
   'message.deleted',
   'media.updated',
   'bot.status',
+  'download.progress',
 ] as const;
