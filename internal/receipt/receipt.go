@@ -4,6 +4,7 @@ package receipt
 import (
 	"context"
 	"log"
+	"slices"
 	"sync"
 	"time"
 
@@ -83,6 +84,19 @@ func (e *Engine) apply(ctx context.Context, info *store.ReceiptInfo, main []stor
 	}
 }
 
+// failOnce keeps 👀 (setting it if nothing was set yet) and sends the failure reply once.
+func (e *Engine) failOnce(ctx context.Context, info *store.ReceiptInfo, cur, text string, save func(string)) {
+	if cur == store.ReceiptFailed {
+		return
+	}
+	if cur == store.ReceiptNone {
+		e.reactLogOnly(ctx, info, EmojiSeen)
+	}
+	if err := e.reply(ctx, info, text); err == nil {
+		save(store.ReceiptFailed)
+	}
+}
+
 func (e *Engine) Evaluate(ctx context.Context, messageID int64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -94,7 +108,26 @@ func (e *Engine) Evaluate(ctx context.Context, messageID int64) {
 	if info.Source != model.SourceBotUpdate {
 		return
 	}
-	e.apply(ctx, info, info.Main, info.Receipt, func(r string) { e.set(ctx, messageID, r) })
+	save := func(r string) { e.set(ctx, messageID, r) }
+	main := slices.Clone(info.Main)
+	if a := info.Article; a != nil {
+		switch a.State {
+		case store.TelegraphFailed:
+			e.failOnce(ctx, info, info.Receipt, textFailedPrefix+truncate(a.Error, 200), save)
+			return
+		case store.TelegraphFetched:
+			// Article media only hold 👌 back while pending: a failed or oversized image does not
+			// turn the archived article into a failure.
+			for _, m := range a.Media {
+				if m.State == store.StatePending {
+					main = append(main, m)
+				}
+			}
+		default: // queued / fetching
+			main = append(main, store.MediaStatus{State: store.StatePending})
+		}
+	}
+	e.apply(ctx, info, main, info.Receipt, save)
 }
 
 // EvaluateJob reports a userbot fetch job's progress on the sender's original link message.
@@ -120,14 +153,7 @@ func (e *Engine) EvaluateJob(ctx context.Context, jobID int64) {
 			}
 		}
 	case store.JobFailed:
-		if ji.Receipt != store.ReceiptFailed {
-			if ji.Receipt == store.ReceiptNone {
-				e.reactLogOnly(ctx, info, EmojiSeen)
-			}
-			if err := e.reply(ctx, info, TextFetchFailedPrefix+truncate(ji.Error, 200)); err == nil {
-				save(store.ReceiptFailed)
-			}
-		}
+		e.failOnce(ctx, info, ji.Receipt, TextFetchFailedPrefix+truncate(ji.Error, 200), save)
 	case store.JobFetched:
 		e.apply(ctx, info, ji.Main, ji.Receipt, save)
 	}
