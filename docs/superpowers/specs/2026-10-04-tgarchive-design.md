@@ -82,7 +82,7 @@ compose `environment` 中的非机密配置：
 ### 备份
 
 - R2（restic）：备份 `db/`（SQLite stage）、`avatars/` 与 stack；`media/`、`botapi/`、`botapi-tmp/` 加入 `exclude.txt`，并同时加入备份脚本的 `SQLITE_SKIP`（用户可能把 `.db` / `.sqlite` 当文档存档，它们落在 SQLite 扫描深度内）
-- NAS：OpenList 以只读本机存储 `/tgarchive-media` 暴露 `media/`，NAS 用 rclone 经 `drive-dav` 每日拉取（`copy`），方式同音乐库
+- media 不备份（站长决定，VPS 丢盘即丢失媒体文件；消息与元数据可从 R2 恢复）
 
 ### 通知
 
