@@ -162,9 +162,12 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	ch, cancel := s.Hub.Subscribe()
 	defer cancel()
-	fmt.Fprint(w, ": ok\n\n")
+	// Heartbeats are named events, not SSE comments: the page cannot see comments, and it needs
+	// to notice a stream that a frozen background tab left silently dead.
+	const pingEvent = "event: ping\ndata: {}\n\n"
+	fmt.Fprint(w, pingEvent)
 	fl.Flush()
-	ping := time.NewTicker(25 * time.Second)
+	ping := time.NewTicker(s.pingEvery())
 	defer ping.Stop()
 	for {
 		select {
@@ -178,7 +181,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.Type, data)
 			fl.Flush()
 		case <-ping.C:
-			fmt.Fprint(w, ": ping\n\n")
+			fmt.Fprint(w, pingEvent)
 			fl.Flush()
 		}
 	}

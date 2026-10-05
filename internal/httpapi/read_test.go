@@ -201,7 +201,11 @@ func TestSSE(t *testing.T) {
 		t.Fatalf("content-type = %q", ct)
 	}
 	rd := bufio.NewReader(resp.Body)
-	rd.ReadString('\n') // ": ok"
+	if line, _ := rd.ReadString('\n'); line != "event: ping\n" {
+		t.Fatalf("first line = %q, want an immediate ping event", line)
+	}
+	rd.ReadString('\n') // data
+	rd.ReadString('\n') // blank
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		e.hub.Publish(events.Event{Type: "message.created", Data: map[string]int64{"chat_id": 1, "message_id": 2}})
@@ -221,6 +225,35 @@ func TestSSE(t *testing.T) {
 		}
 	}
 	t.Fatal("event not received")
+}
+
+func TestSSEPeriodicPing(t *testing.T) {
+	e := newReadEnv(t)
+	e.srv.PingEvery = 20 * time.Millisecond
+	ts := httptest.NewServer(e.h)
+	defer ts.Close()
+	req, _ := http.NewRequest("GET", ts.URL+"/api/events", nil)
+	req.Header.Set("Remote-User", "shinya")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	rd := bufio.NewReader(resp.Body)
+	pings := 0
+	deadline := time.Now().Add(3 * time.Second)
+	for pings < 3 && time.Now().Before(deadline) {
+		line, err := rd.ReadString('\n')
+		if err != nil {
+			break
+		}
+		if line == "event: ping\n" {
+			pings++
+		}
+	}
+	if pings < 3 {
+		t.Fatalf("got %d ping events", pings)
+	}
 }
 
 func TestServeMediaContentSafety(t *testing.T) {

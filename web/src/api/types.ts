@@ -217,7 +217,10 @@ export interface MessageRef {
 export type ArchiveEvent =
   | { type: 'message.created' | 'message.updated' | 'message.deleted'; data: MessageRef }
   | { type: 'media.updated'; data: { media_id: number; message_ids: number[] | null } }
-  | { type: 'bot.status'; data: { bot_id: number; status: string; error: string } };
+  | { type: 'bot.status'; data: { bot_id: number; status: string; error: string } }
+  /** Synthetic, never sent by the server: the store broadcasts it to `onEvent` listeners after it
+   * resynced following a reconnect, so views holding their own fetched data refetch it. */
+  | { type: 'resync'; data: null };
 
 export const EVENT_TYPES = [
   'message.created',

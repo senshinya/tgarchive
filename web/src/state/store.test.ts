@@ -193,4 +193,12 @@ describe('store', () => {
     expect(api.chats).toHaveBeenCalledTimes(1);
     expect(api.messages).toHaveBeenCalledTimes(2);
   });
+
+  it('resync tells event listeners once it is done', async () => {
+    const s = createStore(fakeApi());
+    const seen: string[] = [];
+    s.onEvent((ev) => seen.push(ev.type));
+    await s.resync();
+    expect(seen).toEqual(['resync']);
+  });
 });

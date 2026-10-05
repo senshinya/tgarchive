@@ -41,6 +41,16 @@ type Server struct {
 	AvatarDir  string
 	HTTP       *http.Client
 	Now        func() time.Time
+	PingEvery  time.Duration // SSE heartbeat interval; 0 means defaultPingEvery
+}
+
+const defaultPingEvery = 25 * time.Second
+
+func (s *Server) pingEvery() time.Duration {
+	if s.PingEvery > 0 {
+		return s.PingEvery
+	}
+	return defaultPingEvery
 }
 
 func (s *Server) Handler() http.Handler {

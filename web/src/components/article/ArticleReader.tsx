@@ -43,6 +43,7 @@ export function ArticleReader({ chatId, messageId }: { chatId: number; messageId
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = store.onEvent((ev) => {
       const concerns =
+        ev.type === 'resync' ||
         (ev.type === 'message.updated' && ev.data.message_id === messageId) ||
         (ev.type === 'media.updated' && (ev.data.message_ids ?? []).includes(messageId));
       if (!concerns) return;

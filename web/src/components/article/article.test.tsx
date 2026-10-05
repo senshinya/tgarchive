@@ -269,6 +269,23 @@ describe('ArticleReader', () => {
     }
   });
 
+  it('refetches after the store resyncs', async () => {
+    const article = vi.fn(async () => makeArticle({ content: everyNode, media: everyMedia }));
+    const api = fakeApi({ article });
+    const r = renderWithStore(<ArticleReader chatId={10} messageId={1} />, api);
+    await screen.findByRole('heading', { level: 1, name: 'Sample' });
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        await r.store.resync();
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(article).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('ignores events for other messages', async () => {
     const article = vi.fn(async () => makeArticle({ content: everyNode, media: everyMedia }));
     const api = fakeApi({ article });

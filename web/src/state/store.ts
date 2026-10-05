@@ -216,6 +216,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number } = {}) 
       .filter(([, c]) => c.loaded)
       .map(([id]) => Number(id));
     await Promise.all(loaded.map((id) => refreshLatest(id)));
+    for (const l of eventListeners) l({ type: 'resync', data: null });
   }
 
   /** Deletes an archived message; throws on failure so the caller can report it. */
