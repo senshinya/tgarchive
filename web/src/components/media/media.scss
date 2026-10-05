@@ -112,6 +112,28 @@
     font-weight: var(--font-weight-medium);
   }
 
+  // Telegram's download overlay: a white ring on a dark translucent disc, size in a pill below.
+  .MediaStatus-ring {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 3.375rem;
+    height: 3.375rem;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+  }
+
+  .MediaStatus-pill {
+    margin-top: 0.25rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.75rem;
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    font-size: 0.8125rem;
+    font-variant-numeric: tabular-nums;
+  }
+
   .MediaStatus-error {
     font-size: 0.75rem;
     word-break: break-word;

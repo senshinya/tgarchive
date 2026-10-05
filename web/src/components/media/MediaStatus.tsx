@@ -28,14 +28,18 @@ export function MediaStatus({ msg, media, thumb }: Props) {
       <div class="MediaStatus-body">
         {media.state === 'pending' && progress && (
           <>
-            <ProgressRing value={progressFraction(progress)} size={48} />
-            <span class="MediaStatus-text">{formatProgress(progress.done, progress.total || media.size)}</span>
+            <span class="MediaStatus-ring">
+              <ProgressRing value={progressFraction(progress)} size={44} stroke={2.5} />
+            </span>
+            <span class="MediaStatus-text MediaStatus-pill">{formatProgress(progress.done, progress.total || media.size)}</span>
           </>
         )}
         {media.state === 'pending' && !progress && (
           <>
-            <Clock size={32} />
-            <span class="MediaStatus-text">排队中</span>
+            <span class="MediaStatus-ring">
+              <Clock size={24} />
+            </span>
+            <span class="MediaStatus-text MediaStatus-pill">排队中</span>
           </>
         )}
         {media.state === 'failed' && (

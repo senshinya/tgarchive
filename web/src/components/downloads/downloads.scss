@@ -114,7 +114,7 @@
   position: relative;
   height: 0.1875rem;
   border-radius: 0.125rem;
-  background: var(--color-background-secondary-accent);
+  background: color-mix(in srgb, var(--color-text-secondary) 22%, transparent);
   overflow: hidden;
 
   > span {
