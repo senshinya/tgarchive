@@ -31,6 +31,9 @@ func TestLoadDefaults(t *testing.T) {
 	if !c.ManageBotAPI || c.BotAPIBinary != "telegram-bot-api" {
 		t.Fatalf("unexpected bot api management defaults: %+v", c)
 	}
+	if c.TelegraphAPIURL != "https://api.telegra.ph" {
+		t.Fatalf("TelegraphAPIURL = %q", c.TelegraphAPIURL)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -40,11 +43,13 @@ func TestLoadOverrides(t *testing.T) {
 		"MEDIA_MAX_BYTES":      "1048576",
 		"DATA_DIR":             "/srv",
 		"BARK_NOTIFY_FILE":     "/run/bark/notify.json",
+		"TELEGRAPH_API_URL":    "http://127.0.0.1:9999",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.RequireForwardAuth || c.MediaMaxBytes != 1048576 || c.BotAPIDirLocal != "/srv/botapi" || c.BarkNotifyFile != "/run/bark/notify.json" {
+	if c.RequireForwardAuth || c.MediaMaxBytes != 1048576 || c.BotAPIDirLocal != "/srv/botapi" || c.BarkNotifyFile != "/run/bark/notify.json" ||
+		c.TelegraphAPIURL != "http://127.0.0.1:9999" {
 		t.Fatalf("overrides not applied: %+v", c)
 	}
 }

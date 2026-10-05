@@ -17,6 +17,7 @@ import (
 	"tgarchive/internal/notify"
 	"tgarchive/internal/receipt"
 	"tgarchive/internal/store"
+	"tgarchive/internal/telegraph"
 	"tgarchive/internal/tgbot"
 )
 
@@ -26,6 +27,12 @@ import (
 // idempotent per (botID, msg.TgMessageID).
 type LinkHandler interface {
 	TryHandle(ctx context.Context, botID int64, sender model.Sender, msg *model.Message, canFetch bool) (handled bool, err error)
+}
+
+// TelegraphQueue is woken after a message queued a Telegraph job (telegraph.Worker). When nil,
+// Telegraph links are archived as plain text.
+type TelegraphQueue interface {
+	Wake()
 }
 
 type AvatarRefresher interface {
@@ -40,6 +47,7 @@ type Deps struct {
 	Hub            *events.Hub
 	Notifier       notify.Notifier
 	Links          LinkHandler
+	Telegraph      TelegraphQueue
 	Avatars        AvatarRefresher
 	MediaDir       string
 	PollTimeoutSec int
@@ -238,7 +246,13 @@ func (m *Manager) handle(ctx context.Context, botID int64, u tgbot.Update) error
 			return m.d.Store.AdvanceOffset(ctx, botID, next)
 		}
 	}
-	ir, err := m.d.Store.Ingest(ctx, store.IngestInput{BotID: botID, Sender: res.Sender, Msg: res.Msg, Offset: next, Now: now})
+	// A new text message that is exactly one Telegraph link also queues the article snapshot,
+	// in the same transaction as the message and the offset.
+	tpath := ""
+	if len(u.Message) > 0 && m.d.Telegraph != nil && res.Msg.Kind == model.KindText && len(res.Msg.Media) == 0 {
+		tpath, _ = telegraph.Candidate(res.Msg.Text)
+	}
+	ir, err := m.d.Store.Ingest(ctx, store.IngestInput{BotID: botID, Sender: res.Sender, Msg: res.Msg, Offset: next, Now: now, TelegraphPath: tpath})
 	if err != nil {
 		return err
 	}
@@ -254,6 +268,9 @@ func (m *Manager) handle(ctx context.Context, botID int64, u tgbot.Update) error
 	// Evaluate before waking the downloader so 👀 always precedes 👌.
 	m.d.Receipts.Evaluate(ctx, ir.MessageID)
 	m.d.Downloader.Wake()
+	if ir.TelegraphQueued {
+		m.d.Telegraph.Wake()
+	}
 	return nil
 }
 

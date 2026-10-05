@@ -303,3 +303,48 @@ func TestDisabledBotWorkerExitsQuietly(t *testing.T) {
 		t.Fatalf("notifications = %v", e.n.msgs)
 	}
 }
+
+type wakeCounter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (w *wakeCounter) Wake()      { w.mu.Lock(); w.n++; w.mu.Unlock() }
+func (w *wakeCounter) count() int { w.mu.Lock(); defer w.mu.Unlock(); return w.n }
+
+func TestTelegraphLinkQueuesJob(t *testing.T) {
+	e := setup(t, nil)
+	tq := &wakeCounter{}
+	e.m.d.Telegraph = tq
+	e.st.PutWhitelist(bg, store.WhitelistEntry{BotID: e.bot, TgUserID: 42})
+	e.fake.PushMessage(tgtest.TextMsg(1, 42, " https://telegra.ph/Sample-10-05 "))
+	e.fake.PushMessage(tgtest.TextMsg(2, 42, "see https://telegra.ph/Sample-10-05"))
+	e.m.Start(e.bot)
+	eventually(t, "both archived", func() bool { return len(e.messages(t)) == 2 && e.offset() == 3 })
+	msgs := e.messages(t)
+	j, err := e.st.GetTelegraphJob(bg, msgs[0].ID)
+	if err != nil || j.Path != "Sample-10-05" || j.State != store.TelegraphQueued {
+		t.Fatalf("job = %+v, %v", j, err)
+	}
+	if _, err := e.st.GetTelegraphJob(bg, msgs[1].ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("link inside text queued a job: %v", err)
+	}
+	if tq.count() != 1 {
+		t.Fatalf("telegraph wakes = %d", tq.count())
+	}
+	eventually(t, "reactions", func() bool { return len(e.reactions()) == 2 })
+	if r := e.reactions(); r[0] != "👀" || r[1] != "👌" {
+		t.Fatalf("reactions = %v (the queued link waits with 👀)", r)
+	}
+}
+
+func TestTelegraphDisabledArchivesPlainText(t *testing.T) {
+	e := setup(t, nil) // no Telegraph queue
+	e.st.PutWhitelist(bg, store.WhitelistEntry{BotID: e.bot, TgUserID: 42})
+	e.fake.PushMessage(tgtest.TextMsg(1, 42, "https://telegra.ph/Sample-10-05"))
+	e.m.Start(e.bot)
+	eventually(t, "👌", func() bool { r := e.reactions(); return len(r) == 1 && r[0] == "👌" })
+	if _, err := e.st.GetTelegraphJob(bg, e.messages(t)[0].ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("job without a queue: %v", err)
+	}
+}
