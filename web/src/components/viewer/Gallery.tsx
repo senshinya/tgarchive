@@ -6,9 +6,12 @@ import { createPortal } from 'preact/compat';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { mediaUrl } from '../../api/client';
 import type { ViewerItem } from '../../state/store';
-import { createVideoSlide, type VideoSlide } from './videoSlide';
+import { createVideoSlide, onPlayerControl, type VideoSlide } from './videoSlide';
 import { viewerKeyAction } from './viewerKeys';
 import { ViewerOverlay } from './ViewerOverlay';
+
+type Slide = NonNullable<PhotoSwipe['currSlide']>;
+type Content = Slide['content'];
 
 export interface GalleryProps {
   items: ViewerItem[];
@@ -120,10 +123,11 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
       videos.get(content.index)?.destroy();
       videos.delete(content.index);
     });
-    // Images without known dimensions: size them once they load.
-    p.on('loadComplete', ({ content, slide }) => {
+    // Images without known dimensions (article media): size them from the loaded image. An image
+    // preloaded before it had a slide only gets one later, so also check when it is appended.
+    const fit = (content: Content, slide: Slide | undefined) => {
       const img = content.element as HTMLImageElement | undefined;
-      if (content.data.sized || !img || img.tagName !== 'IMG' || !img.naturalWidth) return;
+      if (!slide || content.data.sized || !img || img.tagName !== 'IMG' || !img.naturalWidth) return;
       content.data.sized = true;
       content.width = img.naturalWidth;
       content.height = img.naturalHeight;
@@ -134,13 +138,12 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
       slide.calculateSize();
       slide.zoomAndPanToInitial();
       slide.applyCurrentZoomPan();
-    });
+    };
+    p.on('loadComplete', ({ content, slide }) => fit(content, slide));
+    p.on('contentAppend', ({ content }) => fit(content, content.slide));
 
     // Gestures on a video's own controls (scrubbing, volume, menus) are not swipes, and taps on
     // the player belong to Vidstack (play/pause, show controls, double-tap seek).
-    const onPlayerControl = (target: EventTarget | null) =>
-      // Not .vds-controls itself: that layer covers the whole video, and swiping there must page.
-      !!(target as Element | null)?.closest?.('button, [role="slider"], [role="menu"], media-menu-items, .vds-menu-items, .vds-slider');
     const inPlayer = (target: EventTarget | null) => !!(target as Element | null)?.closest?.('media-player');
     p.on('pointerDown', (e) => {
       if (onPlayerControl(e.originalEvent.target)) e.preventDefault();
@@ -154,6 +157,8 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
     p.on('change', () => {
       const it = items[p.currIndex];
       if (it) current.current = it.mediaId;
+      // A video may have idled the UI away; a photo starts with it shown.
+      if (it && it.kind !== 'video') p.element?.classList.add('pswp--ui-visible');
       setIndex(p.currIndex);
     });
     p.on('destroy', () => {
@@ -167,6 +172,9 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
     setIndex(p.currIndex);
     return () => {
       tearingDown = true;
+      // Synchronous teardown: destroy() alone goes through close(), which PhotoSwipe ignores while
+      // the opening fade runs, leaving this instance (and any playing video) behind.
+      p.isDestroying = true;
       p.destroy();
     };
   }, [items]);
@@ -179,7 +187,7 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
       const action = viewerKeyAction(e, it.kind);
       if (!action) return;
       e.preventDefault();
-      if (action === 'close') pswp.close();
+      if (action === 'close') closeGallery(pswp);
       else if (action === 'prev') pswp.prev();
       else if (action === 'next') pswp.next();
       else zoom(pswp, action === 'zoomIn' ? 1 : -1);
@@ -195,12 +203,18 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
       items={items}
       index={index}
       title={item ? titleOf(item) : ''}
-      onClose={() => pswp.close()}
+      onClose={() => closeGallery(pswp)}
       onPick={(i) => pswp.goTo(i)}
       onZoom={(dir) => zoom(pswp, dir)}
     />,
     pswp.element,
   );
+}
+
+/** PhotoSwipe ignores close() during the opening fade (and then never closes): defer it. */
+function closeGallery(p: PhotoSwipe) {
+  if (p.opener.isOpening) p.on('openingAnimationEnd', () => p.close());
+  else p.close();
 }
 
 function zoom(p: PhotoSwipe, dir: 1 | -1) {

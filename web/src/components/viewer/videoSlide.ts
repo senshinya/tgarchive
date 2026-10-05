@@ -46,6 +46,12 @@ const ZH: Record<string, string> = {
   'Volume': '音量',
 };
 
+/** Whether a pointer target is one of the player's own controls (buttons, sliders, menus). Not
+ * .vds-controls itself: that layer covers the whole video, and swiping there must page. */
+export function onPlayerControl(target: EventTarget | null): boolean {
+  return !!(target as Element | null)?.closest?.('button, [role="slider"], [role="menu"], media-menu-items, .vds-menu-items, .vds-slider');
+}
+
 export interface VideoSlideOptions {
   mediaId: number;
   kind: string; // video / animation
@@ -98,6 +104,9 @@ export function createVideoSlide(o: VideoSlideOptions): VideoSlide {
   player.playsInline = true;
   player.storage = storage;
   player.keyTarget = 'document';
+  // PhotoSwipe detaches slides it pages past but may re-attach them from its cache; without
+  // keep-alive Vidstack destroys a detached player for good. destroy() below tears it down.
+  player.setAttribute('keep-alive', '');
   player.keyDisabled = true;
   if (o.poster) player.poster = o.poster;
   const provider = document.createElement('media-provider');
@@ -126,6 +135,7 @@ export function createVideoSlide(o: VideoSlideOptions): VideoSlide {
   };
   for (const t of QUIET) player.addEventListener(t, muteGesture, true);
   const unbind = bindLongPressRate(player, player, {
+    ignore: onPlayerControl,
     onStart: () => {
       quietUntil = Infinity;
       storage.holdRate = true;
@@ -153,6 +163,8 @@ export function createVideoSlide(o: VideoSlideOptions): VideoSlide {
         player.pause().catch(() => {});
         return;
       }
+      // Vidstack's document-level shortcuts go to the first player in the DOM, or the focused one.
+      player.focus({ preventScroll: true });
       // Opening (or paging) onto a video plays it, as Telegram does; before the source is ready
       // play() would just be rejected, so wait for it.
       if (player.state.canPlay) player.play().catch(() => {});

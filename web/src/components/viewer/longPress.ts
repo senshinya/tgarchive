@@ -12,6 +12,8 @@ export interface RateTarget {
 export interface LongPressHooks {
   onStart?: () => void;
   onEnd?: () => void;
+  /** Presses starting on these targets (e.g. a slider being scrubbed) never speed up. */
+  ignore?: (target: EventTarget | null) => boolean;
 }
 
 /** Wires hold-to-speed-up onto el; returns the cleanup. */
@@ -31,7 +33,7 @@ export function bindLongPressRate(el: HTMLElement, media: RateTarget, hooks: Lon
     }
   };
   const down = (e: PointerEvent) => {
-    if (e.pointerType === 'mouse' || start) return;
+    if (e.pointerType === 'mouse' || start || hooks.ignore?.(e.target)) return;
     start = { x: e.clientX, y: e.clientY, id: e.pointerId };
     timer = setTimeout(() => {
       timer = undefined;

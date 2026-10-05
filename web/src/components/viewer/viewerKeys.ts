@@ -12,14 +12,15 @@ export interface KeyLike {
   target: EventTarget | null;
 }
 
-function isEditable(t: EventTarget | null): boolean {
+function ownsKeys(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
   if (!el || typeof el.closest !== 'function') return false;
-  return !!el.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]');
+  // A player settings menu handles its own keys (Escape closes just the menu).
+  return !!el.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="menu"], media-menu');
 }
 
 export function viewerKeyAction(e: KeyLike, kind: string): ViewerKeyAction {
-  if (e.ctrlKey || e.metaKey || e.altKey || isEditable(e.target)) return null;
+  if (e.ctrlKey || e.metaKey || e.altKey || ownsKeys(e.target)) return null;
   const video = kind === 'video';
   switch (e.key) {
     case 'Escape':

@@ -37,5 +37,8 @@ describe('viewerKeyAction', () => {
     expect(viewerKeyAction(k('ArrowLeft', { metaKey: true }), 'photo')).toBeNull();
     const input = document.createElement('input');
     expect(viewerKeyAction(k('ArrowLeft', { target: input }), 'photo')).toBeNull();
+    const menu = document.createElement('div');
+    menu.setAttribute('role', 'menu');
+    expect(viewerKeyAction(k('Escape', { target: menu }), 'video')).toBeNull();
   });
 });

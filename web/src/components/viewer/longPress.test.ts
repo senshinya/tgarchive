@@ -41,6 +41,19 @@ describe('bindLongPressRate', () => {
     expect(media.playbackRate).toBe(1);
   });
 
+  it('never speeds up a press on an ignored target (a control being scrubbed)', () => {
+    const el = document.createElement('div');
+    const slider = document.createElement('span');
+    el.appendChild(slider);
+    const media = { playbackRate: 1 };
+    bindLongPressRate(el, media, { ignore: (t) => t === slider });
+    const e = new Event('pointerdown', { bubbles: true }) as PointerEvent;
+    Object.assign(e, { clientX: 0, clientY: 0, pointerId: 1, pointerType: 'touch' });
+    slider.dispatchEvent(e);
+    vi.advanceTimersByTime(HOLD_MS * 2);
+    expect(media.playbackRate).toBe(1);
+  });
+
   it('ignores the mouse, and cleanup restores the speed', () => {
     const el = document.createElement('div');
     const media = { playbackRate: 1 };
