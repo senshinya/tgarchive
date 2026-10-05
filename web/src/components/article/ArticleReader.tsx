@@ -81,7 +81,7 @@ export function ArticleReader({ chatId, messageId }: { chatId: number; messageId
   const media = new Map((article?.media ?? []).map((m) => [m.id, m]));
   const viewable: ViewerItem[] = (article?.media ?? [])
     .filter((m) => m.state === 'done' && (m.kind === 'photo' || m.kind === 'video'))
-    .map((m) => ({ mediaId: m.id, kind: m.kind, date: article!.fetched_at, text: '', entities: [] }));
+    .map((m) => ({ mediaId: m.id, kind: m.kind, date: article!.fetched_at, text: '', entities: [], width: m.width, height: m.height, mime: m.mime }));
   const openMedia = (mediaId: number) => {
     if (article) store.viewer.value = { list: viewable, mediaId, title: article.title };
   };

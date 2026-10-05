@@ -1,21 +1,30 @@
-import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from 'lucide-preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { convMedia, errorMessage, mediaUrl } from '../../api/client';
+import { convMedia, errorMessage } from '../../api/client';
 import type { Message } from '../../api/types';
-import { formatFullDate, senderName } from '../../lib/format';
+import { senderName } from '../../lib/format';
 import { useStore, type ViewerItem, type ViewerTarget } from '../../state/store';
-import { IconButton } from '../../ui/Button';
-import { RichText } from '../message/RichText';
-import { VISUAL_KINDS, mainMedia } from '../media/util';
+import { Spinner } from '../../ui/Spinner';
+import { VISUAL_KINDS, mainMedia, readyThumb } from '../media/util';
 import './viewer.scss';
+
+type GalleryModule = typeof import('./Gallery');
+let loadedGallery: GalleryModule | null = null;
+let galleryPromise: Promise<GalleryModule> | null = null;
+
+/** PhotoSwipe + Vidstack live in their own chunk, fetched on the first open. */
+function loadGallery(): Promise<GalleryModule> {
+  galleryPromise ??= import('./Gallery').then(
+    (m) => (loadedGallery = m),
+    (err) => {
+      galleryPromise = null; // let the next open retry
+      throw err;
+    },
+  );
+  return galleryPromise;
+}
 
 export const VIEWER_PAGE = 100;
 export const VIEWER_MAX_PAGES = 50;
-const MIN_ZOOM = 1;
-const MAX_ZOOM = 4;
-const ZOOM_STEP = 0.5;
-const SWIPE_H_THRESHOLD = 50; // px; horizontal drag past this (and past the vertical delta) navigates
-const SWIPE_V_THRESHOLD = 80; // px; downward drag past this closes the viewer
 
 /** A fresh, per-open id for the history entry the viewer pushes (see ViewerInner below): unique
  * enough that it never collides with a stale `viewer` marker left on an older entry (e.g. from
@@ -29,7 +38,22 @@ export function toViewerItems(msgs: Message[]): ViewerItem[] {
   for (const msg of msgs) {
     const media = mainMedia(msg);
     if (media && media.state === 'done' && VISUAL_KINDS.includes(msg.kind)) {
-      out.push({ id: msg.id, item: { mediaId: media.id, kind: msg.kind, date: msg.date, text: msg.text, entities: msg.entities, chatId: msg.chat_id } });
+      const thumb = readyThumb(msg);
+      out.push({
+        id: msg.id,
+        item: {
+          mediaId: media.id,
+          kind: msg.kind,
+          date: msg.date,
+          text: msg.text,
+          entities: msg.entities,
+          chatId: msg.chat_id,
+          thumbId: thumb?.id,
+          width: media.width,
+          height: media.height,
+          mime: media.mime,
+        },
+      });
     }
   }
   return out.sort((a, b) => a.id - b.id).map((x) => x.item);
@@ -81,11 +105,6 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
   const chatId = inChat?.chatId ?? 0;
   const seed = listed ? listed.list : toViewerItems(store.conv(chatId).items.filter((m) => m.id === inChat?.messageId));
   const [items, setItems] = useState<ViewerItem[]>(seed);
-  const [mediaId, setMediaId] = useState(target.mediaId);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const drag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
-  const swipeStart = useRef<{ x: number; y: number } | null>(null);
 
   // Load the whole chat's media (newest first, paged by id) so left/right walks all of it. An
   // explicit list is already complete.
@@ -115,141 +134,38 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
     };
   }, [chatId, target.mediaId]);
 
-  const index = items.findIndex((it) => it.mediaId === mediaId);
-  const item = index >= 0 ? items[index] : undefined;
-
-  const go = (delta: number) => {
-    const next = items[index + delta];
-    if (!next) return;
-    setMediaId(next.mediaId);
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
+  const titleOf = (it: ViewerItem) => {
+    if (listed) return listed.title;
+    const chat = store.chats.value.find((c) => c.id === (it.chatId ?? chatId));
+    return chat ? senderName(chat.sender) : '';
   };
 
-  const setZoomClamped = (z: number) => {
-    const v = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
-    setZoom(v);
-    if (v === 1) setPan({ x: 0, y: 0 });
-  };
-
+  const [gallery, setGallery] = useState<GalleryModule | null>(loadedGallery);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
-      else if (e.key === 'ArrowLeft') go(-1);
-      else if (e.key === 'ArrowRight') go(1);
+    if (gallery) return;
+    let cancelled = false;
+    loadGallery().then(
+      (m) => !cancelled && setGallery(m),
+      () => {
+        if (cancelled) return;
+        store.showToast('查看器加载失败');
+        close();
+      },
+    );
+    return () => {
+      cancelled = true;
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
+  }, []);
 
-  if (!item) return null;
-  const chat = store.chats.value.find((c) => c.id === (item.chatId ?? chatId));
-  const title = listed ? listed.title : chat ? senderName(chat.sender) : '';
-  const isPhoto = item.kind === 'photo';
-
+  const [root, setRoot] = useState<HTMLDivElement | null>(null);
+  const ready = gallery && root && items.some((it) => it.mediaId === target.mediaId);
   return (
-    <div class="MediaViewer" role="dialog" aria-modal="true" aria-label="媒体查看器">
-      <div class="MediaViewer-head">
-        <div class="MediaViewer-sender">
-          <span class="MediaViewer-name">{title}</span>
-          <span class="MediaViewer-date">
-            {formatFullDate(item.date)}
-            {items.length > 1 && ` · ${index + 1} / ${items.length}`}
-          </span>
-        </div>
-        <div class="MediaViewer-actions">
-          {isPhoto && (
-            <>
-              <IconButton label="缩小" class="translucent-white zoom-btn" disabled={zoom <= MIN_ZOOM} onClick={() => setZoomClamped(zoom - ZOOM_STEP)}>
-                <ZoomOut size={24} />
-              </IconButton>
-              <IconButton label="放大" class="translucent-white zoom-btn" disabled={zoom >= MAX_ZOOM} onClick={() => setZoomClamped(zoom + ZOOM_STEP)}>
-                <ZoomIn size={24} />
-              </IconButton>
-            </>
-          )}
-          <a class="IconButton translucent-white" href={mediaUrl(item.mediaId, true)} download aria-label="下载" title="下载">
-            <Download size={24} />
-          </a>
-          <IconButton label="关闭" class="translucent-white" onClick={close}>
-            <X size={24} />
-          </IconButton>
-        </div>
-      </div>
-      <div
-        class="MediaViewer-content"
-        onClick={(e) => {
-          if (e.target === e.currentTarget) close();
-        }}
-        onWheel={(e) => {
-          if (!isPhoto) return;
-          e.preventDefault();
-          setZoomClamped(zoom + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP));
-        }}
-        onPointerDown={(e) => {
-          // zoom > 1 is the pan-drag's territory (handled on the <img> itself below); leave it alone.
-          if (zoom > 1) return;
-          // A drag on a video's native controls (scrubbing) is not a swipe.
-          if ((e.target as HTMLElement).tagName === 'VIDEO') return;
-          swipeStart.current = { x: e.clientX, y: e.clientY };
-        }}
-        onPointerUp={(e) => {
-          const start = swipeStart.current;
-          swipeStart.current = null;
-          if (!start || zoom > 1) return;
-          const dx = e.clientX - start.x;
-          const dy = e.clientY - start.y;
-          if (Math.abs(dx) > SWIPE_H_THRESHOLD && Math.abs(dx) > Math.abs(dy)) go(dx < 0 ? 1 : -1); // swipe left = next
-          else if (dy > SWIPE_V_THRESHOLD && dy > Math.abs(dx)) close();
-        }}
-      >
-        {isPhoto ? (
-          <img
-            key={item.mediaId}
-            src={mediaUrl(item.mediaId)}
-            alt=""
-            draggable={false}
-            class={zoom > 1 ? 'zoomed' : ''}
-            style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
-            onDblClick={() => setZoomClamped(zoom > 1 ? 1 : 2)}
-            onPointerDown={(e) => {
-              if (zoom <= 1) return;
-              (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-              drag.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
-            }}
-            onPointerMove={(e) => {
-              const d = drag.current;
-              if (d) setPan({ x: d.px + e.clientX - d.x, y: d.py + e.clientY - d.y });
-            }}
-            onPointerUp={() => {
-              drag.current = null;
-            }}
-          />
-        ) : (
-          <video
-            key={item.mediaId}
-            src={mediaUrl(item.mediaId)}
-            controls={item.kind === 'video'}
-            autoplay
-            loop={item.kind === 'animation'}
-            muted={item.kind === 'animation'}
-            playsInline
-          />
-        )}
-      </div>
-      {index > 0 && (
-        <button type="button" class="MediaViewer-nav prev" aria-label="上一个" onClick={() => go(-1)}>
-          <ChevronLeft size={36} />
-        </button>
-      )}
-      {index < items.length - 1 && (
-        <button type="button" class="MediaViewer-nav next" aria-label="下一个" onClick={() => go(1)}>
-          <ChevronRight size={36} />
-        </button>
-      )}
-      {item.text && (
-        <div class="MediaViewer-caption">
-          <RichText text={item.text} entities={item.entities} />
+    <div class="MediaViewer" role="dialog" aria-modal="true" aria-label="媒体查看器" ref={setRoot}>
+      {ready ? (
+        <gallery.Gallery items={items} mediaId={target.mediaId} container={root} titleOf={titleOf} onClosed={close} />
+      ) : (
+        <div class="MediaViewer-loading" aria-label="加载中">
+          <Spinner size={48} />
         </div>
       )}
     </div>
