@@ -23,6 +23,11 @@ export interface ViewerItem {
   entities: Entity[];
   /** The chat it was sent in, for the viewer's sender title; absent for article media. */
   chatId?: number;
+  /** A downloaded thumbnail (poster and strip image). */
+  thumbId?: number;
+  width?: number;
+  height?: number;
+  mime?: string;
 }
 
 /** Opens the viewer on a chat's media (walking the whole chat), or on an explicit list such as

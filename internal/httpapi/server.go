@@ -119,6 +119,11 @@ func (s *Server) spa() http.Handler {
 		p := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 		if p != "" && p != "index.html" {
 			if st, err := fs.Stat(s.Web, p); err == nil && !st.IsDir() {
+				// Vite content-hashes everything under assets/, so a URL never changes meaning. private: the
+				// site sits behind forward auth, so shared caches (the CDN) must not keep copies.
+				if strings.HasPrefix(p, "assets/") {
+					w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+				}
 				files.ServeHTTP(w, r)
 				return
 			}

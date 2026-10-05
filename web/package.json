@@ -15,7 +15,9 @@
     "@preact/signals": "2.11.3",
     "lottie-web": "5.13.0",
     "lucide-preact": "1.52.0",
-    "preact": "11.0.0"
+    "photoswipe": "5.4.4",
+    "preact": "11.0.0",
+    "vidstack": "1.15.6"
   },
   "devDependencies": {
     "@testing-library/preact": "3.2.4",

@@ -3,9 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/client';
 import type { Message } from '../../api/types';
 import { fakeApi, makeMedia, makeMessage } from '../../test/fixtures';
+import { current } from '../../test/galleryStub';
 import { renderWithStore } from '../../test/render';
 import { MediaViewer } from '../viewer/MediaViewer';
 import { SharedMedia } from './SharedMedia';
+
+vi.mock('../viewer/Gallery', () => import('../../test/galleryStub'));
 
 const oct = new Date(2026, 9, 3).getTime() / 1000;
 const sep = new Date(2026, 8, 3).getTime() / 1000;
@@ -96,41 +99,22 @@ describe('MediaViewer', () => {
     makeMessage({ id: 1, kind: 'photo', media: [makeMedia({ id: 10, state: 'failed' })] }),
   ];
 
-  it('walks all archived media of the chat and closes with Escape', async () => {
+  it('walks the archived (downloaded) media of the chat in message order and closes', async () => {
     const api = fakeApi({ chatMedia: vi.fn(async () => media()) });
     const { store, container } = renderWithStore(<MediaViewer />, api);
     act(() => {
       store.viewer.value = { chatId: 10, messageId: 3, mediaId: 30 };
     });
-    expect(await screen.findByText(/2 \/ 2/)).toBeTruthy();
-    expect(container.querySelector('.MediaViewer-content img')!.getAttribute('src')).toBe('/media/30');
+    expect(await screen.findByText('2 / 2')).toBeTruthy();
+    expect(current(container).dataset.media).toBe('30');
     expect(screen.getByText('third')).toBeTruthy();
-    expect(screen.getByRole('link', { name: '下载' }).getAttribute('href')).toBe('/media/30?download=1');
     fireEvent.click(screen.getByRole('button', { name: '上一个' }));
-    expect(container.querySelector('.MediaViewer-content video')!.getAttribute('src')).toBe('/media/20');
-    expect(screen.queryByRole('button', { name: '上一个' })).toBeNull();
-    fireEvent.keyDown(window, { key: 'ArrowRight' });
-    expect(container.querySelector('.MediaViewer-content img')!.getAttribute('src')).toBe('/media/30');
+    expect(current(container).dataset.media).toBe('20');
     const back = mockBack();
-    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
     expect(back).toHaveBeenCalledTimes(1);
     expect(store.viewer.value).toBeNull();
     back.mockRestore();
-  });
-
-  it('zooms photos within bounds', async () => {
-    const api = fakeApi({ chatMedia: vi.fn(async () => media()) });
-    const { store, container } = renderWithStore(<MediaViewer />, api);
-    act(() => {
-      store.viewer.value = { chatId: 10, messageId: 3, mediaId: 30 };
-    });
-    await screen.findByText(/2 \/ 2/);
-    const img = () => container.querySelector('.MediaViewer-content img') as HTMLElement;
-    expect((screen.getByRole('button', { name: '缩小' }) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: '放大' }));
-    expect(img().style.transform).toContain('scale(1.5)');
-    fireEvent.dblClick(img());
-    expect(img().style.transform).toContain('scale(1)');
   });
 
   it('closes itself when the target media is not available', async () => {

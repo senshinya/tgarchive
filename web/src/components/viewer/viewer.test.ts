@@ -33,8 +33,8 @@ describe('viewer.scss', () => {
     expect(body).toMatch(/overflow:\s*hidden;\s*text-overflow:\s*ellipsis;\s*white-space:\s*nowrap;/);
   });
 
-  it('pins the grid column to the viewer width so a long nowrap title cannot widen the header past the viewport', () => {
-    expect(bodyOf('.MediaViewer {')).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\);/);
+  it('pins the header to the viewport edges so a long nowrap title cannot widen it past the viewport', () => {
+    expect(bodyOf('.MediaViewer-head {')).toMatch(/position:\s*absolute;[\s\S]*left:\s*0;\s*right:\s*0;/);
   });
 
   it('lets the sender/title block take the remaining space and shrink, while actions never shrink', () => {
