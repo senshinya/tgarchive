@@ -3,6 +3,7 @@ import { signal } from '@preact/signals';
 export type Route =
   | { name: 'home' }
   | { name: 'chat'; chatId: number }
+  | { name: 'article'; chatId: number; messageId: number }
   | { name: 'settings' }
   | { name: 'settings-add-bot' }
   | { name: 'settings-bot'; botId: number }
@@ -13,6 +14,9 @@ export function parseRoute(pathname: string): Route {
   const parts = pathname.split('/').filter(Boolean);
   const id = (s: string | undefined) => (s && /^[1-9][0-9]{0,15}$/.test(s) ? Number(s) : 0);
   if (parts[0] === 'chat' && parts.length === 2 && id(parts[1])) return { name: 'chat', chatId: id(parts[1]) };
+  if (parts[0] === 'chat' && parts.length === 4 && parts[2] === 'article' && id(parts[1]) && id(parts[3])) {
+    return { name: 'article', chatId: id(parts[1]), messageId: id(parts[3]) };
+  }
   if (parts[0] === 'settings') {
     if (parts.length === 1) return { name: 'settings' };
     if (parts[1] === 'bots' && parts[2] === 'new' && parts.length === 3) return { name: 'settings-add-bot' };
@@ -29,6 +33,8 @@ export function routePath(r: Route): string {
       return '/';
     case 'chat':
       return `/chat/${r.chatId}`;
+    case 'article':
+      return `/chat/${r.chatId}/article/${r.messageId}`;
     case 'settings':
       return '/settings';
     case 'settings-add-bot':
@@ -55,11 +61,20 @@ export interface NavigateOptions {
    * `history.back()` instead of pushing a fresh "/" entry (keeps Android's hardware back in sync
    * with the in-app back button instead of requiring an extra press to leave the app). */
   fromList?: boolean;
+  /** Marks an article reader opened from its chat, so closing it can use `history.back()` (the
+   * system back button and the reader's own back button then do the same thing). */
+  fromChat?: boolean;
+}
+
+/** The chat a route shows (the article reader overlays its chat); 0 for none. */
+export function routeChatId(r: Route): number {
+  return r.name === 'chat' || r.name === 'article' ? r.chatId : 0;
 }
 
 export function navigate(to: Route, opts: NavigateOptions = {}): void {
   const path = routePath(to);
-  const state = { fromList: !!opts.fromList };
+  const state: { fromList: boolean; fromChat?: boolean } = { fromList: !!opts.fromList };
+  if (opts.fromChat) state.fromChat = true;
   if (opts.replace) history.replaceState(state, '', path);
   else history.pushState(state, '', path);
   route.value = to;

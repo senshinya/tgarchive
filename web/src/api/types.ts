@@ -107,6 +107,55 @@ export interface Message {
   origin_link: string;
   extra?: Record<string, unknown>;
   media: Media[];
+  /** Present when the message is a Telegraph link with an archiving job. */
+  article?: ArticleSummary;
+}
+
+export type ArticleState = 'queued' | 'fetching' | 'fetched' | 'failed';
+
+/** Card data for a Telegraph link message (GET /api/messages/:id carries it). */
+export interface ArticleSummary {
+  state: ArticleState;
+  error: string;
+  title: string;
+  description: string;
+  author_name: string;
+  /** Cover image; only set once it has been downloaded. */
+  image_media_id?: number;
+  url: string;
+}
+
+/** Normalized Telegraph node: text, or an element. img/video carry data-media-id + data-src;
+ * iframes arrive as {tag: 'embed', attrs: {href, src}}. */
+export type ArticleNode = string | ArticleElement;
+
+export interface ArticleElement {
+  tag: string;
+  attrs?: Record<string, string>;
+  children?: ArticleNode[];
+}
+
+export interface ArticleMedia {
+  id: number;
+  kind: string; // photo / video
+  state: MediaState;
+  width: number;
+  height: number;
+  duration: number;
+  mime: string;
+}
+
+/** GET /api/messages/:id/article */
+export interface Article {
+  url: string;
+  title: string;
+  description: string;
+  author_name: string;
+  author_url: string;
+  views: number;
+  fetched_at: number;
+  content: ArticleNode[];
+  media: ArticleMedia[];
 }
 
 export type SharedMediaType = 'media' | 'file' | 'link';

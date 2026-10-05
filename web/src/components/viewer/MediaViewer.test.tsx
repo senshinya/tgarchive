@@ -82,3 +82,33 @@ describe('MediaViewer swipe gestures', () => {
     expect(store.viewer.value).not.toBeNull();
   });
 });
+
+describe('MediaViewer with an explicit list', () => {
+  const list = [
+    { mediaId: 201, kind: 'photo', date: 1_790_000_000, text: '', entities: [] },
+    { mediaId: 202, kind: 'video', date: 1_790_000_000, text: '', entities: [] },
+    { mediaId: 203, kind: 'photo', date: 1_790_000_000, text: '', entities: [] },
+  ];
+
+  it('walks only the given items, titled by the list, without loading chat media', async () => {
+    const api = fakeApi();
+    const r = renderWithStore(<MediaViewer />, api);
+    act(() => {
+      r.store.viewer.value = { list, mediaId: 202, title: 'Sample' };
+    });
+    await screen.findByRole('dialog', { name: '媒体查看器' });
+    expect(screen.getByText('Sample')).toBeTruthy();
+    expect(screen.getByText(/2 \/ 3/)).toBeTruthy();
+    expect(r.container.querySelector('.MediaViewer-content video')!.getAttribute('src')).toBe('/media/202');
+    fireEvent.click(screen.getByRole('button', { name: '下一个' }));
+    expect(r.container.querySelector('.MediaViewer-content img')!.getAttribute('src')).toBe('/media/203');
+    expect(screen.queryByRole('button', { name: '下一个' })).toBeNull();
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    expect(r.container.querySelector('.MediaViewer-content img')!.getAttribute('src')).toBe('/media/201');
+    await act(async () => {}); // flush effects: no chat-media request in list mode
+    expect(api.chatMedia).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(r.store.viewer.value).toBeNull();
+  });
+});

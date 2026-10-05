@@ -2,7 +2,7 @@ import { computed, signal } from '@preact/signals';
 import { createContext } from 'preact';
 import { useContext } from 'preact/hooks';
 import { ApiError, PAGE_SIZE, errorMessage, type Api } from '../api/client';
-import type { ArchiveEvent, Bot, Chat, Message } from '../api/types';
+import type { ArchiveEvent, Bot, Chat, Entity, Message } from '../api/types';
 
 export interface Conversation {
   items: Message[]; // ascending by id
@@ -14,11 +14,20 @@ export interface Conversation {
 
 const EMPTY: Conversation = { items: [], hasMore: true, loading: false, loaded: false, error: '' };
 
-export interface ViewerTarget {
-  chatId: number;
-  messageId: number;
+/** One photo/video/GIF the media viewer can show. */
+export interface ViewerItem {
   mediaId: number;
+  kind: string; // photo / video / animation
+  date: number;
+  text: string; // caption, '' for none
+  entities: Entity[];
 }
+
+/** Opens the viewer on a chat's media (walking the whole chat), or on an explicit list such as
+ * the media of one archived article (walking only that list). */
+export type ViewerTarget =
+  | { chatId: number; messageId: number; mediaId: number }
+  | { list: ViewerItem[]; mediaId: number; title: string };
 
 export interface Toast {
   id: number;

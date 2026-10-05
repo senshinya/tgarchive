@@ -1,9 +1,9 @@
 import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from 'lucide-preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { errorMessage, mediaUrl } from '../../api/client';
-import type { Media, Message } from '../../api/types';
+import type { Message } from '../../api/types';
 import { formatFullDate, senderName } from '../../lib/format';
-import { useStore, type ViewerTarget } from '../../state/store';
+import { useStore, type ViewerItem, type ViewerTarget } from '../../state/store';
 import { IconButton } from '../../ui/Button';
 import { RichText } from '../message/RichText';
 import { VISUAL_KINDS, mainMedia } from '../media/util';
@@ -17,18 +17,15 @@ const ZOOM_STEP = 0.5;
 const SWIPE_H_THRESHOLD = 50; // px; horizontal drag past this (and past the vertical delta) navigates
 const SWIPE_V_THRESHOLD = 80; // px; downward drag past this closes the viewer
 
-export interface ViewerItem {
-  msg: Message;
-  media: Media;
-}
-
 export function toViewerItems(msgs: Message[]): ViewerItem[] {
-  const out: ViewerItem[] = [];
+  const out: { id: number; item: ViewerItem }[] = [];
   for (const msg of msgs) {
     const media = mainMedia(msg);
-    if (media && media.state === 'done' && VISUAL_KINDS.includes(msg.kind)) out.push({ msg, media });
+    if (media && media.state === 'done' && VISUAL_KINDS.includes(msg.kind)) {
+      out.push({ id: msg.id, item: { mediaId: media.id, kind: msg.kind, date: msg.date, text: msg.text, entities: msg.entities } });
+    }
   }
-  return out.sort((a, b) => a.msg.id - b.msg.id);
+  return out.sort((a, b) => a.id - b.id).map((x) => x.item);
 }
 
 function ViewerInner({ target }: { target: ViewerTarget }) {
@@ -36,7 +33,10 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
   const close = () => {
     store.viewer.value = null;
   };
-  const seed = toViewerItems(store.conv(target.chatId).items.filter((m) => m.id === target.messageId));
+  const listed = 'list' in target ? target : null;
+  const inChat = 'list' in target ? null : target;
+  const chatId = inChat?.chatId ?? 0;
+  const seed = listed ? listed.list : toViewerItems(store.conv(chatId).items.filter((m) => m.id === inChat?.messageId));
   const [items, setItems] = useState<ViewerItem[]>(seed);
   const [mediaId, setMediaId] = useState(target.mediaId);
   const [zoom, setZoom] = useState(1);
@@ -44,21 +44,23 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
   const drag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const swipeStart = useRef<{ x: number; y: number } | null>(null);
 
-  // Load the whole chat's media (newest first, paged by id) so left/right walks all of it.
+  // Load the whole chat's media (newest first, paged by id) so left/right walks all of it. An
+  // explicit list is already complete.
   useEffect(() => {
+    if (listed) return;
     let cancelled = false;
     (async () => {
       const all: Message[] = [];
       let before = 0;
       for (let i = 0; i < VIEWER_MAX_PAGES; i++) {
-        const page = await store.api.chatMedia(target.chatId, 'media', before, VIEWER_PAGE);
+        const page = await store.api.chatMedia(chatId, 'media', before, VIEWER_PAGE);
         all.push(...page);
         if (page.length < VIEWER_PAGE) break;
         before = page[page.length - 1].id;
       }
       if (cancelled) return;
       const list = toViewerItems(all);
-      if (list.some((it) => it.media.id === target.mediaId)) setItems(list);
+      if (list.some((it) => it.mediaId === target.mediaId)) setItems(list);
       else if (seed.length === 0) close();
     })().catch((err) => {
       if (cancelled) return;
@@ -68,15 +70,15 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
     return () => {
       cancelled = true;
     };
-  }, [target.chatId, target.mediaId]);
+  }, [chatId, target.mediaId]);
 
-  const index = items.findIndex((it) => it.media.id === mediaId);
+  const index = items.findIndex((it) => it.mediaId === mediaId);
   const item = index >= 0 ? items[index] : undefined;
 
   const go = (delta: number) => {
     const next = items[index + delta];
     if (!next) return;
-    setMediaId(next.media.id);
+    setMediaId(next.mediaId);
     setZoom(1);
     setPan({ x: 0, y: 0 });
   };
@@ -98,16 +100,17 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
   });
 
   if (!item) return null;
-  const chat = store.chats.value.find((c) => c.id === target.chatId);
-  const isPhoto = item.msg.kind === 'photo';
+  const chat = store.chats.value.find((c) => c.id === chatId);
+  const title = listed ? listed.title : chat ? senderName(chat.sender) : '';
+  const isPhoto = item.kind === 'photo';
 
   return (
     <div class="MediaViewer" role="dialog" aria-modal="true" aria-label="媒体查看器">
       <div class="MediaViewer-head">
         <div class="MediaViewer-sender">
-          <span class="MediaViewer-name">{chat ? senderName(chat.sender) : ''}</span>
+          <span class="MediaViewer-name">{title}</span>
           <span class="MediaViewer-date">
-            {formatFullDate(item.msg.date)}
+            {formatFullDate(item.date)}
             {items.length > 1 && ` · ${index + 1} / ${items.length}`}
           </span>
         </div>
@@ -122,7 +125,7 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
               </IconButton>
             </>
           )}
-          <a class="IconButton translucent-white" href={mediaUrl(item.media.id, true)} download aria-label="下载" title="下载">
+          <a class="IconButton translucent-white" href={mediaUrl(item.mediaId, true)} download aria-label="下载" title="下载">
             <Download size={24} />
           </a>
           <IconButton label="关闭" class="translucent-white" onClick={close}>
@@ -159,8 +162,8 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
       >
         {isPhoto ? (
           <img
-            key={item.media.id}
-            src={mediaUrl(item.media.id)}
+            key={item.mediaId}
+            src={mediaUrl(item.mediaId)}
             alt=""
             draggable={false}
             class={zoom > 1 ? 'zoomed' : ''}
@@ -181,12 +184,12 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
           />
         ) : (
           <video
-            key={item.media.id}
-            src={mediaUrl(item.media.id)}
-            controls={item.msg.kind === 'video'}
+            key={item.mediaId}
+            src={mediaUrl(item.mediaId)}
+            controls={item.kind === 'video'}
             autoplay
-            loop={item.msg.kind === 'animation'}
-            muted={item.msg.kind === 'animation'}
+            loop={item.kind === 'animation'}
+            muted={item.kind === 'animation'}
             playsInline
           />
         )}
@@ -201,19 +204,21 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
           <ChevronRight size={36} />
         </button>
       )}
-      {item.msg.text && (
+      {item.text && (
         <div class="MediaViewer-caption">
-          <RichText text={item.msg.text} entities={item.msg.entities} />
+          <RichText text={item.text} entities={item.entities} />
         </div>
       )}
     </div>
   );
 }
 
-/** Full-screen viewer over all photos/videos/GIFs of the chat; opened by setting store.viewer. */
+/** Full-screen viewer over all photos/videos/GIFs of the chat, or over an explicit list (an
+ * article's media); opened by setting store.viewer. */
 export function MediaViewer() {
   const store = useStore();
   const target = store.viewer.value;
   if (!target) return null;
-  return <ViewerInner key={`${target.chatId}:${target.mediaId}`} target={target} />;
+  const key = 'list' in target ? `list:${target.mediaId}` : `${target.chatId}:${target.mediaId}`;
+  return <ViewerInner key={key} target={target} />;
 }
