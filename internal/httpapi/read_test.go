@@ -211,6 +211,8 @@ func TestSPAFallback(t *testing.T) {
 	}
 	if w := do(e.h, "GET", "/assets/app.js", nil); w.Code != 200 || w.Body.String() != "js!" {
 		t.Fatalf("asset = %d %q", w.Code, w.Body)
+	} else if cc := w.Header().Get("Cache-Control"); cc != "private, max-age=31536000, immutable" {
+		t.Fatalf("hashed asset Cache-Control = %q", cc)
 	}
 	if w := do(e.h, "GET", "/api/nope", nil); w.Code != 404 || !strings.Contains(w.Body.String(), `"error"`) {
 		t.Fatalf("unknown api = %d %q", w.Code, w.Body)

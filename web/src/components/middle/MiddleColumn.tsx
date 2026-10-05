@@ -7,6 +7,7 @@ import { Avatar } from '../../ui/Avatar';
 import { IconButton } from '../../ui/Button';
 import { ArticleReader } from '../article/ArticleReader';
 import { MessageList } from '../message/MessageList';
+import { Wallpaper } from './Wallpaper';
 import './middle.scss';
 
 /** Avatar, title and subtitle of the conversation: a sender's chat, or a bot's merged timeline. */
@@ -84,7 +85,7 @@ export function MiddleColumn({ chatId, articleId = 0 }: { chatId: number; articl
   if (!chatId) {
     return (
       <div id="MiddleColumn" class="empty">
-        <div class="Wallpaper" aria-hidden="true" />
+        <Wallpaper />
         <div class="empty-hint">
           <span>选择一个会话开始浏览存档</span>
         </div>
@@ -93,7 +94,7 @@ export function MiddleColumn({ chatId, articleId = 0 }: { chatId: number; articl
   }
   return (
     <div id="MiddleColumn">
-      <div class="Wallpaper" aria-hidden="true" />
+      <Wallpaper />
       <MiddleHeader chatId={chatId} />
       <MessageList key={chatId} chatId={chatId} />
       {articleId > 0 && <ArticleReader key={articleId} chatId={chatId} messageId={articleId} />}

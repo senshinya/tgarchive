@@ -91,38 +91,58 @@
   white-space: nowrap;
 }
 
-// Default wallpaper: four-colour corner gradient with a doodle pattern (original artwork in
-// public/pattern.svg). Light draws the doodles darker on the gradient; dark cuts the gradient
-// out of black through the doodle mask.
+// Default wallpaper, matching Telegram Web A (src/styles/_patternBackground.module.scss): the
+// resting four-colour gradient drawn on a small canvas (Wallpaper.tsx) under the official doodle
+// pattern at intensity 50 × the default 75% factor. Light soft-lights black doodles over the
+// gradient; dark shows the gradient only through the doodles, over black.
 .Wallpaper {
-  --wallpaper-gradient: radial-gradient(circle at 0% 0%, var(--wallpaper-1) 0%, transparent 70%),
-    radial-gradient(circle at 100% 0%, var(--wallpaper-2) 0%, transparent 70%),
-    radial-gradient(circle at 100% 100%, var(--wallpaper-3) 0%, transparent 70%),
-    radial-gradient(circle at 0% 100%, var(--wallpaper-4) 0%, transparent 70%),
-    linear-gradient(135deg, var(--wallpaper-1), var(--wallpaper-3));
+  --pattern-intensity: 0.375;
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: var(--wallpaper-gradient);
+  overflow: hidden;
+  background-color: #bdcd8c;
+
+  .Wallpaper-gradient {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+
+    &[data-ready] {
+      opacity: 1;
+    }
+  }
 
   &::after {
     content: "";
     position: absolute;
     inset: 0;
-    background: #000;
-    opacity: 0.12;
-    -webkit-mask: url("/pattern.svg") 0 0 / 360px 360px repeat;
-    mask: url("/pattern.svg") 0 0 / 360px 360px repeat;
+    opacity: var(--pattern-intensity);
+    background-color: #000;
+    mix-blend-mode: soft-light;
+    -webkit-mask: url("../../assets/pattern.svg") center / 26.875rem auto repeat;
+    mask: url("../../assets/pattern.svg") center / 26.875rem auto repeat;
   }
 }
 
 @media (prefers-color-scheme: dark) {
   .Wallpaper {
-    background: #000;
+    background-color: #000;
+
+    .Wallpaper-gradient {
+      -webkit-mask: url("../../assets/pattern.svg") center / 26.875rem auto repeat;
+      mask: url("../../assets/pattern.svg") center / 26.875rem auto repeat;
+
+      &[data-ready] {
+        opacity: var(--pattern-intensity);
+      }
+    }
 
     &::after {
-      background: var(--wallpaper-gradient);
-      opacity: 0.45;
+      display: none;
     }
   }
 }
