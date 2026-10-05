@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from 'lucide-preact';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { errorMessage, mediaUrl } from '../../api/client';
 import type { Message } from '../../api/types';
 import { formatFullDate, senderName } from '../../lib/format';
@@ -60,7 +60,10 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
   // popstate where the current entry's `viewer` marker is no longer this open's token — closes
   // the viewer without navigating further; the router re-parses the same path on this pop, which
   // is a no-op since the path never changed.
-  useEffect(() => {
+  // A layout effect, not useEffect: Preact defers useEffect to after the next paint
+  // (requestAnimationFrame), so a back press right after opening — or any throttled rAF — would
+  // pop the entry underneath (closing the reader too) before this one was ever pushed.
+  useLayoutEffect(() => {
     history.pushState({ ...(history.state ?? {}), viewer: token }, '', location.href);
     const onPopState = () => {
       if ((history.state as { viewer?: string } | null)?.viewer !== token) store.viewer.value = null;
