@@ -4,6 +4,7 @@ import { fitMedia, layoutAlbum } from '../../lib/album';
 import { peerColor } from '../../lib/format';
 import type { Bubble } from '../../lib/grouping';
 import { useStore } from '../../state/store';
+import { ArticleCard } from '../article/ArticleCard';
 import { Album } from '../media/Album';
 import { MessageMedia } from '../media/MessageMedia';
 import { VISUAL_KINDS, mainMedia } from '../media/util';
@@ -117,6 +118,7 @@ export function MessageBubble({ bubble, sender, onMenu }: Props) {
         {(caption || unsupported) && (
           <div class="text-content" dir="auto">
             {caption ? <RichText text={caption.text} entities={caption.entities} /> : <span class="unsupported">不支持的消息类型</span>}
+            {!album && head.article && <ArticleCard msg={head} />}
             <MessageMeta date={last.date} editDate={editDate} variant="inline" />
           </div>
         )}

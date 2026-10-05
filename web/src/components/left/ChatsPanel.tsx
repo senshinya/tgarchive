@@ -2,7 +2,7 @@ import { Settings } from 'lucide-preact';
 import { avatarUrl } from '../../api/client';
 import type { Chat } from '../../api/types';
 import { botName, formatListTime, previewText, senderName } from '../../lib/format';
-import { navigate, route } from '../../lib/router';
+import { navigate, route, routeChatId } from '../../lib/router';
 import { useStore } from '../../state/store';
 import { Avatar } from '../../ui/Avatar';
 import { Spinner } from '../../ui/Spinner';
@@ -72,7 +72,7 @@ function ChatItem({ chat, selected, showBot }: { chat: Chat; selected: boolean; 
 export function ChatsPanel() {
   const store = useStore();
   const r = route.value;
-  const selectedId = r.name === 'chat' ? r.chatId : 0;
+  const selectedId = routeChatId(r);
   const chats = store.visibleChats.value;
   const showBot = store.effectiveBotFilter.value === 0 && store.bots.value.length > 1;
   return (

@@ -5,7 +5,7 @@ import { MiddleColumn } from './components/middle/MiddleColumn';
 import { SharedMedia } from './components/right/SharedMedia';
 import { SettingsPanel } from './components/settings/SettingsPanel';
 import { MediaViewer } from './components/viewer/MediaViewer';
-import { isSettings, navigate, route, startRouter } from './lib/router';
+import { isSettings, navigate, route, routeChatId, startRouter } from './lib/router';
 import { connectEvents, type EventSourceFactory } from './lib/sse';
 import { StoreContext, type Store } from './state/store';
 import { Toast } from './ui/Toast';
@@ -35,7 +35,8 @@ export function App({ store, eventSource }: Props) {
   }, []);
 
   const r = route.value;
-  const chatId = r.name === 'chat' ? r.chatId : 0;
+  const chatId = routeChatId(r);
+  const articleId = r.name === 'article' ? r.messageId : 0;
   const rightOpen = chatId > 0 && store.sharedMediaOpen.value;
   const cls = [!chatId && 'left-column-open', rightOpen && 'right-column-open'].filter(Boolean).join(' ');
 
@@ -67,7 +68,7 @@ export function App({ store, eventSource }: Props) {
             onClick={() => navigate({ name: 'chat', chatId: lastChatId.current })}
           />
         )}
-        <MiddleColumn chatId={chatId} />
+        <MiddleColumn chatId={chatId} articleId={articleId} />
         <div id="RightColumn" aria-hidden={!rightOpen}>
           {rightOpen && <SharedMedia key={chatId} chatId={chatId} />}
         </div>
