@@ -6,13 +6,14 @@ import { Document } from './Document';
 import { Photo } from './Photo';
 import { Sticker } from './Sticker';
 import { Video } from './Video';
+import { displayKind } from './util';
 import { VideoNote } from './VideoNote';
 import { Voice } from './Voice';
 
 /** The non-text part of a single message, by kind. Text/other kinds render nothing here. */
 export function MessageMedia({ msg, onOpen }: { msg: Message; onOpen: (msg: Message) => void }) {
   const open = () => onOpen(msg);
-  switch (msg.kind) {
+  switch (displayKind(msg)) {
     case 'photo':
       return <Photo msg={msg} onOpen={open} />;
     case 'video':

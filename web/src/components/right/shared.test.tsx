@@ -51,7 +51,7 @@ describe('SharedMedia', () => {
     const api = fakeApi({
       chatMedia: vi.fn(async (_c: number, type: string) =>
         type === 'file'
-          ? [makeMessage({ id: 5, kind: 'document', media: [makeMedia({ id: 50, kind: 'document', file_name: 'a.zip' })] })]
+          ? [makeMessage({ id: 5, kind: 'document', media: [makeMedia({ id: 50, kind: 'document', mime: 'application/octet-stream', file_name: 'a.zip' })] })]
           : type === 'link'
             ? [makeMessage({ id: 6, text: 'see go.dev', entities: [{ type: 'url', offset: 4, length: 6 }] })]
             : [],

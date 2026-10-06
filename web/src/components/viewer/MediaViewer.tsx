@@ -4,7 +4,7 @@ import type { Message } from '../../api/types';
 import { chatName } from '../../lib/format';
 import { useStore, type ViewerItem, type ViewerTarget } from '../../state/store';
 import { Spinner } from '../../ui/Spinner';
-import { VISUAL_KINDS, mainMedia, readyThumb } from '../media/util';
+import { VISUAL_KINDS, displayKind, mainMedia, readyThumb } from '../media/util';
 import './viewer.scss';
 
 type GalleryModule = typeof import('./Gallery');
@@ -37,13 +37,14 @@ export function toViewerItems(msgs: Message[]): ViewerItem[] {
   const out: { id: number; item: ViewerItem }[] = [];
   for (const msg of msgs) {
     const media = mainMedia(msg);
-    if (media && media.state === 'done' && VISUAL_KINDS.includes(msg.kind)) {
+    const kind = displayKind(msg);
+    if (media && media.state === 'done' && VISUAL_KINDS.includes(kind)) {
       const thumb = readyThumb(msg);
       out.push({
         id: msg.id,
         item: {
           mediaId: media.id,
-          kind: msg.kind,
+          kind,
           date: msg.date,
           text: msg.text,
           entities: msg.entities,

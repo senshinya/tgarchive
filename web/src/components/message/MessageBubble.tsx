@@ -7,7 +7,7 @@ import { useStore } from '../../state/store';
 import { ArticleCard } from '../article/ArticleCard';
 import { Album } from '../media/Album';
 import { MessageMedia } from '../media/MessageMedia';
-import { VISUAL_KINDS, extraString, mainMedia } from '../media/util';
+import { VISUAL_KINDS, displayKind, extraString, mainMedia } from '../media/util';
 import { PostReactions } from '../watch/PostFooter';
 import { ArrowUpRight } from 'lucide-preact';
 import { safeHref } from '../../lib/entities';
@@ -54,7 +54,7 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
   const last = msgs[msgs.length - 1];
   const caption = msgs.find((m) => m.text);
   const noBubble = !album && NO_BUBBLE.includes(head.kind);
-  const visual = album ? msgs.every((m) => m.kind === 'photo' || m.kind === 'video') : VISUAL_KINDS.includes(head.kind);
+  const visual = album ? msgs.every((m) => m.kind === 'photo' || m.kind === 'video') : VISUAL_KINDS.includes(displayKind(head));
   const hasHeader = showName || Boolean(head.forward_origin) || head.source === 'userbot_fetch';
   const hasReply = head.reply_to_tg_message_id > 0;
   // A watched channel post: its counters as archived, shown Telegram-channel style.
