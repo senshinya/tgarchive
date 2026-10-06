@@ -311,3 +311,17 @@ func TestChannelInfoOnlyForStoredChannels(t *testing.T) {
 		t.Fatalf("ChannelIDs = %v", ids)
 	}
 }
+
+func TestAddPendingAfterResetIsDropped(t *testing.T) {
+	s := newStore(t)
+	id := seedWatch(t, s)
+	// A poll read the watch, then it was disabled and re-enabled (reset to 0) before the poll saved.
+	s.UpdateWatch(ctx, id, 30, "{}", false, 2)
+	s.UpdateWatch(ctx, id, 30, "{}", true, 3)
+	if err := s.AddPending(ctx, id, []Pending{{TgMessageID: 20, Date: 1, Deadline: 2}}, 20); err != nil {
+		t.Fatal(err)
+	}
+	if w, _ := s.GetWatch(ctx, id); w.LastSeenID != 0 || w.Pending != 0 {
+		t.Fatalf("stale poll undid the reset: %+v", w)
+	}
+}
