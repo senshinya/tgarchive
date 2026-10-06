@@ -163,7 +163,7 @@ describe('channel conversations in the UI', () => {
     await act(async () => {
       await r.store.loadChats();
     });
-    expect(screen.getByText('监听中 · 窗口 30 分钟 · 观察中 2 条')).toBeTruthy();
+    expect(screen.getByText('监听中 · 观察 2 条 · 窗口 30 分钟')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '监听设置' }));
     expect(route.value).toEqual({ name: 'settings-watch', watchId: 3 });
   });

@@ -58,7 +58,7 @@ export function channelStatus(chat: Chat): string {
   if (!w) return '未监听';
   if (!w.enabled) return '已停用';
   if (w.status === 'error') return `出错：${w.error}`;
-  return `监听中 · 窗口 ${w.window_minutes} 分钟 · 观察中 ${w.pending} 条`;
+  return `监听中 · 观察 ${w.pending} 条 · 窗口 ${w.window_minutes} 分钟`;
 }
 
 function ChannelPeer({ chat }: { chat: Chat }) {
