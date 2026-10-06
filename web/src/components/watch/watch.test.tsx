@@ -225,6 +225,9 @@ describe('channel conversations in the UI', () => {
     expect(container.querySelector('.Message.with-outside-reactions > .PostReactions.outside')).toBeTruthy();
     expect(container.querySelector('.message-content .PostReactions')).toBeNull();
     expect(container.querySelector('.MessageMeta.overlay')).toBeTruthy();
+    // The bubble clips media-only content, so the original-post button sits beside it, not in it.
+    expect(container.querySelector('.message-content-wrap > a.message-action-button')).toBeTruthy();
+    expect(container.querySelector('.message-content a.message-action-button')).toBeNull();
   });
 });
 

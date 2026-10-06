@@ -395,6 +395,13 @@
   align-items: flex-start;
 }
 
+// Holds a bubble and the action button beside it (outside the bubble, which may clip).
+.message-content-wrap {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+
 // Round button beside a channel post that opens the original on t.me (Web A's action button).
 .message-action-button {
   position: absolute;

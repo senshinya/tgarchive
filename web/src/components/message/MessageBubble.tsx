@@ -110,48 +110,51 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
 
   return (
     <div class={classes} data-message-id={head.id}>
-      <div
-        class={contentClasses}
-        style={{
-          '--accent-color': accent,
-          '--accent-background-color': `color-mix(in srgb, ${accent} 10%, transparent)`,
-          width: visual ? `${visualWidth(msgs, album)}px` : undefined,
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          if (Date.now() < suppressContextMenuUntil.current) return;
-          onMenu(e.clientX, e.clientY, pick(e.target));
-        }}
-        onTouchStart={(e) => {
-          const t = e.touches[0];
-          const target = e.target;
-          press.current = setTimeout(() => {
-            suppressContextMenuUntil.current = Date.now() + CONTEXTMENU_SUPPRESS_MS;
-            onMenu(t.clientX, t.clientY, pick(target));
-          }, LONG_PRESS_MS);
-        }}
-        onTouchEnd={() => clearTimeout(press.current)}
-        onTouchMove={() => clearTimeout(press.current)}
-      >
-        {showName && !noBubble && (
-          <div class="message-title sender-title" style={{ '--accent-color': accent }}>
-            {sender.name || '未知用户'}
-          </div>
-        )}
-        {head.source === 'userbot_fetch' && <OriginHeader msg={head} />}
-        {head.forward_origin && <ForwardHeader origin={head.forward_origin} />}
-        {hasReply && <ReplyQuote msg={head} senderName={sender.name} />}
-        {album ? <Album msgs={msgs} onOpen={open} /> : <MessageMedia msg={head} onOpen={open} />}
-        {(caption || unsupported) && (
-          <div class="text-content" dir="auto">
-            {caption ? <RichText text={caption.text} entities={caption.entities} /> : <span class="unsupported">不支持的消息类型</span>}
-            {!album && head.article && <ArticleCard msg={head} />}
-            {!reactionsInside && <MessageMeta {...metaProps} variant="inline" />}
-          </div>
-        )}
-        {post && reactionsInside && <PostReactions stats={post} meta={<MessageMeta {...metaProps} variant="reactions" />} />}
-        {meta}
-        {solid && bubble.last && <Appendix />}
+      <div class="message-content-wrap">
+        <div
+          class={contentClasses}
+          style={{
+            '--accent-color': accent,
+            '--accent-background-color': `color-mix(in srgb, ${accent} 10%, transparent)`,
+            width: visual ? `${visualWidth(msgs, album)}px` : undefined,
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            if (Date.now() < suppressContextMenuUntil.current) return;
+            onMenu(e.clientX, e.clientY, pick(e.target));
+          }}
+          onTouchStart={(e) => {
+            const t = e.touches[0];
+            const target = e.target;
+            press.current = setTimeout(() => {
+              suppressContextMenuUntil.current = Date.now() + CONTEXTMENU_SUPPRESS_MS;
+              onMenu(t.clientX, t.clientY, pick(target));
+            }, LONG_PRESS_MS);
+          }}
+          onTouchEnd={() => clearTimeout(press.current)}
+          onTouchMove={() => clearTimeout(press.current)}
+        >
+          {showName && !noBubble && (
+            <div class="message-title sender-title" style={{ '--accent-color': accent }}>
+              {sender.name || '未知用户'}
+            </div>
+          )}
+          {head.source === 'userbot_fetch' && <OriginHeader msg={head} />}
+          {head.forward_origin && <ForwardHeader origin={head.forward_origin} />}
+          {hasReply && <ReplyQuote msg={head} senderName={sender.name} />}
+          {album ? <Album msgs={msgs} onOpen={open} /> : <MessageMedia msg={head} onOpen={open} />}
+          {(caption || unsupported) && (
+            <div class="text-content" dir="auto">
+              {caption ? <RichText text={caption.text} entities={caption.entities} /> : <span class="unsupported">不支持的消息类型</span>}
+              {!album && head.article && <ArticleCard msg={head} />}
+              {!reactionsInside && <MessageMeta {...metaProps} variant="inline" />}
+            </div>
+          )}
+          {post && reactionsInside && <PostReactions stats={post} meta={<MessageMeta {...metaProps} variant="reactions" />} />}
+          {meta}
+          {solid && bubble.last && <Appendix />}
+        </div>
+        {/* Outside the bubble: media-only bubbles clip their content to the rounded corners. */}
         {originHref && (
           <a class="message-action-button" href={originHref} target="_blank" rel="noopener noreferrer" title="打开原帖" aria-label="打开原帖">
             <ArrowUpRight size={20} />
