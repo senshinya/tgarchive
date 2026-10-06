@@ -288,9 +288,9 @@ func (s *Server) createWatch(w http.ResponseWriter, r *http.Request) {
 		watchErr(w, err)
 		return
 	}
-	// Starting point: the newest post now. If the account is offline the poller sets it later.
-	last, err := s.Watcher.InitialLastSeen(ctx, b.ChannelID)
-	if err != nil && !errors.Is(err, userbot.ErrNotReady) {
+	// The channel must be readable. The poller sets the starting point itself, taking in the
+	// posts published within the window (so it works the same when the account is offline now).
+	if _, err := s.Watcher.InitialLastSeen(ctx, b.ChannelID); err != nil && !errors.Is(err, userbot.ErrNotReady) {
 		watchErr(w, err)
 		return
 	}
@@ -300,7 +300,7 @@ func (s *Server) createWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, err := s.Store.CreateWatch(r.Context(), &store.Watch{ChannelID: b.ChannelID, WindowMinutes: b.WindowMinutes, Cond: string(b.Cond),
-		Enabled: b.Enabled, LastSeenID: last, CreatedAt: now})
+		Enabled: b.Enabled, CreatedAt: now})
 	if errors.Is(err, store.ErrExists) {
 		writeErr(w, http.StatusConflict, "该频道已在监听")
 		return

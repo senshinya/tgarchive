@@ -189,6 +189,12 @@ func newWatchEnv(t *testing.T, cond string) *watchEnv {
 	return e
 }
 
+// oldPost adds a post published a day ago, outside any window a test uses.
+func (e *watchEnv) oldPost(id int) {
+	m := e.tg.reacted(id, 0, false, 10, nil)
+	m.Date = int(e.now.Add(-24 * time.Hour).Unix())
+}
+
 func (e *watchEnv) get(t *testing.T) *store.WatchView {
 	t.Helper()
 	w, err := e.st.GetWatch(ctx, e.watch)
@@ -218,7 +224,7 @@ func tgIDs(ms []store.MessageView) []int64 {
 
 func TestWatchStartsAfterLatestPost(t *testing.T) {
 	e := newWatchEnv(t, fire10)
-	e.tg.reacted(5, 0, false, 10, map[string]int{"🔥": 99})
+	e.tg.reacted(5, 0, false, 10, map[string]int{"🔥": 99}).Date = int(e.now.Add(-24 * time.Hour).Unix())
 	e.w.PollOnce(ctx)
 	if w := e.get(t); w.LastSeenID != 5 || w.Pending != 0 {
 		t.Fatalf("after init = %+v", w)
@@ -230,7 +236,7 @@ func TestWatchStartsAfterLatestPost(t *testing.T) {
 
 func TestWatchArchivesHitsWithinWindow(t *testing.T) {
 	e := newWatchEnv(t, fire10)
-	e.tg.reacted(5, 0, false, 10, nil)
+	e.oldPost(5)
 	e.w.PollOnce(ctx) // init at 5
 	e.tg.reacted(6, 0, false, 100, map[string]int{"🔥": 20, "👍": 3})
 	e.tg.reacted(7, 0, false, 100, map[string]int{"🔥": 1})
@@ -268,7 +274,7 @@ func TestWatchArchivesHitsWithinWindow(t *testing.T) {
 func TestWatchAlbumJudgedAndArchivedTogether(t *testing.T) {
 	e := newWatchEnv(t, `{"op":"and","items":[{"metric":"reaction","key":"🔥","cmp":"gte","value":10},
 		{"metric":"type","cmp":"is","value":"photo"}]}`)
-	e.tg.reacted(5, 0, false, 10, nil)
+	e.oldPost(5)
 	e.w.PollOnce(ctx)
 	e.tg.reacted(6, 9, true, 50, map[string]int{"🔥": 15})
 	e.tg.reacted(7, 9, true, 50, nil)
@@ -288,7 +294,7 @@ func TestWatchAlbumJudgedAndArchivedTogether(t *testing.T) {
 
 func TestWatchDropsExpiredAndDeletedPosts(t *testing.T) {
 	e := newWatchEnv(t, fire10)
-	e.tg.reacted(5, 0, false, 10, nil)
+	e.oldPost(5)
 	e.w.PollOnce(ctx)
 	e.tg.reacted(6, 0, false, 10, map[string]int{"🔥": 1}) // date = 1700000006
 	e.tg.reacted(7, 0, false, 10, map[string]int{"🔥": 1})
@@ -311,26 +317,47 @@ func TestWatchDropsExpiredAndDeletedPosts(t *testing.T) {
 	}
 }
 
-func TestWatchReenableDoesNotCatchUp(t *testing.T) {
+func TestWatchStartTakesInPostsWithinTheWindow(t *testing.T) {
 	e := newWatchEnv(t, fire10)
-	e.tg.reacted(5, 0, false, 10, nil)
+	e.tg.reacted(4, 0, false, 10, map[string]int{"🔥": 99}).Date = int(e.now.Add(-31 * time.Minute).Unix()) // outside 30 min
+	e.tg.reacted(5, 0, false, 10, map[string]int{"🔥": 20}).Date = int(e.now.Add(-20 * time.Minute).Unix()) // already meets it
+	e.tg.reacted(6, 0, false, 10, map[string]int{"🔥": 2}).Date = int(e.now.Add(-10 * time.Minute).Unix())  // not yet
+	e.w.PollOnce(ctx)
+	if got := e.archived(t); !equalIDs(tgIDs(got), []int64{5}) {
+		t.Fatalf("archived at start = %v", tgIDs(got))
+	}
+	if w := e.get(t); w.LastSeenID != 6 || w.Pending != 1 {
+		t.Fatalf("watch = %+v", w)
+	}
+	// Post 6 is watched until 20 minutes from now, like any new post.
+	e.tg.reacted(6, 0, false, 10, map[string]int{"🔥": 11}).Date = int(e.now.Add(-10 * time.Minute).Unix())
+	e.now = e.now.Add(15 * time.Minute)
+	e.w.PollOnce(ctx)
+	if got := e.archived(t); !equalIDs(tgIDs(got), []int64{5, 6}) {
+		t.Fatalf("archived = %v", tgIDs(got))
+	}
+}
+
+func TestWatchReenableTakesInOnlyTheWindow(t *testing.T) {
+	e := newWatchEnv(t, fire10)
+	e.oldPost(5)
 	e.w.PollOnce(ctx)
 	e.st.UpdateWatch(ctx, e.watch, 30, fire10, false, 2)
-	e.tg.reacted(6, 0, false, 10, map[string]int{"🔥": 99}) // posted while disabled
+	e.tg.reacted(6, 0, false, 10, map[string]int{"🔥": 99}).Date = int(e.now.Add(-2 * time.Hour).Unix()) // while disabled, long ago
+	e.tg.reacted(7, 0, false, 10, map[string]int{"🔥": 99}).Date = int(e.now.Add(-5 * time.Minute).Unix())
 	e.st.UpdateWatch(ctx, e.watch, 30, fire10, true, 3)
 	e.w.PollOnce(ctx)
-	e.w.PollOnce(ctx)
-	if got := e.archived(t); len(got) != 0 {
-		t.Fatalf("archived missed posts: %v", tgIDs(got))
+	if got := e.archived(t); !equalIDs(tgIDs(got), []int64{7}) {
+		t.Fatalf("archived = %v", tgIDs(got))
 	}
-	if w := e.get(t); w.LastSeenID != 6 {
+	if w := e.get(t); w.LastSeenID != 7 {
 		t.Fatalf("watch = %+v", w)
 	}
 }
 
 func TestWatchSkipsPostsFirstSeenAfterTheirWindow(t *testing.T) {
 	e := newWatchEnv(t, fire10)
-	e.tg.reacted(5, 0, false, 10, nil)
+	e.oldPost(5)
 	e.w.PollOnce(ctx)
 	e.tg.reacted(6, 0, false, 10, map[string]int{"🔥": 99}) // published while the account was offline
 	e.now = e.now.Add(3 * time.Hour)
@@ -346,7 +373,7 @@ func TestWatchSkipsPostsFirstSeenAfterTheirWindow(t *testing.T) {
 func TestWatchShortWindowStillJudgesPostsSeenLate(t *testing.T) {
 	e := newWatchEnv(t, fire10)
 	e.st.UpdateWatch(ctx, e.watch, 1, fire10, true, 2)
-	e.tg.reacted(5, 0, false, 10, nil)
+	e.oldPost(5)
 	e.w.PollOnce(ctx)
 	e.tg.reacted(6, 0, false, 10, map[string]int{"🔥": 15}) // date = now + 6s
 	e.now = e.now.Add(150 * time.Second)                   // seen 84s after its 1-minute window
@@ -399,7 +426,7 @@ func TestPickerPhotoDoesNotStoreChannel(t *testing.T) {
 
 func TestWatchPagesThroughManyNewPosts(t *testing.T) {
 	e := newWatchEnv(t, fire10)
-	e.tg.reacted(5, 0, false, 10, nil)
+	e.oldPost(5)
 	e.w.PollOnce(ctx)
 	for id := 6; id < 6+250; id++ {
 		e.tg.reacted(id, 0, false, 1, nil)
