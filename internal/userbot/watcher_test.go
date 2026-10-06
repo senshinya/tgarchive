@@ -134,6 +134,8 @@ func (w *watchTG) reacted(id int, group int64, photo bool, views int, reactions 
 		}
 		res = append(res, tg.ReactionCount{Reaction: r, Count: n})
 	}
+	// Telegram lists reactions by count (map iteration order is random).
+	sort.Slice(res, func(i, j int) bool { return res[i].Count > res[j].Count })
 	if len(res) > 0 {
 		m.SetReactions(tg.MessageReactions{Results: res})
 	}
