@@ -286,6 +286,12 @@ func (f *Fetcher) fetchMessages(ctx context.Context, api *tg.Client, ch *tg.Chan
 // userbot_peers cache (as opposed to a fresh username resolve or dialogs scan): only a cached hit
 // might be stale, so only it is worth invalidating and retrying on CHANNEL_INVALID/CHANNEL_PRIVATE.
 func (f *Fetcher) resolve(ctx context.Context, api *tg.Client, link linkparse.Link) (ch *tg.Channel, cached bool, err error) {
+	return resolveChannel(ctx, api, f.st, f.Now, link)
+}
+
+// resolveChannel finds the channel a link refers to: by username, else from the userbot_peers
+// cache, else by scanning the account's dialogs (caching every channel seen).
+func resolveChannel(ctx context.Context, api *tg.Client, st *store.Store, now func() time.Time, link linkparse.Link) (ch *tg.Channel, cached bool, err error) {
 	if link.Username != "" {
 		r, err := api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: link.Username})
 		if err != nil {
@@ -300,13 +306,13 @@ func (f *Fetcher) resolve(ctx context.Context, api *tg.Client, link linkparse.Li
 		}
 		for _, c := range r.Chats {
 			if ch, ok := c.(*tg.Channel); ok && ch.ID == pc.ChannelID {
-				f.savePeers(ctx, ch)
+				savePeers(ctx, st, now, ch)
 				return ch, false, nil
 			}
 		}
 		return nil, false, errNotChannel
 	}
-	p, err := f.st.GetPeer(ctx, link.ChannelID)
+	p, err := st.GetPeer(ctx, link.ChannelID)
 	if err == nil {
 		return &tg.Channel{ID: p.ChannelID, AccessHash: p.AccessHash, Title: p.Title, Username: p.Username}, true, nil
 	}
@@ -332,7 +338,7 @@ func (f *Fetcher) resolve(ctx context.Context, api *tg.Client, link linkparse.Li
 	for _, c := range seen {
 		all = append(all, c)
 	}
-	f.savePeers(ctx, all...)
+	savePeers(ctx, st, now, all...)
 	if c := seen[link.ChannelID]; c != nil {
 		return c, false, nil
 	}
@@ -365,6 +371,11 @@ func stalePeerErr(err error) bool {
 }
 
 func (f *Fetcher) savePeers(ctx context.Context, chs ...*tg.Channel) {
+	savePeers(ctx, f.st, f.Now, chs...)
+}
+
+// savePeers caches the access hashes of channels (min constructors carry none worth keeping).
+func savePeers(ctx context.Context, st *store.Store, now func() time.Time, chs ...*tg.Channel) {
 	peers := make([]store.Peer, 0, len(chs))
 	for _, c := range chs {
 		if !c.Min {
@@ -374,7 +385,7 @@ func (f *Fetcher) savePeers(ctx context.Context, chs ...*tg.Channel) {
 	if len(peers) == 0 {
 		return
 	}
-	if err := f.st.PutPeers(ctx, peers, f.Now().Unix()); err != nil {
+	if err := st.PutPeers(ctx, peers, now().Unix()); err != nil {
 		log.Printf("userbot: cache peers: %v", err)
 	}
 }

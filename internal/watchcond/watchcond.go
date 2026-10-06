@@ -302,8 +302,11 @@ func (st Stats) count(metric, key string) (int, string) {
 	case "replies":
 		return st.Replies, metricNames[metric]
 	}
-	return st.Reactions[key], KeyLabel(key)
+	return st.Reactions[NormKey(key)], KeyLabel(key)
 }
+
+// NormKey drops emoji variation selectors, so "❤️" typed by a user matches Telegram's "❤".
+func NormKey(k string) string { return strings.ReplaceAll(k, "\uFE0F", "") }
 
 // KeyLabel is how a reaction key reads in explanations.
 func KeyLabel(key string) string {
