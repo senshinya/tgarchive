@@ -1,11 +1,13 @@
 import { act, fireEvent, screen } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { route } from '../../lib/router';
+import { SILENT_KEY, setSilent, silent } from '../../lib/silent';
 import { fakeApi, makeBot, makeChat } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
 import { ChatsPanel } from './ChatsPanel';
 
 afterEach(() => {
+  setSilent(false);
   route.value = { name: 'home' };
   history.replaceState(null, '', '/');
 });
@@ -27,6 +29,21 @@ async function setup(bots = [makeBot({ id: 1, name: 'Alpha' }), makeBot({ id: 2,
 }
 
 describe('ChatsPanel', () => {
+  it('switches 静音模式 from the header and remembers it on this device', async () => {
+    const r = await setup();
+    const btn = screen.getByRole('button', { name: '开启静音模式' });
+    expect(btn.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(btn);
+    expect(silent.value).toBe(true);
+    expect(localStorage.getItem(SILENT_KEY)).toBe('1');
+    const on = screen.getByRole('button', { name: '关闭静音模式' });
+    expect(on.getAttribute('aria-pressed')).toBe('true');
+    expect(r.store.toast.value?.text).toBe('已开启静音模式：所有视频与语音静音播放');
+    fireEvent.click(on);
+    expect(silent.value).toBe(false);
+    expect(localStorage.getItem(SILENT_KEY)).toBeNull();
+  });
+
   it('lists chats with previews and bot prefixes in the 全部 view', async () => {
     const { container } = await setup();
     const items = container.querySelectorAll('.ChatItem');

@@ -5,6 +5,7 @@ import 'photoswipe/style.css';
 import { createPortal } from 'preact/compat';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { mediaUrl } from '../../api/client';
+import { silent } from '../../lib/silent';
 import { playUrl } from '../media/util';
 import type { ViewerItem } from '../../state/store';
 import { createVideoSlide, onPlayerControl, type VideoSlide } from './videoSlide';
@@ -111,6 +112,7 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
         mime: src === mediaUrl(it.mediaId) ? (it.mime ?? '') : 'video/mp4',
         poster: it.thumbId ? mediaUrl(it.thumbId) : undefined,
         title: titleOf(it),
+        silent: silent.value,
       });
       content.element = v.el;
       videos.set(content.index, v);

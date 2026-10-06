@@ -1,10 +1,11 @@
-import { CircleAlert, Megaphone, Radio, Settings } from 'lucide-preact';
+import { CircleAlert, Megaphone, Radio, Settings, Volume2, VolumeX } from 'lucide-preact';
 import { avatarUrl } from '../../api/client';
 import type { Chat } from '../../api/types';
 import { botName, formatListTime, previewText, senderName } from '../../lib/format';
 import { navigate, route, routeConvKey } from '../../lib/router';
 import { CHANNELS_FILTER, useStore, type BotEntry, type ListMode } from '../../state/store';
 import { Avatar } from '../../ui/Avatar';
+import { setSilent, silent } from '../../lib/silent';
 import { IconButton } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 import { Tabs } from '../../ui/Tabs';
@@ -193,6 +194,7 @@ export function ChatsPanel() {
         <IconButton label="监听频道" class="watch-button" onClick={() => navigate({ name: 'settings-watch-new' })}>
           <Radio size={22} />
         </IconButton>
+        <SilentButton />
         <ListModeSwitch />
       </div>
       {!byBot && <BotTabs />}
@@ -228,5 +230,24 @@ export function ChatsPanel() {
         <Settings size={24} />
       </button>
     </div>
+  );
+}
+
+/** 静音模式 switch: while on, the WebUI plays nothing with sound (see lib/silent). */
+function SilentButton() {
+  const store = useStore();
+  const on = silent.value;
+  return (
+    <IconButton
+      label={on ? '关闭静音模式' : '开启静音模式'}
+      class={`silent-button${on ? ' active' : ''}`}
+      pressed={on}
+      onClick={() => {
+        setSilent(!on);
+        store.showToast(on ? '已关闭静音模式' : '已开启静音模式：所有视频与语音静音播放');
+      }}
+    >
+      {on ? <VolumeX size={22} /> : <Volume2 size={22} />}
+    </IconButton>
   );
 }

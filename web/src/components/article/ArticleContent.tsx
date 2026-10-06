@@ -1,6 +1,7 @@
 import { ExternalLink } from 'lucide-preact';
 import { Fragment, h, type ComponentChild } from 'preact';
 import { mediaUrl } from '../../api/client';
+import { silent } from '../../lib/silent';
 import type { ArticleElement, ArticleMedia, ArticleNode } from '../../api/types';
 import { safeHref } from '../../lib/entities';
 import { formatProgress } from '../../lib/format';
@@ -78,7 +79,7 @@ function ArticleMediaBlock({ node, ctx }: { node: ArticleElement; ctx: ArticleCo
   const m = ctx.media.get(id);
   if (m && m.state === 'done') {
     if (m.kind === 'video') {
-      return <video class="ArticleMedia" src={mediaUrl(id)} controls playsInline preload="metadata" />;
+      return <video class="ArticleMedia" src={mediaUrl(id)} controls playsInline preload="metadata" muted={silent.value} />;
     }
     return (
       <button type="button" class="ArticleMedia ArticleMedia-photo" aria-label="查看图片" onClick={() => ctx.onOpenMedia(id)}>

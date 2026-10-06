@@ -3,6 +3,7 @@ import { useMemo, useRef, useState } from 'preact/hooks';
 import { mediaUrl } from '../../api/client';
 import type { Message } from '../../api/types';
 import { formatDuration } from '../../lib/format';
+import { silent } from '../../lib/silent';
 import { SPIKE_HEIGHT, SPIKE_STEP, SPIKE_WIDTH, barCount, decodeWaveform, resample, spikeHeights } from '../../lib/waveform';
 import { Document } from './Document';
 import { mainMedia } from './util';
@@ -70,6 +71,7 @@ export function Voice({ msg }: { msg: Message }) {
       <audio
         ref={ref}
         src={mediaUrl(main.id)}
+        muted={silent.value}
         preload="none"
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}

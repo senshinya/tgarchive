@@ -25,12 +25,22 @@ interface IconButtonProps {
   onClick?: (e: MouseEvent) => void;
   class?: string;
   disabled?: boolean;
+  /** For a toggle: whether it is on (aria-pressed). */
+  pressed?: boolean;
 }
 
 /** Round 40px translucent icon button used in headers. */
-export function IconButton({ label, children, onClick, class: cls = '', disabled }: IconButtonProps) {
+export function IconButton({ label, children, onClick, class: cls = '', disabled, pressed }: IconButtonProps) {
   return (
-    <button type="button" class={`IconButton ${cls}`} aria-label={label} title={label} onClick={onClick} disabled={disabled}>
+    <button
+      type="button"
+      class={`IconButton ${cls}`}
+      aria-label={label}
+      aria-pressed={pressed}
+      title={label}
+      onClick={onClick}
+      disabled={disabled}
+    >
       {children}
     </button>
   );

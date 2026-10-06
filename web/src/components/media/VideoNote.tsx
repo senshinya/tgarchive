@@ -2,6 +2,7 @@ import { useRef, useState } from 'preact/hooks';
 import { mediaUrl } from '../../api/client';
 import type { Message } from '../../api/types';
 import { formatDuration } from '../../lib/format';
+import { silent } from '../../lib/silent';
 import { MediaStatus } from './MediaStatus';
 import { mainMedia, playUrl, readyThumb } from './util';
 import './media.scss';
@@ -10,7 +11,8 @@ const SIZE = 240;
 const RADIUS = SIZE / 2 - 4;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
-/** Round video message: loops muted; click plays from the start with sound and shows a progress ring. */
+/** Round video message: loops muted; click plays from the start with sound (unless 静音模式) and
+ * shows a progress ring. */
 export function VideoNote({ msg }: { msg: Message }) {
   const main = mainMedia(msg);
   const ref = useRef<HTMLVideoElement>(null);
@@ -29,7 +31,7 @@ export function VideoNote({ msg }: { msg: Message }) {
       return;
     }
     v.currentTime = 0;
-    v.muted = false;
+    v.muted = silent.value;
     v.loop = false;
     setWithSound(true);
     void v.play();
