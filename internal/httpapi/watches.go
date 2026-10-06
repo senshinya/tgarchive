@@ -25,6 +25,8 @@ type WatchService interface {
 	Test(ctx context.Context, id int64, cond *watchcond.Node) (*userbot.TestResult, error)
 	InitialLastSeen(ctx context.Context, id int64) (int64, error)
 	ChannelPhoto(ctx context.Context, id int64) (string, error)
+	Backfill(ctx context.Context, watchID int64, hours int) (*userbot.BackfillState, error)
+	BackfillState(watchID int64) *userbot.BackfillState
 	Wake()
 }
 
@@ -47,6 +49,7 @@ func (s *Server) watchRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/watches/{id}", s.getWatch)
 	mux.HandleFunc("PUT /api/admin/watches/{id}", s.updateWatch)
 	mux.HandleFunc("DELETE /api/admin/watches/{id}", s.deleteWatch)
+	mux.HandleFunc("POST /api/admin/watches/{id}/backfill", s.backfillWatch)
 	mux.HandleFunc("GET /api/admin/watch-settings", s.getWatchSettings)
 	mux.HandleFunc("PUT /api/admin/watch-settings", s.putWatchSettings)
 }
@@ -212,6 +215,14 @@ type watchJSON struct {
 	Pending       int64             `json:"pending"`
 	Hits          int64             `json:"hits"`
 	CreatedAt     int64             `json:"created_at"`
+	// Backfill is the latest manual backfill; null when none ran since the server started.
+	Backfill *userbot.BackfillState `json:"backfill"`
+}
+
+func (s *Server) watchJSON(v *store.WatchView) watchJSON {
+	j := toWatchJSON(v)
+	j.Backfill = s.Watcher.BackfillState(v.ID)
+	return j
 }
 
 func toWatchJSON(v *store.WatchView) watchJSON {
@@ -234,7 +245,7 @@ func (s *Server) listWatches(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]watchJSON, 0, len(list))
 	for i := range list {
-		out = append(out, toWatchJSON(&list[i]))
+		out = append(out, s.watchJSON(&list[i]))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -250,7 +261,36 @@ func (s *Server) getWatch(w http.ResponseWriter, r *http.Request) {
 		storeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toWatchJSON(v))
+	writeJSON(w, http.StatusOK, s.watchJSON(v))
+}
+
+func (s *Server) backfillWatch(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r, "id")
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad watch id")
+		return
+	}
+	var req struct {
+		Hours int `json:"hours"`
+	}
+	if !decodeSmall(w, r, &req) {
+		return
+	}
+	if req.Hours < 1 || req.Hours > userbot.MaxBackfillHours {
+		writeErr(w, http.StatusBadRequest, "回溯时长须为 1–720 小时")
+		return
+	}
+	st, err := s.Watcher.Backfill(r.Context(), id, req.Hours)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "not found")
+	case errors.Is(err, userbot.ErrNotReady):
+		writeErr(w, http.StatusConflict, err.Error())
+	case err != nil:
+		writeErr(w, http.StatusConflict, err.Error())
+	default:
+		writeJSON(w, http.StatusAccepted, st)
+	}
 }
 
 type watchBody struct {
@@ -324,7 +364,7 @@ func (s *Server) createWatch(w http.ResponseWriter, r *http.Request) {
 		storeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, toWatchJSON(v))
+	writeJSON(w, http.StatusCreated, s.watchJSON(v))
 }
 
 func (s *Server) updateWatch(w http.ResponseWriter, r *http.Request) {
@@ -348,7 +388,7 @@ func (s *Server) updateWatch(w http.ResponseWriter, r *http.Request) {
 		storeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toWatchJSON(v))
+	writeJSON(w, http.StatusOK, s.watchJSON(v))
 }
 
 func (s *Server) deleteWatch(w http.ResponseWriter, r *http.Request) {

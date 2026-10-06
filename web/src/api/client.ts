@@ -2,6 +2,7 @@ import type {
   AddBotResult,
   Article,
   Bot,
+  BackfillState,
   ChannelInfo,
   ChannelList,
   Chat,
@@ -112,6 +113,8 @@ export interface Api {
   createWatch(input: WatchInput): Promise<Watch>;
   updateWatch(id: number, input: WatchInput): Promise<Watch>;
   deleteWatch(id: number, purge: boolean): Promise<void>;
+  /** Judges the channel's posts of the last `hours` by their current counts, in the background. */
+  backfillWatch(id: number, hours: number): Promise<BackfillState>;
   watchSettings(): Promise<{ poll_seconds: number }>;
   saveWatchSettings(pollSeconds: number): Promise<{ poll_seconds: number }>;
 }
@@ -156,6 +159,7 @@ export const api: Api = {
   createWatch: (input) => request('POST', '/api/admin/watches', input),
   updateWatch: (id, input) => request('PUT', `/api/admin/watches/${id}`, input),
   deleteWatch: (id, purge) => request('DELETE', `/api/admin/watches/${id}${purge ? '?purge=1' : ''}`),
+  backfillWatch: (id, hours) => request('POST', `/api/admin/watches/${id}/backfill`, { hours }),
   watchSettings: () => request('GET', '/api/admin/watch-settings'),
   saveWatchSettings: (pollSeconds) => request('PUT', '/api/admin/watch-settings', { poll_seconds: pollSeconds }),
 };

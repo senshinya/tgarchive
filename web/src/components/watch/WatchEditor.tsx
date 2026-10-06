@@ -1,7 +1,8 @@
 import { Trash2 } from 'lucide-preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { avatarUrl, errorMessage } from '../../api/client';
-import type { ChannelInfo, ChannelRef, CondGroup, TestPost, Watch } from '../../api/types';
+import type { BackfillState, ChannelInfo, ChannelRef, CondGroup, TestPost, Watch } from '../../api/types';
+import { formatFullDate } from '../../lib/format';
 import { navigate } from '../../lib/router';
 import { MAX_WINDOW, MIN_WINDOW, defaultCond, validateCond } from '../../lib/watchCond';
 import { useStore } from '../../state/store';
@@ -202,6 +203,7 @@ function WatchForm({ channel, watch, onChangeChannel }: { channel: ChannelRef; w
       <Section title="最近帖子试算">
         <TestPreview posts={posts} loading={testing} error={testError} judged={!condError} />
       </Section>
+      {watch && <BackfillSection watch={watch} />}
       <Section>
         <div class="WatchActions">
           <Button loading={busy} onClick={() => void save()}>
@@ -227,5 +229,61 @@ function WatchForm({ channel, watch, onChangeChannel }: { channel: ChannelRef; w
         </Modal>
       )}
     </>
+  );
+}
+
+function backfillText(b: BackfillState): string {
+  if (b.running) return `回溯最近 ${b.hours} 小时中… 已扫描 ${b.scanned} 条，新存档 ${b.archived} 条`;
+  const done = `${formatFullDate(b.finished_at)} 回溯最近 ${b.hours} 小时：扫描 ${b.scanned} 条，新存档 ${b.archived} 条`;
+  return b.error ? `${done}，中途出错：${b.error}` : done;
+}
+
+/** Manually judges the channel's last few hours of posts (by their current counts). */
+function BackfillSection({ watch }: { watch: Watch }) {
+  const store = useStore();
+  const [hours, setHours] = useState('24');
+  const [error, setError] = useState('');
+  const [state, setState] = useState<BackfillState | null>(watch.backfill);
+  const [busy, setBusy] = useState(false);
+
+  // Progress arrives as watch.updated events; re-read the watch for its backfill state.
+  useEffect(
+    () =>
+      store.onEvent((ev) => {
+        if ((ev.type === 'watch.updated' && ev.data.watch_id === watch.id) || ev.type === 'resync') {
+          store.api.watch(watch.id).then((w) => setState(w.backfill), () => {});
+        }
+      }),
+    [watch.id],
+  );
+
+  const start = async () => {
+    const n = Number(hours);
+    if (!Number.isInteger(n) || n < 1 || n > 720) {
+      setError('回溯时长须为 1–720 小时');
+      return;
+    }
+    setError('');
+    setBusy(true);
+    try {
+      setState(await store.api.backfillWatch(watch.id, n));
+    } catch (e) {
+      store.showToast(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title="手动回溯">
+      <Description>按帖子当前的计数，判定频道最近若干小时内的全部帖子，满足条件的立即存档；已存档的不会重复。最多 720 小时、5000 条。</Description>
+      <div class="BackfillRow">
+        <InputField label="回溯最近（小时）" inputMode="numeric" value={hours} onInput={setHours} error={error} />
+        <Button loading={busy} disabled={state?.running} onClick={() => void start()}>
+          开始回溯
+        </Button>
+      </div>
+      {state && <p class={`settings-description${state.error ? ' error' : ''}`}>{backfillText(state)}</p>}
+    </Section>
   );
 }

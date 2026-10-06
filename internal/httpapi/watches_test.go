@@ -29,6 +29,7 @@ type fakeWatcher struct {
 	tested    *watchcond.Node
 	photos    int
 	avatarDir string
+	backfill  *userbot.BackfillState
 }
 
 var newsInfo = userbot.ChannelInfo{ChannelID: 500, Title: "News", Username: "news", Participants: 10}
@@ -87,6 +88,25 @@ func (f *fakeWatcher) ChannelPhoto(_ context.Context, id int64) (string, error) 
 	}
 	os.MkdirAll(filepath.Join(f.avatarDir, "channels"), 0o755)
 	return rel, os.WriteFile(filepath.Join(f.avatarDir, rel), []byte("jpg"), 0o644)
+}
+
+func (f *fakeWatcher) Backfill(_ context.Context, id int64, hours int) (*userbot.BackfillState, error) {
+	if !f.ready {
+		return nil, userbot.ErrNotReady
+	}
+	if id != 1 {
+		return nil, store.ErrNotFound
+	}
+	f.mu.Lock()
+	f.backfill = &userbot.BackfillState{Running: true, Hours: hours}
+	f.mu.Unlock()
+	return f.backfill, nil
+}
+
+func (f *fakeWatcher) BackfillState(int64) *userbot.BackfillState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.backfill
 }
 
 func (f *fakeWatcher) Wake() {
@@ -232,6 +252,32 @@ func TestChannelPickerEndpoints(t *testing.T) {
 	}
 	if w := call(e.h, "POST", "/api/admin/watches/test", map[string]any{"channel_id": 500, "cond": json.RawMessage(`{"op":"x"}`)}); w.Code != 400 {
 		t.Fatalf("test bad = %d", w.Code)
+	}
+}
+
+func TestWatchBackfillEndpoint(t *testing.T) {
+	e := newWatchEnv(t)
+	call(e.h, "POST", "/api/admin/watches", watchReq(500, 30, condOK))
+	for _, h := range []int{0, 721} {
+		if w := call(e.h, "POST", "/api/admin/watches/1/backfill", map[string]int{"hours": h}); w.Code != 400 {
+			t.Fatalf("hours %d = %d", h, w.Code)
+		}
+	}
+	if w := call(e.h, "POST", "/api/admin/watches/9/backfill", map[string]int{"hours": 2}); w.Code != 404 {
+		t.Fatalf("unknown = %d", w.Code)
+	}
+	if w := call(e.h, "GET", "/api/admin/watches/1", nil); !strings.Contains(w.Body.String(), `"backfill":null`) {
+		t.Fatalf("before = %s", w.Body)
+	}
+	if w := call(e.h, "POST", "/api/admin/watches/1/backfill", map[string]int{"hours": 24}); w.Code != 202 || !strings.Contains(w.Body.String(), `"running":true`) {
+		t.Fatalf("start = %d %s", w.Code, w.Body)
+	}
+	if w := call(e.h, "GET", "/api/admin/watches/1", nil); !strings.Contains(w.Body.String(), `"hours":24`) {
+		t.Fatalf("after = %s", w.Body)
+	}
+	e.fw.ready = false
+	if w := call(e.h, "POST", "/api/admin/watches/1/backfill", map[string]int{"hours": 2}); w.Code != 409 {
+		t.Fatalf("offline = %d", w.Code)
 	}
 }
 
