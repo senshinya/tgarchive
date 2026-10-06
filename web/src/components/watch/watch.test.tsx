@@ -4,7 +4,7 @@ import { ApiError } from '../../api/client';
 import type { CondGroup, Watch } from '../../api/types';
 import { route } from '../../lib/router';
 import { formatCount, validateCond } from '../../lib/watchCond';
-import { fakeApi, makeChannelChat, makeChannelInfo, makeMessage, makeWatch } from '../../test/fixtures';
+import { fakeApi, makeChannelChat, makeChannelInfo, makeMedia, makeMessage, makeWatch } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
 import { DownloadsPanel } from '../downloads/DownloadsPanel';
 import { ChatsPanel } from '../left/ChatsPanel';
@@ -174,6 +174,7 @@ describe('channel conversations in the UI', () => {
       chat_id: 50,
       source: 'channel_watch',
       text: 'Hello',
+      origin_link: 'https://t.me/news/9',
       extra: { post_author: 'Editor' },
       stats: {
         reactions: [
@@ -191,8 +192,14 @@ describe('channel conversations in the UI', () => {
     const { container } = renderWithStore(
       <MessageBubble bubble={{ kind: 'message', key: '1', msg, first: true, last: true }} sender={{ name: 'News', peerId: 500 }} convKey={50} onMenu={() => {}} />,
     );
-    expect(container.querySelectorAll('.PostReaction')).toHaveLength(3);
-    expect(container.textContent).toContain('1.2K');
+    const pills = container.querySelectorAll('.PostReaction:not(.PostHit)');
+    expect(pills).toHaveLength(3);
+    // Paid stars lead, as in Telegram; the meta shares the reactions' row.
+    expect(pills[0].classList.contains('paid')).toBe(true);
+    expect(pills[0].textContent).toContain('1.2K');
+    expect(container.querySelector('.PostReactions .MessageMeta.reactions')).toBeTruthy();
+    expect(container.querySelector('.text-content .MessageMeta')).toBeNull();
+    expect(container.querySelector('a.message-action-button')!.getAttribute('href')).toBe('https://t.me/news/9');
     expect(container.querySelector('.PostReaction img')!.getAttribute('src')).toBe('/media/77');
     expect(container.querySelector('.message-views')!.textContent).toBe('8.1K');
     expect(container.querySelector('.message-signature')!.textContent).toBe('Editor');
@@ -200,6 +207,24 @@ describe('channel conversations in the UI', () => {
     fireEvent.click(screen.getByTitle('为何存档'));
     expect(container.textContent).toContain('🔥 23 ≥ 10');
     expect(container.querySelector('.OriginHeader, .origin-title')).toBeNull();
+  });
+
+  it('hangs the reactions of a media-only post below the bubble', () => {
+    const msg = makeMessage({
+      chat_id: 50,
+      source: 'channel_watch',
+      kind: 'photo',
+      text: '',
+      origin_link: 'https://t.me/news/9',
+      media: [makeMedia()],
+      stats: { reactions: [{ key: '🔥', emoji: '🔥', count: 3 }], total: 3, views: 10, forwards: 0, replies: 0 },
+    });
+    const { container } = renderWithStore(
+      <MessageBubble bubble={{ kind: 'message', key: '1', msg, first: true, last: true }} sender={{ name: 'News', peerId: 500 }} convKey={50} onMenu={() => {}} />,
+    );
+    expect(container.querySelector('.Message.with-outside-reactions > .PostReactions.outside')).toBeTruthy();
+    expect(container.querySelector('.message-content .PostReactions')).toBeNull();
+    expect(container.querySelector('.MessageMeta.overlay')).toBeTruthy();
   });
 });
 

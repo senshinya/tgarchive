@@ -8,7 +8,9 @@ import { ArticleCard } from '../article/ArticleCard';
 import { Album } from '../media/Album';
 import { MessageMedia } from '../media/MessageMedia';
 import { VISUAL_KINDS, extraString, mainMedia } from '../media/util';
-import { PostFooter } from '../watch/PostFooter';
+import { PostReactions } from '../watch/PostFooter';
+import { ArrowUpRight } from 'lucide-preact';
+import { safeHref } from '../../lib/entities';
 import { Appendix, ForwardHeader, MessageMeta, OriginHeader, ReplyQuote } from './MessageParts';
 import { RichText } from './RichText';
 import './message.scss';
@@ -57,8 +59,12 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
   const hasReply = head.reply_to_tg_message_id > 0;
   // A watched channel post: its counters as archived, shown Telegram-channel style.
   const post = head.source === 'channel_watch' ? (last.stats ?? head.stats) : undefined;
-  const hasFooter = Boolean(post) && !noBubble;
-  const mediaOnly = visual && !caption && !hasHeader && !hasReply && !hasFooter;
+  // Web A: reactions sit inside the bubble, sharing their row with the meta, unless the post is
+  // only media (or has no bubble), where they hang below it.
+  const reactionsOutside = Boolean(post) && ((visual && !caption) || noBubble);
+  const reactionsInside = Boolean(post) && !reactionsOutside;
+  const mediaOnly = visual && !caption && !hasHeader && !hasReply;
+  const originHref = post ? safeHref(head.origin_link) : null;
   const unsupported = !album && head.kind === 'other';
   const solid = !noBubble && !mediaOnly;
   const editDate = Math.max(...msgs.map((m) => m.edit_date));
@@ -75,7 +81,13 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
     return msgs.find((m) => m.id === id) ?? head;
   };
 
-  const classes = ['Message', bubble.first && 'first-in-group', bubble.last && 'last-in-group', noBubble && 'no-bubble']
+  const classes = [
+    'Message',
+    bubble.first && 'first-in-group',
+    bubble.last && 'last-in-group',
+    noBubble && 'no-bubble',
+    reactionsOutside && 'with-outside-reactions',
+  ]
     .filter(Boolean)
     .join(' ');
   const contentClasses = [
@@ -91,8 +103,9 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
 
   const metaProps = { date: last.date, editDate, views: post?.views, author: post ? extraString(head, 'post_author') : undefined };
   let meta;
-  if (caption || unsupported) meta = null;
-  else if ((visual || noBubble) && !hasFooter) meta = <MessageMeta {...metaProps} variant="overlay" />;
+  if (reactionsInside) meta = null;
+  else if (caption || unsupported) meta = null;
+  else if (visual || noBubble) meta = <MessageMeta {...metaProps} variant="overlay" />;
   else meta = <MessageMeta {...metaProps} variant="standalone" />;
 
   return (
@@ -133,13 +146,19 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
           <div class="text-content" dir="auto">
             {caption ? <RichText text={caption.text} entities={caption.entities} /> : <span class="unsupported">不支持的消息类型</span>}
             {!album && head.article && <ArticleCard msg={head} />}
-            <MessageMeta {...metaProps} variant="inline" />
+            {!reactionsInside && <MessageMeta {...metaProps} variant="inline" />}
           </div>
         )}
-        {post && hasFooter && <PostFooter stats={post} />}
+        {post && reactionsInside && <PostReactions stats={post} meta={<MessageMeta {...metaProps} variant="reactions" />} />}
         {meta}
         {solid && bubble.last && <Appendix />}
+        {originHref && (
+          <a class="message-action-button" href={originHref} target="_blank" rel="noopener noreferrer" title="打开原帖" aria-label="打开原帖">
+            <ArrowUpRight size={20} />
+          </a>
+        )}
       </div>
+      {post && reactionsOutside && <PostReactions stats={post} outside />}
     </div>
   );
 }

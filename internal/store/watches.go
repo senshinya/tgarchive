@@ -165,6 +165,10 @@ func (s *Store) UpdateWatch(ctx context.Context, id int64, window int, cond stri
 			WHERE id = ?`, window, cond, enabled, now, enabled, enabled, id); err != nil {
 			return err
 		}
+		// Posts under observation follow the new window.
+		if _, err := tx.ExecContext(ctx, "UPDATE watch_pending SET deadline = date + ? WHERE watch_id = ?", window*60, id); err != nil {
+			return err
+		}
 		if enabled && !was {
 			if _, err := tx.ExecContext(ctx, "UPDATE channel_watches SET last_seen_id = 0 WHERE id = ?", id); err != nil {
 				return err

@@ -388,3 +388,35 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+// Watched channel posts whose reactions hang below the bubble (media only).
+.Message.with-outside-reactions {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+// Round button beside a channel post that opens the original on t.me (Web A's action button).
+.message-action-button {
+  position: absolute;
+  right: -2.75rem;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--action-message-bg);
+  opacity: 0;
+  transition: opacity 150ms;
+
+  .Message:hover &,
+  &:focus-visible {
+    opacity: 1;
+  }
+
+  @media (pointer: coarse) {
+    opacity: 1;
+  }
+}

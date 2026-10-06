@@ -32,6 +32,7 @@
   --color-toast-background: #202020cc;
   --color-interactive-element-hover: rgba(112, 117, 121, 0.08);
   --action-message-bg: #4a8e3a8c;
+  --color-message-reaction: #ebf3fd;
 }
 
 @mixin dark-theme {
@@ -62,6 +63,8 @@
   --color-toast-background: #000000cc;
   --color-interactive-element-hover: rgba(170, 170, 170, 0.08);
   --action-message-bg: #48576166;
+  --color-message-reaction: rgba(255, 255, 255, 0.1);
+  --color-message-reaction-text: var(--color-text);
 }
 
 :root {
