@@ -360,6 +360,35 @@ describe('WatchEditor', () => {
   });
 });
 
+describe('manual backfill', () => {
+  it('starts a backfill and follows its progress', async () => {
+    let state = { running: true, hours: 48, scanned: 120, archived: 3, error: '', started_at: 1, finished_at: 0 };
+    const api = fakeApi({
+      testWatch: vi.fn(async () => testResult),
+      watch: vi.fn(async () => makeWatch({ backfill: state })),
+    });
+    const { store } = renderWithStore(<WatchEditor watchId={3} />, api);
+    const field = await screen.findByLabelText('回溯最近（小时）');
+    fireEvent.input(field, { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: '开始回溯' }));
+    expect(screen.getByText('回溯时长须为 1–720 小时')).toBeTruthy();
+    fireEvent.input(screen.getByLabelText('回溯时长须为 1–720 小时'), { target: { value: '48' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '开始回溯' }));
+    });
+    expect(api.backfillWatch).toHaveBeenCalledWith(3, 48);
+    await act(async () => {
+      await store.handleEvent({ type: 'watch.updated', data: { watch_id: 3 } });
+    });
+    expect(await screen.findByText('回溯最近 48 小时中… 已扫描 120 条，新存档 3 条')).toBeTruthy();
+    state = { ...state, running: false, scanned: 300, archived: 5, finished_at: 1_790_000_000 };
+    await act(async () => {
+      await store.handleEvent({ type: 'watch.updated', data: { watch_id: 3 } });
+    });
+    expect(await screen.findByText(/回溯最近 48 小时：扫描 300 条，新存档 5 条/)).toBeTruthy();
+  });
+});
+
 describe('WatchList and settings entry', () => {
   it('lists watches with status, toggles one and saves the poll interval', async () => {
     const list: Watch[] = [makeWatch(), makeWatch({ id: 4, channel: { channel_id: 501, title: 'Broken', username: '', has_avatar: false }, status: 'error', error: '无法访问' })];

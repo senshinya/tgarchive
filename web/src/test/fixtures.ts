@@ -61,6 +61,7 @@ export function makeWatch(over: Partial<Watch> = {}): Watch {
     pending: 2,
     hits: 5,
     created_at: 1_790_000_000,
+    backfill: null,
     ...over,
   };
 }
@@ -158,6 +159,7 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     createWatch: vi.fn(async () => makeWatch()),
     updateWatch: vi.fn(async (id: number) => makeWatch({ id })),
     deleteWatch: vi.fn(async () => undefined),
+    backfillWatch: vi.fn(async (_id: number, hours: number) => ({ running: true, hours, scanned: 0, archived: 0, error: '', started_at: 1, finished_at: 0 })),
     watchSettings: vi.fn(async () => ({ poll_seconds: 60 })),
     saveWatchSettings: vi.fn(async (poll_seconds: number) => ({ poll_seconds })),
   };

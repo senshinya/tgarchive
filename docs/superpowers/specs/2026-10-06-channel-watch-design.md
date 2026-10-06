@@ -41,6 +41,10 @@
   - 连接类错误（未就绪、连接断开）：静默跳过本轮
 - 状态或观察数变化时发 SSE `watch.updated {watch_id}`
 
+### 手动回溯（`internal/userbot/backfill.go`）
+- 监听设置里输入小时数（1–720）触发 `POST /api/admin/watches/{id}/backfill {hours}`（202）；后台逐页 `getHistory` 取最近 N 小时的帖子（最多 5000 条，FLOOD_WAIT ≤5 分钟等完续取），按相册分组、以当前计数判定一次，满足的立即存档（已存档的只刷新快照、不计数）
+- 同一监听同时只允许一个回溯（409）；进度（已扫描、新存档、出错原因）存内存，经 `watch.updated` 推送，`GET /api/admin/watches/{id}` 的 `backfill` 字段返回最近一次
+
 ### 统计（`internal/watchcond`，纯函数）
 ```go
 type Stats struct {

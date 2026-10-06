@@ -202,6 +202,20 @@ export interface Watch {
   pending: number;
   hits: number;
   created_at: number;
+  /** The latest manual backfill; null when none ran since the server started. */
+  backfill: BackfillState | null;
+}
+
+export interface BackfillState {
+  running: boolean;
+  hours: number;
+  /** Posts looked at so far. */
+  scanned: number;
+  /** Newly archived posts (an album counts once). */
+  archived: number;
+  error: string;
+  started_at: number;
+  finished_at: number;
 }
 
 export interface WatchInput {

@@ -137,12 +137,13 @@ type Watcher struct {
 	allReacts  []ReactionStat
 	photoMiss  map[int64]time.Time // channels whose photo could not be fetched recently
 	photoSlots chan struct{}
+	backfills  map[int64]*BackfillState // latest manual backfill per watch
 }
 
 func NewWatcher(api API, st *store.Store, hub *events.Hub, n notify.Notifier, wakeDL func(), avatarDir string) *Watcher {
 	return &Watcher{api: api, st: st, hub: hub, notifier: n, wakeDL: wakeDL, avatarDir: avatarDir, wake: make(chan struct{}, 1),
 		Now: time.Now, MaxFlood: 300 * time.Second, DialogsTTL: 30 * time.Minute, RecentTTL: time.Minute,
-		recent: map[int64]*recent{}, photoMiss: map[int64]time.Time{}, photoSlots: make(chan struct{}, 2)}
+		recent: map[int64]*recent{}, photoMiss: map[int64]time.Time{}, photoSlots: make(chan struct{}, 2), backfills: map[int64]*BackfillState{}}
 }
 
 // Wake makes Run poll now (a watch was added or changed).
@@ -492,7 +493,7 @@ func (w *Watcher) judge(ctx context.Context, api *tg.Client, wv store.WatchView,
 			}
 			st := statsOf(g.msgs, convs)
 			if cond.Eval(st) {
-				err := w.archive(ctx, api, wv, ch, g.msgs, convs, cond.Explain(st), now)
+				_, err := w.archive(ctx, api, wv, ch, g.msgs, convs, cond.Explain(st), now)
 				if errors.Is(err, store.ErrNoWatch) {
 					return changed, nil // deleted while this poll ran
 				}
@@ -659,20 +660,21 @@ func (w *Watcher) customEmoji(ctx context.Context, api *tg.Client, ids []int64) 
 	return known
 }
 
+// archive stores an album (or single post) that met the condition; created reports whether it
+// was new (a post archived before is only refreshed).
 func (w *Watcher) archive(ctx context.Context, api *tg.Client, wv store.WatchView, ch *tg.Channel, msgs []*tg.Message,
-	convs []*model.Message, reasons []string, now int64) error {
+	convs []*model.Message, reasons []string, now int64) (created bool, err error) {
 	ps := w.postStats(ctx, api, msgs, statsOf(msgs, convs))
 	ps.Hit = &HitInfo{At: now, Reasons: reasons}
 	b, err := json.Marshal(ps)
 	if err != nil {
-		return err
+		return false, err
 	}
-	created := false
 	for _, c := range convs {
 		c.Source = model.SourceChannelWatch
 		ir, err := w.st.Ingest(ctx, store.IngestInput{ChannelID: ch.ID, Msg: c, Stats: string(b), Now: now})
 		if err != nil {
-			return err
+			return created, err
 		}
 		typ := "message.updated"
 		if ir.Created {
@@ -683,13 +685,13 @@ func (w *Watcher) archive(ctx context.Context, api *tg.Client, wv store.WatchVie
 	// A retry after a partial failure re-archives the same post: count it once.
 	if created {
 		if err := w.st.AddWatchHit(ctx, wv.ID); err != nil {
-			return err
+			return created, err
 		}
 	}
 	if w.wakeDL != nil {
 		w.wakeDL()
 	}
-	return nil
+	return created, nil
 }
 
 // channel resolves a stored channel id to a full channel (with access hash): from the peer
