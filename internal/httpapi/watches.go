@@ -29,7 +29,8 @@ type WatchService interface {
 }
 
 const (
-	watchCallTimeout = 30 * time.Second
+	// Long enough for a dialogs scan that waits out Telegram's short FLOOD_WAITs.
+	watchCallTimeout = 90 * time.Second
 	maxWindow        = 1440
 )
 
