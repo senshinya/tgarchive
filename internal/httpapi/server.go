@@ -36,6 +36,7 @@ type Server struct {
 	TgApp      *tgapp.Store
 	BotAPI     *botapiserver.Supervisor // nil when the Bot API server is not managed by this process
 	Userbot    UserbotService           // userbot login; nil disables /api/admin/userbot
+	Watcher    WatchService             // channel watches; nil disables /api/admin/channels and /api/admin/watches
 	Web        fs.FS
 	MediaDir   string
 	AvatarDir  string
@@ -73,6 +74,7 @@ func (s *Server) Handler() http.Handler {
 	s.adminRoutes(mux)
 	s.settingsRoutes(mux)
 	s.userbotRoutes(mux)
+	s.watchRoutes(mux)
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) { writeErr(w, http.StatusNotFound, "not found") })
 	mux.Handle("GET /", s.spa())
 	return s.auth(mux)

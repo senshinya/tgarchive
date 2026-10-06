@@ -1,0 +1,399 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strconv"
+	"time"
+	"unicode/utf8"
+
+	"tgarchive/internal/downloader"
+	"tgarchive/internal/events"
+	"tgarchive/internal/store"
+	"tgarchive/internal/userbot"
+	"tgarchive/internal/watchcond"
+)
+
+// WatchService is the channel watcher (userbot.Watcher).
+type WatchService interface {
+	Channels(ctx context.Context, refresh bool) ([]userbot.ChannelInfo, error)
+	Search(ctx context.Context, q string) ([]userbot.ChannelInfo, error)
+	Resolve(ctx context.Context, input string) (*userbot.ChannelInfo, error)
+	Known(ctx context.Context, id int64) (*store.Channel, error)
+	Test(ctx context.Context, id int64, cond *watchcond.Node) (*userbot.TestResult, error)
+	InitialLastSeen(ctx context.Context, id int64) (int64, error)
+	ChannelPhoto(ctx context.Context, id int64) (string, error)
+	Wake()
+}
+
+const (
+	watchCallTimeout = 30 * time.Second
+	maxWindow        = 1440
+)
+
+func (s *Server) watchRoutes(mux *http.ServeMux) {
+	if s.Watcher == nil {
+		return
+	}
+	mux.HandleFunc("GET /api/admin/channels", s.listChannels)
+	mux.HandleFunc("GET /api/admin/channels/search", s.searchChannels)
+	mux.HandleFunc("POST /api/admin/channels/resolve", s.resolveChannel)
+	mux.HandleFunc("POST /api/admin/watches/test", s.testWatch)
+	mux.HandleFunc("GET /api/admin/watches", s.listWatches)
+	mux.HandleFunc("POST /api/admin/watches", s.createWatch)
+	mux.HandleFunc("GET /api/admin/watches/{id}", s.getWatch)
+	mux.HandleFunc("PUT /api/admin/watches/{id}", s.updateWatch)
+	mux.HandleFunc("DELETE /api/admin/watches/{id}", s.deleteWatch)
+	mux.HandleFunc("GET /api/admin/watch-settings", s.getWatchSettings)
+	mux.HandleFunc("PUT /api/admin/watch-settings", s.putWatchSettings)
+}
+
+// watchErr maps watcher errors: the account not being usable is a conflict, everything else the
+// watcher returns is already a user-facing reason.
+func watchErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, userbot.ErrNotReady):
+		writeErr(w, http.StatusConflict, err.Error())
+	case errors.Is(err, context.DeadlineExceeded):
+		writeErr(w, http.StatusGatewayTimeout, "Telegram 响应超时，请稍后重试")
+	default:
+		writeErr(w, http.StatusBadRequest, err.Error())
+	}
+}
+
+type channelItem struct {
+	userbot.ChannelInfo
+	Watched bool `json:"watched"`
+}
+
+func (s *Server) withWatched(ctx context.Context, list []userbot.ChannelInfo) ([]channelItem, error) {
+	watches, err := s.Store.ListWatches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	watched := map[int64]bool{}
+	for _, wv := range watches {
+		watched[wv.ChannelID] = true
+	}
+	out := make([]channelItem, 0, len(list))
+	for _, c := range list {
+		out = append(out, channelItem{ChannelInfo: c, Watched: watched[c.ChannelID]})
+	}
+	return out, nil
+}
+
+func (s *Server) listChannels(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), watchCallTimeout)
+	defer cancel()
+	list, err := s.Watcher.Channels(ctx, r.URL.Query().Get("refresh") == "1")
+	if err != nil {
+		watchErr(w, err)
+		return
+	}
+	out, err := s.withWatched(r.Context(), list)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) searchChannels(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	if n := utf8.RuneCountInString(q); n < 2 || n > 64 {
+		writeErr(w, http.StatusBadRequest, "搜索词须为 2–64 个字符")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), watchCallTimeout)
+	defer cancel()
+	list, err := s.Watcher.Search(ctx, q)
+	if err != nil {
+		watchErr(w, err)
+		return
+	}
+	out, err := s.withWatched(r.Context(), list)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) resolveChannel(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Input string `json:"input"`
+	}
+	if !decodeSmall(w, r, &req) {
+		return
+	}
+	if req.Input == "" || len(req.Input) > 200 {
+		writeErr(w, http.StatusBadRequest, "请输入 @用户名 或 t.me 链接")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), watchCallTimeout)
+	defer cancel()
+	c, err := s.Watcher.Resolve(ctx, req.Input)
+	if err != nil {
+		watchErr(w, err)
+		return
+	}
+	out, err := s.withWatched(r.Context(), []userbot.ChannelInfo{*c})
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out[0])
+}
+
+// decodeCond reads a condition tree; raw null or absent yields nil when allowNil.
+func decodeCond(w http.ResponseWriter, raw json.RawMessage, allowNil bool) (*watchcond.Node, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		if allowNil {
+			return nil, true
+		}
+		writeErr(w, http.StatusBadRequest, "请设置条件")
+		return nil, false
+	}
+	n, err := watchcond.Parse(raw)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return nil, false
+	}
+	return n, true
+}
+
+func decodeWatchBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return false
+	}
+	return true
+}
+
+func (s *Server) testWatch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ChannelID int64           `json:"channel_id"`
+		Cond      json.RawMessage `json:"cond"`
+	}
+	if !decodeWatchBody(w, r, &req) {
+		return
+	}
+	if req.ChannelID <= 0 {
+		writeErr(w, http.StatusBadRequest, "bad channel id")
+		return
+	}
+	cond, ok := decodeCond(w, req.Cond, true)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), watchCallTimeout)
+	defer cancel()
+	res, err := s.Watcher.Test(ctx, req.ChannelID, cond)
+	if err != nil {
+		watchErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+type watchJSON struct {
+	ID            int64             `json:"id"`
+	Channel       store.ChannelView `json:"channel"`
+	ChatID        int64             `json:"chat_id"`
+	WindowMinutes int               `json:"window_minutes"`
+	Cond          json.RawMessage   `json:"cond"`
+	Enabled       bool              `json:"enabled"`
+	Status        string            `json:"status"`
+	Error         string            `json:"error"`
+	Pending       int64             `json:"pending"`
+	Hits          int64             `json:"hits"`
+	CreatedAt     int64             `json:"created_at"`
+}
+
+func toWatchJSON(v *store.WatchView) watchJSON {
+	cond := json.RawMessage(v.Cond)
+	if !json.Valid(cond) {
+		cond = json.RawMessage("null")
+	}
+	return watchJSON{
+		ID: v.ID, ChatID: v.ChatID, WindowMinutes: v.WindowMinutes, Cond: cond, Enabled: v.Enabled, Status: v.Status,
+		Error: v.LastError, Pending: v.Pending, Hits: v.Hits, CreatedAt: v.CreatedAt,
+		Channel: store.ChannelView{ChannelID: v.ChannelID, Title: v.Channel.Title, Username: v.Channel.Username, HasAvatar: v.Channel.AvatarPath != ""},
+	}
+}
+
+func (s *Server) listWatches(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Store.ListWatches(r.Context())
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	out := make([]watchJSON, 0, len(list))
+	for i := range list {
+		out = append(out, toWatchJSON(&list[i]))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) getWatch(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r, "id")
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad watch id")
+		return
+	}
+	v, err := s.Store.GetWatch(r.Context(), id)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toWatchJSON(v))
+}
+
+type watchBody struct {
+	ChannelID     int64           `json:"channel_id"`
+	WindowMinutes int             `json:"window_minutes"`
+	Cond          json.RawMessage `json:"cond"`
+	Enabled       bool            `json:"enabled"`
+}
+
+func (s *Server) checkWatchBody(w http.ResponseWriter, b *watchBody) bool {
+	if b.WindowMinutes < 1 || b.WindowMinutes > maxWindow {
+		writeErr(w, http.StatusBadRequest, "观察窗口须为 1–1440 分钟")
+		return false
+	}
+	_, ok := decodeCond(w, b.Cond, false)
+	return ok
+}
+
+func (s *Server) createWatch(w http.ResponseWriter, r *http.Request) {
+	var b watchBody
+	if !decodeWatchBody(w, r, &b) {
+		return
+	}
+	if b.ChannelID <= 0 {
+		writeErr(w, http.StatusBadRequest, "请选择频道")
+		return
+	}
+	if !s.checkWatchBody(w, &b) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), watchCallTimeout)
+	defer cancel()
+	ch, err := s.Watcher.Known(ctx, b.ChannelID)
+	if err != nil {
+		watchErr(w, err)
+		return
+	}
+	// Starting point: the newest post now. If the account is offline the poller sets it later.
+	last, err := s.Watcher.InitialLastSeen(ctx, b.ChannelID)
+	if err != nil && !errors.Is(err, userbot.ErrNotReady) {
+		watchErr(w, err)
+		return
+	}
+	now := s.Now().Unix()
+	if err := s.Store.UpsertChannel(r.Context(), *ch, now); err != nil {
+		storeErr(w, err)
+		return
+	}
+	id, err := s.Store.CreateWatch(r.Context(), &store.Watch{ChannelID: b.ChannelID, WindowMinutes: b.WindowMinutes, Cond: string(b.Cond),
+		Enabled: b.Enabled, LastSeenID: last, CreatedAt: now})
+	if errors.Is(err, store.ErrExists) {
+		writeErr(w, http.StatusConflict, "该频道已在监听")
+		return
+	}
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	channelID := b.ChannelID
+	go func() {
+		pctx, cancel := context.WithTimeout(context.Background(), watchCallTimeout)
+		defer cancel()
+		if _, err := s.Watcher.ChannelPhoto(pctx, channelID); err == nil {
+			s.Hub.Publish(events.Event{Type: "watch.updated", Data: map[string]int64{"watch_id": id}})
+		}
+	}()
+	s.Watcher.Wake()
+	s.Hub.Publish(events.Event{Type: "watch.updated", Data: map[string]int64{"watch_id": id}})
+	v, err := s.Store.GetWatch(r.Context(), id)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, toWatchJSON(v))
+}
+
+func (s *Server) updateWatch(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r, "id")
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad watch id")
+		return
+	}
+	var b watchBody
+	if !decodeWatchBody(w, r, &b) || !s.checkWatchBody(w, &b) {
+		return
+	}
+	if err := s.Store.UpdateWatch(r.Context(), id, b.WindowMinutes, string(b.Cond), b.Enabled, s.Now().Unix()); err != nil {
+		storeErr(w, err)
+		return
+	}
+	s.Watcher.Wake()
+	s.Hub.Publish(events.Event{Type: "watch.updated", Data: map[string]int64{"watch_id": id}})
+	v, err := s.Store.GetWatch(r.Context(), id)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toWatchJSON(v))
+}
+
+func (s *Server) deleteWatch(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r, "id")
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad watch id")
+		return
+	}
+	_, paths, err := s.Store.DeleteWatch(r.Context(), id, r.URL.Query().Get("purge") == "1")
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	downloader.RemoveFiles(s.MediaDir, paths)
+	s.Hub.Publish(events.Event{Type: "watch.updated", Data: map[string]int64{"watch_id": id}})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) getWatchSettings(w http.ResponseWriter, r *http.Request) {
+	secs := userbot.DefaultPollSeconds
+	if v, err := s.Store.GetSetting(r.Context(), userbot.PollSettingKey); err == nil {
+		if n, err := strconv.Atoi(string(v)); err == nil {
+			secs = n
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"poll_seconds": secs})
+}
+
+func (s *Server) putWatchSettings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		PollSeconds int `json:"poll_seconds"`
+	}
+	if !decodeSmall(w, r, &req) {
+		return
+	}
+	if req.PollSeconds < userbot.MinPollSeconds || req.PollSeconds > userbot.MaxPollSeconds {
+		writeErr(w, http.StatusBadRequest, "轮询间隔须为 30–600 秒")
+		return
+	}
+	if err := s.Store.PutSetting(r.Context(), userbot.PollSettingKey, []byte(strconv.Itoa(req.PollSeconds)), s.Now().Unix()); err != nil {
+		storeErr(w, err)
+		return
+	}
+	s.Watcher.Wake()
+	writeJSON(w, http.StatusOK, map[string]int{"poll_seconds": req.PollSeconds})
+}

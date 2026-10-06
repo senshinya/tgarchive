@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"fmt"
 	"mime"
 	"net/http"
@@ -293,12 +294,21 @@ func inlineSafe(ct string) bool {
 func (s *Server) serveAvatar(w http.ResponseWriter, r *http.Request) {
 	kind := r.PathValue("kind")
 	id, ok := pathID(r, "id")
-	if !ok || (kind != "bots" && kind != "senders") {
+	if !ok || (kind != "bots" && kind != "senders" && kind != "channels") {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
 	p := filepath.Join(s.AvatarDir, kind, fmt.Sprintf("%d.jpg", id))
 	f, err := os.Open(p)
+	if err != nil && kind == "channels" && s.Watcher != nil {
+		// Channel photos are fetched on first use (the picker shows channels never seen before).
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		_, ferr := s.Watcher.ChannelPhoto(ctx, id)
+		cancel()
+		if ferr == nil {
+			f, err = os.Open(p)
+		}
+	}
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
