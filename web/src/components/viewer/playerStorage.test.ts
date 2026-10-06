@@ -20,6 +20,20 @@ describe('PlayerStorage', () => {
     expect(await b.getPlaybackRate()).toBe(1.5);
   });
 
+  it('starts muted in 静音模式 and does not remember unmuting there', async () => {
+    const a = new PlayerStorage(1, () => 100);
+    await a.setMuted(false);
+    const s = new PlayerStorage(2, () => 100);
+    s.silent = true;
+    expect(await s.getMuted()).toBe(true);
+    await s.setMuted(false); // unmuting this one video
+    await s.setVolume(0.3); // volume is still remembered
+    const b = new PlayerStorage(3, () => 100);
+    expect(await b.getMuted()).toBe(false);
+    expect(await b.getVolume()).toBe(0.3);
+    s.silent = false;
+  });
+
   it('does not remember the temporary long-press speed', async () => {
     const s = new PlayerStorage(1, () => 100);
     await s.setPlaybackRate(1.25);

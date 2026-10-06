@@ -3,6 +3,7 @@ import { useRef, useState } from 'preact/hooks';
 import { mediaUrl } from '../../api/client';
 import type { Message } from '../../api/types';
 import { formatDuration } from '../../lib/format';
+import { silent } from '../../lib/silent';
 import { Document } from './Document';
 import { extraString, mainMedia } from './util';
 import './media.scss';
@@ -57,6 +58,7 @@ export function Audio({ msg }: { msg: Message }) {
       <audio
         ref={ref}
         src={mediaUrl(main.id)}
+        muted={silent.value}
         preload="none"
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}

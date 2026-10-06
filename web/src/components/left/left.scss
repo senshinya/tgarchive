@@ -196,7 +196,16 @@ html.is-apple .ChatItem-subtitle .sender-name {
   margin-left: 0;
 }
 
-.watch-button + .ListModeSwitch {
+.left-header .silent-button {
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+
+  &.active {
+    color: var(--color-primary);
+  }
+}
+
+.silent-button + .ListModeSwitch {
   margin-left: 0.25rem;
 }
 

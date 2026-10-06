@@ -40,6 +40,8 @@ function num(v: unknown): number | null {
 export class PlayerStorage {
   /** While true (a long-press 2× is in effect) speed changes are not remembered. */
   holdRate = false;
+  /** 静音模式: start muted whatever was remembered, and don't remember unmuting this video. */
+  silent = false;
   #lastSave = 0;
   #frozen = false;
 
@@ -57,11 +59,12 @@ export class PlayerStorage {
     if (!this.#frozen) this.#prefs({ volume });
   }
   async getMuted() {
+    if (this.silent) return true;
     const v = read<Prefs>(PREFS_KEY).muted;
     return typeof v === 'boolean' ? v : null;
   }
   async setMuted(muted: boolean) {
-    if (!this.#frozen) this.#prefs({ muted });
+    if (!this.#frozen && !this.silent) this.#prefs({ muted });
   }
   async getPlaybackRate() {
     const v = num(read<Prefs>(PREFS_KEY).rate);

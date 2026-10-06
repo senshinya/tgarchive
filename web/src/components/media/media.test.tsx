@@ -13,6 +13,8 @@ import { Sticker } from './Sticker';
 import { Video } from './Video';
 import { IMAGE_DOCUMENT_MAX_BYTES, displayKind, playUrl } from './util';
 import { Voice } from './Voice';
+import { VideoNote } from './VideoNote';
+import { setSilent } from '../../lib/silent';
 import { toViewerItems } from '../viewer/MediaViewer';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -310,5 +312,23 @@ describe('server-side copies of unplayable videos', () => {
     const { container } = renderWithStore(<Animation msg={msg} onOpen={() => {}} />);
     expect(container.querySelector('video')!.getAttribute('src')).toBe('/media/80?compat=1');
     expect(toViewerItems([msg])).toEqual([expect.objectContaining({ mediaId: 80, compatCodec: 'av1' })]);
+  });
+});
+
+describe('静音模式', () => {
+  afterEach(() => setSilent(false));
+
+  it('mutes voice messages and keeps a tapped round video silent', () => {
+    setSilent(true);
+    const voice = makeMessage({ kind: 'voice', media: [makeMedia({ kind: 'voice', mime: 'audio/ogg', duration: 3 })] });
+    const r = renderWithStore(<Voice msg={voice} />);
+    expect(r.container.querySelector('audio')!.muted).toBe(true);
+    const note = makeMessage({ kind: 'video_note', media: [makeMedia({ id: 90, kind: 'video_note', mime: 'video/mp4' })] });
+    const n = renderWithStore(<VideoNote msg={note} />);
+    const v = n.container.querySelector('video')!;
+    fireEvent.click(v);
+    expect(v.muted).toBe(true);
+    act(() => setSilent(false));
+    expect(r.container.querySelector('audio')!.muted).toBe(false);
   });
 });

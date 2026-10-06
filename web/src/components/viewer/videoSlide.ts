@@ -59,6 +59,8 @@ export interface VideoSlideOptions {
   mime: string;
   poster?: string;
   title: string;
+  /** 静音模式 is on: the video starts muted. */
+  silent?: boolean;
 }
 
 export interface VideoSlide {
@@ -102,6 +104,10 @@ export function createVideoSlide(o: VideoSlideOptions): VideoSlide {
   player.src = { src: o.src, type: (o.mime.startsWith('video/') ? o.mime : 'video/mp4') as 'video/mp4' };
   player.title = o.title;
   player.playsInline = true;
+  // Storage answers "muted" when the media loads; the attribute also covers the moment before
+  // (a property set on a not-yet-connected player is dropped).
+  storage.silent = !!o.silent;
+  if (o.silent) player.setAttribute('muted', '');
   player.storage = storage;
   player.keyTarget = 'document';
   // PhotoSwipe detaches slides it pages past but may re-attach them from its cache; without
