@@ -5,7 +5,7 @@ import { formatFullDate, formatTime, hashString, peerColor, previewText } from '
 import { formatCount } from '../../lib/watchCond';
 import { extraString } from '../media/util';
 
-export type MetaVariant = 'inline' | 'overlay' | 'standalone';
+export type MetaVariant = 'inline' | 'overlay' | 'standalone' | 'reactions';
 
 /** Time + 已编辑 (channel posts also: views, author signature); inline floats at the end of text,
  * overlay sits on media, standalone gets its own row. */

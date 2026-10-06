@@ -325,3 +325,13 @@ func TestAddPendingAfterResetIsDropped(t *testing.T) {
 		t.Fatalf("stale poll undid the reset: %+v", w)
 	}
 }
+
+func TestUpdateWatchMovesPendingDeadlines(t *testing.T) {
+	s := newStore(t)
+	id := seedWatch(t, s)
+	s.AddPending(ctx, id, []Pending{{TgMessageID: 10, Date: 1000, Deadline: 1000 + 30*60}}, 10)
+	s.UpdateWatch(ctx, id, 360, "{}", true, 2)
+	if ps, _ := s.ListPending(ctx, id); len(ps) != 1 || ps[0].Deadline != 1000+360*60 {
+		t.Fatalf("pending = %+v", ps)
+	}
+}

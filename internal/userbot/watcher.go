@@ -602,7 +602,7 @@ func (w *Watcher) postStats(ctx context.Context, api *tg.Client, msgs []*tg.Mess
 			}
 		}
 	}
-	sort.SliceStable(ps.Reactions, func(i, j int) bool { return ps.Reactions[i].Count > ps.Reactions[j].Count })
+	// Kept in Telegram's order (paid first, then by count), which clients show as is.
 	if len(customs) > 0 {
 		media := w.customEmoji(ctx, api, customs)
 		for i := range ps.Reactions {
