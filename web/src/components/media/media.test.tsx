@@ -10,7 +10,9 @@ import { MessageMedia } from './MessageMedia';
 import { Photo } from './Photo';
 import { Sticker } from './Sticker';
 import { Video } from './Video';
+import { IMAGE_DOCUMENT_MAX_BYTES, displayKind } from './util';
 import { Voice } from './Voice';
+import { toViewerItems } from '../viewer/MediaViewer';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -131,7 +133,7 @@ describe('Document', () => {
   it('shows download progress in place of the size', () => {
     const pending = makeMessage({
       kind: 'document',
-      media: [makeMedia({ id: 9, kind: 'document', file_name: 'big.zip', size: 4096, state: 'pending' })],
+      media: [makeMedia({ id: 9, kind: 'document', mime: 'application/octet-stream', file_name: 'big.zip', size: 4096, state: 'pending' })],
     });
     const r = renderWithStore(<Document msg={pending} />);
     expect(screen.getByText('排队中')).toBeTruthy();
@@ -237,7 +239,7 @@ describe('Album and MessageMedia', () => {
   });
 
   it('stacks document albums as rows', () => {
-    const msgs = [1, 2].map((id) => makeMessage({ id, kind: 'document', media: [makeMedia({ id: id + 10, kind: 'document', file_name: `f${id}.txt` })] }));
+    const msgs = [1, 2].map((id) => makeMessage({ id, kind: 'document', media: [makeMedia({ id: id + 10, kind: 'document', mime: 'application/octet-stream', file_name: `f${id}.txt` })] }));
     const { container } = renderWithStore(<Album msgs={msgs} onOpen={() => {}} />);
     expect(container.querySelectorAll('.Album-list-item')).toHaveLength(2);
     expect(screen.getByText('f2.txt')).toBeTruthy();
@@ -246,5 +248,39 @@ describe('Album and MessageMedia', () => {
   it('renders nothing for text and unsupported kinds', () => {
     const { container } = renderWithStore(<MessageMedia msg={makeMessage({ kind: 'other' })} onOpen={() => {}} />);
     expect(container.innerHTML).toBe('');
+  });
+});
+
+describe('images sent as files', () => {
+  const imageDoc = (mime: string, size = 870_743) =>
+    makeMessage({
+      id: 7,
+      kind: 'document',
+      text: '',
+      media: [makeMedia({ id: 70, kind: 'document', mime, size, file_name: 'GIF_1.gif', width: 536, height: 1000 })],
+    });
+
+  it('shows a GIF, PNG, JPEG or WebP file inline and opens the viewer', () => {
+    const onOpen = vi.fn();
+    const { container } = renderWithStore(<MessageMedia msg={imageDoc('image/gif')} onOpen={onOpen} />);
+    const img = container.querySelector('.Photo img')!;
+    expect(img.getAttribute('src')).toBe('/media/70');
+    fireEvent.click(img);
+    expect(onOpen).toHaveBeenCalled();
+    for (const mime of ['image/png', 'image/jpeg', 'image/webp']) expect(displayKind(imageDoc(mime))).toBe('photo');
+  });
+
+  it('keeps other files, and images over the limit, as file rows', () => {
+    expect(displayKind(imageDoc('image/heic'))).toBe('document');
+    expect(displayKind(imageDoc('image/svg+xml'))).toBe('document');
+    const big = imageDoc('image/gif', IMAGE_DOCUMENT_MAX_BYTES + 1);
+    expect(displayKind(big)).toBe('document');
+    const { container } = renderWithStore(<MessageMedia msg={big} onOpen={() => {}} />);
+    expect(container.querySelector('.File')).toBeTruthy();
+  });
+
+  it('pages through the viewer as a photo', () => {
+    expect(toViewerItems([imageDoc('image/gif')])).toEqual([expect.objectContaining({ mediaId: 70, kind: 'photo', mime: 'image/gif' })]);
+    expect(toViewerItems([imageDoc('application/pdf')])).toEqual([]);
   });
 });

@@ -210,7 +210,7 @@ describe('MiddleColumn', () => {
   });
 
   it('offers download only for archived media', async () => {
-    const api = setup([makeMessage({ id: 1, kind: 'document', text: '', media: [makeMedia({ id: 9, kind: 'document', file_name: 'a.txt' })] })]);
+    const api = setup([makeMessage({ id: 1, kind: 'document', text: '', media: [makeMedia({ id: 9, kind: 'document', mime: 'application/octet-stream', file_name: 'a.txt' })] })]);
     const { container } = renderWithStore(<MiddleColumn chatId={10} />, api);
     await screen.findByText('a.txt');
     fireEvent.contextMenu(container.querySelector('.message-content')!);
