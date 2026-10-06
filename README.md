@@ -39,6 +39,8 @@ cd web && npm run dev   # Vite 开发服务器，/api、/media、/avatars 代理
 | `BOT_API_DIR_LOCAL` / `BOT_API_DIR_REMOTE` | `$DATA_DIR/botapi` | 本容器内 / Bot API 服务器内的同一目录（外部服务器时用于路径映射） |
 | `CLOUD_API_URL` | `https://api.telegram.org` | 云端 Bot API，只用于添加机器人时的 `getMe` 与 `logOut` |
 | `TELEGRAPH_API_URL` | `https://api.telegra.ph` | Telegraph API 地址，仅测试时指向假服务器 |
+| `TRANSCODE` | `true` | 为浏览器播不了的视频（AV1、MPEG-4 Part 2、非常见音频等）在后台生成 H.264/AAC 兼容版，原文件保留供下载；镜像自带 ffmpeg |
+| `TRANSCODE_VAAPI_DEVICE` | `/dev/dri/renderD128` | Intel 核显的 render 节点，用于硬件编码；设备不存在或编码失败时用 libx264 软件编码 |
 
 机器人 token、`api_id` / `api_hash` 与 userbot 登录都在 WebUI「管理」页设置并加密入库，不经过环境变量。
 
@@ -72,6 +74,7 @@ services:
 ```
 
 - 容器以 UID/GID 10001 运行，镜像自带健康检查 `GET /healthz`
+- 硬件转码：compose 加 `devices: [/dev/dri:/dev/dri]`，并用 `group_add` 加入宿主 render 节点所属的组（`stat -c %g /dev/dri/renderD128`）
 - 前面必须有反代做认证并写入 `Remote-User`，且先剥掉客户端自带的 `Remote-*` 头；SSE 路径 `/api/events` 不要缓冲
 - 首次使用：管理 → API 凭据填 [my.telegram.org](https://my.telegram.org) 的 `api_id` / `api_hash` → 添加机器人并设置白名单 →（可选）用户账号登录
 

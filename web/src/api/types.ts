@@ -67,6 +67,9 @@ export interface Media {
   waveform?: string; // base64 of the 5-bit packed Telegram waveform
   state: MediaState;
   error: string;
+  /** The original's video codec when the server keeps an H.264 copy for browsers that cannot
+   * play it (served at `?compat=1`). */
+  compat_codec?: string;
 }
 
 export interface Entity {

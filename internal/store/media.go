@@ -26,14 +26,18 @@ type Media struct {
 	Attempts      int
 	NextAttemptAt int64
 	Error         string
+	CompatState   string
+	CompatCodec   string
+	CompatPath    string
 }
 
-const mediaCols = "id, dedupe_key, bot_id, source_ref, kind, mime, file_name, size, width, height, duration, waveform, path, state, attempts, next_attempt_at, error"
+const mediaCols = "id, dedupe_key, bot_id, source_ref, kind, mime, file_name, size, width, height, duration, waveform, path, state, attempts, next_attempt_at, error, compat_state, compat_codec, compat_path"
 
 func scanMedia(r scanner) (*Media, error) {
 	var m Media
 	err := r.Scan(&m.ID, &m.DedupeKey, &m.BotID, &m.SourceRef, &m.Kind, &m.Mime, &m.FileName, &m.Size, &m.Width, &m.Height,
-		&m.Duration, &m.Waveform, &m.Path, &m.State, &m.Attempts, &m.NextAttemptAt, &m.Error)
+		&m.Duration, &m.Waveform, &m.Path, &m.State, &m.Attempts, &m.NextAttemptAt, &m.Error,
+		&m.CompatState, &m.CompatCodec, &m.CompatPath)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

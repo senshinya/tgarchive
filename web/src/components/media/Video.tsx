@@ -5,7 +5,7 @@ import type { Message } from '../../api/types';
 import { fitMedia } from '../../lib/album';
 import { formatDuration } from '../../lib/format';
 import { MediaStatus } from './MediaStatus';
-import { mainMedia, readyThumb } from './util';
+import { mainMedia, playUrl, readyThumb } from './util';
 import './media.scss';
 
 interface Props {
@@ -36,7 +36,7 @@ export function Video({ msg, onOpen, fill }: Props) {
       {thumb ? (
         <img src={mediaUrl(thumb.id)} alt="" loading="lazy" class={spoiler ? 'media-spoiler-blur' : ''} />
       ) : (
-        <video src={`${mediaUrl(main.id)}#t=0.1`} preload="metadata" muted playsInline class={spoiler ? 'media-spoiler-blur' : ''} />
+        <video src={`${playUrl(main.id, main.compat_codec)}#t=0.1`} preload="metadata" muted playsInline class={spoiler ? 'media-spoiler-blur' : ''} />
       )}
       <button
         type="button"

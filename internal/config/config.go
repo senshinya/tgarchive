@@ -22,6 +22,8 @@ type Config struct {
 	BarkNotifyFile     string
 	PollTimeoutSec     int
 	TelegraphAPIURL    string // Telegraph API; only tests point it elsewhere
+	Transcode          bool   // 为浏览器播不了的视频生成 H.264 兼容版
+	VAAPIDevice        string // 硬件编码用的 render 节点；不存在时用软件编码
 }
 
 func Load(getenv func(string) string) (*Config, error) {
@@ -33,6 +35,15 @@ func Load(getenv func(string) string) (*Config, error) {
 		BarkNotifyFile:  getenv("BARK_NOTIFY_FILE"),
 		PollTimeoutSec:  50,
 		TelegraphAPIURL: or(getenv("TELEGRAPH_API_URL"), "https://api.telegra.ph"),
+		VAAPIDevice:     or(getenv("TRANSCODE_VAAPI_DEVICE"), "/dev/dri/renderD128"),
+	}
+	switch v := getenv("TRANSCODE"); v {
+	case "", "true":
+		c.Transcode = true
+	case "false":
+		c.Transcode = false
+	default:
+		return nil, fmt.Errorf("TRANSCODE must be true or false, got %q", v)
 	}
 	c.BotAPIDirLocal = or(getenv("BOT_API_DIR_LOCAL"), c.DataDir+"/botapi")
 	c.BotAPIDirRemote = or(getenv("BOT_API_DIR_REMOTE"), c.BotAPIDirLocal)

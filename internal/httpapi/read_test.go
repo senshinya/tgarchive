@@ -183,6 +183,35 @@ func TestServeMedia(t *testing.T) {
 	}
 }
 
+func TestServeMediaCompat(t *testing.T) {
+	e := newReadEnv(t)
+	p := fmt.Sprintf("/media/%d?compat=1", e.media)
+	if w := do(e.h, "GET", p, nil); w.Code != 404 {
+		t.Fatalf("compat before a copy exists = %d", w.Code)
+	}
+	if err := os.WriteFile(filepath.Join(e.srv.MediaDir, "1", "p.compat.mp4"), []byte("h264-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := e.srv.Store.SetCompat(context.Background(), e.media, store.CompatDone, "av1", "1/p.compat.mp4", ""); !ok || err != nil {
+		t.Fatalf("set compat = %v %v", ok, err)
+	}
+	w := do(e.h, "GET", p, nil)
+	if w.Code != 200 || w.Body.String() != "h264-bytes" || w.Header().Get("Content-Type") != "video/mp4" ||
+		w.Header().Get("ETag") == fmt.Sprintf(`"m%d"`, e.media) || w.Header().Get("Content-Disposition") != "" {
+		t.Fatalf("compat = %d %q %v", w.Code, w.Body, w.Header())
+	}
+	if w := do(e.h, "GET", fmt.Sprintf("/media/%d?download=1", e.media), nil); w.Body.String() != "photo-bytes" {
+		t.Fatalf("download must stay the original, got %q", w.Body)
+	}
+	// The copy goes with the original when its message is deleted.
+	if w := do(e.h, "DELETE", fmt.Sprintf("/api/messages/%d", e.photoMsg), nil); w.Code != 204 {
+		t.Fatalf("delete = %d", w.Code)
+	}
+	if _, err := os.Stat(filepath.Join(e.srv.MediaDir, "1", "p.compat.mp4")); err == nil {
+		t.Fatal("compat copy of an orphaned media must be removed")
+	}
+}
+
 func TestDeleteAndRetry(t *testing.T) {
 	e := newReadEnv(t)
 	ch, unsub := e.hub.Subscribe()

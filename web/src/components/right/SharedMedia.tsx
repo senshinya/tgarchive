@@ -9,7 +9,7 @@ import { IconButton } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 import { Tabs } from '../../ui/Tabs';
 import { Document } from '../media/Document';
-import { mainMedia, readyThumb } from '../media/util';
+import { mainMedia, playUrl, readyThumb } from '../media/util';
 import './right.scss';
 
 export const SHARED_PAGE = 100;
@@ -50,7 +50,7 @@ function MediaTile({ msg, convKey }: { msg: Message; convKey: number }) {
       {src ? (
         <img src={src} alt="" loading="lazy" decoding="async" class={spoiler ? 'media-spoiler-blur' : ''} />
       ) : done ? (
-        <video src={`${mediaUrl(main.id)}#t=0.1`} preload="metadata" muted playsInline class={spoiler ? 'media-spoiler-blur' : ''} />
+        <video src={`${playUrl(main.id, main.compat_codec)}#t=0.1`} preload="metadata" muted playsInline class={spoiler ? 'media-spoiler-blur' : ''} />
       ) : (
         <span class="SharedMedia-tile-state">{main.state === 'pending' ? '下载中' : '不可用'}</span>
       )}

@@ -53,6 +53,7 @@ export function toViewerItems(msgs: Message[]): ViewerItem[] {
           width: media.width,
           height: media.height,
           mime: media.mime,
+          compatCodec: media.compat_codec,
         },
       });
     }

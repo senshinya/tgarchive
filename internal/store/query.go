@@ -64,6 +64,9 @@ type MediaView struct {
 	Waveform []byte `json:"waveform,omitempty"`
 	State    string `json:"state"`
 	Error    string `json:"error"`
+	// CompatCodec names the original's video codec when a browser-playable copy exists
+	// (served at /media/{id}?compat=1); empty otherwise.
+	CompatCodec string `json:"compat_codec,omitempty"`
 }
 
 type ReplyView struct {
@@ -301,7 +304,7 @@ func (s *Store) hydrate(ctx context.Context, views []MessageView) error {
 	ph := strings.TrimSuffix(strings.Repeat("?,", len(views)), ",")
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT mm.message_id, mm.role, md.id, md.kind, md.mime, md.file_name, md.size, md.width, md.height, md.duration,
-			md.waveform, md.state, md.error
+			md.waveform, md.state, md.error, CASE WHEN md.compat_state = 'done' THEN md.compat_codec ELSE '' END
 		FROM message_media mm JOIN media md ON md.id = mm.media_id
 		WHERE mm.message_id IN (`+ph+`) AND mm.role != 'article' ORDER BY mm.message_id, mm.position`, args...)
 	if err != nil {
@@ -311,7 +314,7 @@ func (s *Store) hydrate(ctx context.Context, views []MessageView) error {
 		var msgID int64
 		var mv MediaView
 		if err := rows.Scan(&msgID, &mv.Role, &mv.ID, &mv.Kind, &mv.Mime, &mv.FileName, &mv.Size, &mv.Width, &mv.Height,
-			&mv.Duration, &mv.Waveform, &mv.State, &mv.Error); err != nil {
+			&mv.Duration, &mv.Waveform, &mv.State, &mv.Error, &mv.CompatCodec); err != nil {
 			rows.Close()
 			return err
 		}
