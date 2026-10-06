@@ -40,8 +40,8 @@ func (f *fakeWatcher) err() error {
 	return nil
 }
 
-func (f *fakeWatcher) Channels(context.Context, bool) ([]userbot.ChannelInfo, error) {
-	return []userbot.ChannelInfo{newsInfo}, f.err()
+func (f *fakeWatcher) Channels(context.Context, bool) (userbot.ChannelList, error) {
+	return userbot.ChannelList{Channels: []userbot.ChannelInfo{newsInfo}, Loading: true}, f.err()
 }
 
 func (f *fakeWatcher) Search(_ context.Context, q string) ([]userbot.ChannelInfo, error) {
@@ -207,7 +207,8 @@ func TestWatchPurge(t *testing.T) {
 func TestChannelPickerEndpoints(t *testing.T) {
 	e := newWatchEnv(t)
 	call(e.h, "POST", "/api/admin/watches", watchReq(500, 30, condOK))
-	if w := call(e.h, "GET", "/api/admin/channels?refresh=1", nil); w.Code != 200 || !strings.Contains(w.Body.String(), `"watched":true`) {
+	if w := call(e.h, "GET", "/api/admin/channels?refresh=1", nil); w.Code != 200 || !strings.Contains(w.Body.String(), `"watched":true`) ||
+		!strings.Contains(w.Body.String(), `"loading":true`) {
 		t.Fatalf("channels = %d %s", w.Code, w.Body)
 	}
 	if w := call(e.h, "GET", "/api/admin/channels/search?q=a", nil); w.Code != 400 {

@@ -15,6 +15,8 @@ import './watch.scss';
 
 const LINKISH = /^(@|https?:\/\/|t\.me\/|telegram\.me\/)/i;
 const SEARCH_DELAY = 500;
+/** How often the picker re-reads the list while the server is still scanning the account. */
+export const SCAN_POLL_MS = 3000;
 
 function matches(c: ChannelInfo, q: string): boolean {
   const n = q.toLowerCase().replace(/^@/, '');
@@ -41,6 +43,7 @@ function ChannelRow({ c, onPick }: { c: ChannelInfo; onPick: (c: ChannelInfo) =>
 export function ChannelPicker({ onPick }: { onPick: (c: ChannelInfo) => void }) {
   const store = useStore();
   const [list, setList] = useState<ChannelInfo[] | null>(null);
+  const [scanning, setScanning] = useState(false);
   const [error, setError] = useState('');
   const [offline, setOffline] = useState(false);
   const [q, setQ] = useState('');
@@ -50,12 +53,15 @@ export function ChannelPicker({ onPick }: { onPick: (c: ChannelInfo) => void }) 
   const seq = useRef(0);
 
   const load = async (refresh: boolean) => {
-    setError('');
     try {
-      setList(await store.api.channels(refresh));
+      const res = await store.api.channels(refresh);
+      setList(res.channels);
+      setScanning(res.loading);
+      setError(res.loading ? '' : res.error);
       setOffline(false);
     } catch (e) {
-      setList([]);
+      setList((l) => l ?? []);
+      setScanning(false);
       if (e instanceof ApiError && e.status === 409) setOffline(true);
       else setError(errorMessage(e));
     }
@@ -63,6 +69,13 @@ export function ChannelPicker({ onPick }: { onPick: (c: ChannelInfo) => void }) 
   useEffect(() => {
     void load(false);
   }, []);
+  // The server scans the account's dialogs in the background (Telegram throttles it): keep
+  // re-reading until it is done.
+  useEffect(() => {
+    if (!scanning) return;
+    const t = setTimeout(() => void load(false), SCAN_POLL_MS);
+    return () => clearTimeout(t);
+  }, [scanning, list]);
 
   const query = q.trim();
   const linkish = LINKISH.test(query);
@@ -106,7 +119,7 @@ export function ChannelPicker({ onPick }: { onPick: (c: ChannelInfo) => void }) 
       <Section>
         <div class="ChannelPicker-search">
           <InputField label="搜索频道，或粘贴 @用户名 / t.me 链接" value={q} onInput={setQ} autoFocus />
-          <IconButton label="刷新频道列表" onClick={() => void load(true)} disabled={offline}>
+          <IconButton label="刷新频道列表" onClick={() => void load(true)} disabled={offline || scanning}>
             <RefreshCw size={20} />
           </IconButton>
         </div>
@@ -128,12 +141,13 @@ export function ChannelPicker({ onPick }: { onPick: (c: ChannelInfo) => void }) 
         )}
       </Section>
       <Section title="已加入的频道">
-        {list === null && (
-          <div class="settings-loading">
-            <Spinner size={32} />
+        {(list === null || scanning) && (
+          <div class="ChannelPicker-scanning">
+            <Spinner size={24} />
+            <span>{list?.length ? `正在读取频道列表…（已找到 ${list.length} 个）` : '正在读取频道列表…'}</span>
           </div>
         )}
-        {list !== null && local.length === 0 && !offline && (
+        {list !== null && !scanning && local.length === 0 && !offline && (
           <Description>{query ? '没有匹配的已加入频道' : '代取账号还没有加入任何频道'}</Description>
         )}
         {local.map((c) => (
@@ -153,7 +167,7 @@ export function ChannelPicker({ onPick }: { onPick: (c: ChannelInfo) => void }) 
           ))}
         </Section>
       )}
-      {list !== null && list.length === 0 && !query && !offline && (
+      {list !== null && list.length === 0 && !scanning && !query && !offline && (
         <Section>
           <ListItem icon={<Megaphone size={24} />} title="提示" subtitle="输入频道名称搜索公开频道，或直接粘贴链接" />
         </Section>

@@ -166,6 +166,17 @@ export interface ChannelInfo {
   watched: boolean;
 }
 
+/** GET /api/admin/channels: the joined channels found so far by the server's background scan. */
+export interface ChannelList {
+  channels: ChannelInfo[];
+  /** A scan is running; channels may be partial. */
+  loading: boolean;
+  /** When the last complete scan finished (unix seconds); 0 for never. */
+  updated_at: number;
+  /** Why the last scan stopped early. */
+  error: string;
+}
+
 export type CondCmp = 'gte' | 'lte';
 export type CondLeaf =
   | { metric: 'reaction'; key: string; cmp: CondCmp; value: number }

@@ -235,7 +235,12 @@ describe('ChannelPicker (WatchEditor without a watch)', () => {
   it('filters joined channels, searches public ones when nothing matches, and resolves links', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const api = fakeApi({
-      channels: vi.fn(async () => [makeChannelInfo(), makeChannelInfo({ channel_id: 501, title: 'Tech', username: 'tech', participants: 0 })]),
+      channels: vi.fn(async () => ({
+        channels: [makeChannelInfo(), makeChannelInfo({ channel_id: 501, title: 'Tech', username: 'tech', participants: 0 })],
+        loading: false,
+        updated_at: 1,
+        error: '',
+      })),
       searchChannels: vi.fn(async () => [makeChannelInfo({ channel_id: 900, title: 'Remote', username: 'remote' })]),
       resolveChannel: vi.fn(async () => makeChannelInfo({ channel_id: 777, title: 'Linked' })),
       testWatch: vi.fn(async () => testResult),
@@ -267,6 +272,27 @@ describe('ChannelPicker (WatchEditor without a watch)', () => {
     expect(screen.getByRole('button', { name: '开始监听' })).toBeTruthy();
   });
 
+  it('keeps re-reading the list while the server is still scanning', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let calls = 0;
+    const api = fakeApi({
+      channels: vi.fn(async () => {
+        calls++;
+        return calls === 1
+          ? { channels: [makeChannelInfo()], loading: true, updated_at: 0, error: '' }
+          : { channels: [makeChannelInfo(), makeChannelInfo({ channel_id: 502, title: 'Late' })], loading: false, updated_at: 5, error: '' };
+      }),
+    });
+    renderWithStore(<WatchEditor />, api);
+    expect(await screen.findByText('正在读取频道列表…（已找到 1 个）')).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3100);
+    });
+    expect(await screen.findByText('Late')).toBeTruthy();
+    expect(screen.queryByText(/正在读取频道列表/)).toBeNull();
+    expect(api.channels).toHaveBeenCalledTimes(2);
+  });
+
   it('explains when the user account is not logged in', async () => {
     renderWithStore(<WatchEditor />, fakeApi({ channels: vi.fn(async () => Promise.reject(new ApiError(409, '代取账号未登录', null))) }));
     expect(await screen.findByText(/代取账号未登录，无法读取频道/)).toBeTruthy();
@@ -274,7 +300,7 @@ describe('ChannelPicker (WatchEditor without a watch)', () => {
 
   it('sends an already watched channel to its watch', async () => {
     const api = fakeApi({
-      channels: vi.fn(async () => [makeChannelInfo({ watched: true })]),
+      channels: vi.fn(async () => ({ channels: [makeChannelInfo({ watched: true })], loading: false, updated_at: 1, error: '' })),
       watches: vi.fn(async () => [makeWatch({ id: 8 })]),
     });
     renderWithStore(<WatchEditor />, api);
@@ -286,7 +312,7 @@ describe('ChannelPicker (WatchEditor without a watch)', () => {
 describe('WatchEditor', () => {
   it('creates a watch from the first allowed reaction and opens its conversation', async () => {
     const api = fakeApi({
-      channels: vi.fn(async () => [makeChannelInfo()]),
+      channels: vi.fn(async () => ({ channels: [makeChannelInfo()], loading: false, updated_at: 1, error: '' })),
       testWatch: vi.fn(async () => testResult),
       createWatch: vi.fn(async () => makeWatch({ chat_id: 61 })),
     });

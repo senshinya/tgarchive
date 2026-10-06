@@ -3,6 +3,7 @@ import type {
   Article,
   Bot,
   ChannelInfo,
+  ChannelList,
   Chat,
   CondGroup,
   Downloads,
@@ -101,7 +102,7 @@ export interface Api {
   userbotPassword(password: string): Promise<UserbotInfo>;
   userbotLogout(): Promise<void>;
   /** Broadcast channels the user account has joined; refresh bypasses the server's cache. */
-  channels(refresh?: boolean): Promise<ChannelInfo[]>;
+  channels(refresh?: boolean): Promise<ChannelList>;
   searchChannels(q: string): Promise<ChannelInfo[]>;
   resolveChannel(input: string): Promise<ChannelInfo>;
   /** Judges a channel's latest posts against a draft condition (null: none yet). */

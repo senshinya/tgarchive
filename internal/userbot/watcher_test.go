@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,12 +26,16 @@ import (
 // watchTG extends channelTG with what the watcher calls.
 type watchTG struct {
 	*channelTG
-	mu        sync.Mutex
-	chanErr   string // error type returned by channels.getChannels
-	chanCode  int    // its code (default 400)
-	historyN  int    // getHistory calls
-	available tg.ChatReactionsClass
-	emojiDocs int // getCustomEmojiDocuments calls
+	mu       sync.Mutex
+	chanErr  string // error type returned by channels.getChannels
+	chanCode int    // its code (default 400)
+
+	manyDialogs int // serve this many dialogs, alternating broadcast channels and groups
+	dialogFlood int // FLOOD_WAIT_0 answers before serving dialogs
+	dialogCalls int
+	historyN    int // getHistory calls
+	available   tg.ChatReactionsClass
+	emojiDocs   int // getCustomEmojiDocuments calls
 }
 
 func newWatchTG() *watchTG {
@@ -83,6 +88,28 @@ func (w *watchTG) serve(req bin.Encoder) (bin.Encoder, error) {
 			{Reaction: "❤️", StaticIcon: &tg.DocumentEmpty{}, AppearAnimation: &tg.DocumentEmpty{}, SelectAnimation: &tg.DocumentEmpty{},
 				ActivateAnimation: &tg.DocumentEmpty{}, EffectAnimation: &tg.DocumentEmpty{}},
 		}}, nil
+	case *tg.MessagesGetDialogsRequest:
+		if w.manyDialogs == 0 {
+			break
+		}
+		w.dialogCalls++
+		if w.dialogFlood > 0 {
+			w.dialogFlood--
+			return nil, tgerr.New(420, "FLOOD_WAIT_0")
+		}
+		out := &tg.MessagesDialogsSlice{Count: w.manyDialogs}
+		for i := 0; i < w.manyDialogs && len(out.Dialogs) < r.Limit; i++ {
+			top := 10000 - i
+			if r.OffsetID != 0 && top >= r.OffsetID {
+				continue
+			}
+			id := int64(2000 + i)
+			ch := &tg.Channel{ID: id, AccessHash: id * 10, Title: fmt.Sprintf("C%d", i), Broadcast: i%2 == 0, Megagroup: i%2 == 1, Photo: &tg.ChatPhotoEmpty{}}
+			out.Dialogs = append(out.Dialogs, &tg.Dialog{Peer: &tg.PeerChannel{ChannelID: id}, TopMessage: top, NotifySettings: tg.PeerNotifySettings{}})
+			out.Messages = append(out.Messages, &tg.Message{ID: top, PeerID: &tg.PeerChannel{ChannelID: id}, Date: top})
+			out.Chats = append(out.Chats, ch)
+		}
+		return out, nil
 	case *tg.UploadGetFileRequest:
 		if r.Offset > 0 {
 			return &tg.UploadFile{Type: &tg.StorageFileJpeg{}, Bytes: []byte{}}, nil
@@ -509,23 +536,49 @@ func TestWatchResolve(t *testing.T) {
 	}
 }
 
-func TestWatchChannelsAndSearch(t *testing.T) {
+func TestWatchChannelsScanInBackground(t *testing.T) {
 	e := newWatchEnv(t, fire10)
-	e.tg.member = true
-	list, err := e.w.Channels(ctx, false)
-	if err != nil || len(list) != 1 || list[0].ChannelID != 500 {
-		t.Fatalf("Channels = %+v, %v", list, err)
+	e.tg.manyDialogs, e.tg.dialogFlood = 250, 1
+	first, err := e.w.Channels(ctx, false)
+	if err != nil || !first.Loading {
+		t.Fatalf("first = %+v, %v", first, err)
 	}
+	eventually(t, "scan done", func() bool { l, _ := e.w.Channels(ctx, false); return !l.Loading })
+	list, _ := e.w.Channels(ctx, false)
+	// Every other dialog is a group, which is left out; flood waits are waited out and resumed.
+	if len(list.Channels) != 125 || list.UpdatedAt == 0 || list.Error != "" || list.Channels[0].ChannelID != 2000 {
+		t.Fatalf("list = %d channels, %+v", len(list.Channels), list.Error)
+	}
+	calls := e.tg.dialogCalls
+	if calls != 4 { // one flood, then 3 pages of 100
+		t.Fatalf("getDialogs calls = %d", calls)
+	}
+	if l, _ := e.w.Channels(ctx, false); l.Loading || e.tg.dialogCalls != calls {
+		t.Fatal("a fresh list should not rescan")
+	}
+	// The scanned channels are cached as peers, so a watch can be created on them.
+	if _, err := e.w.Known(ctx, 2002); err != nil {
+		t.Fatalf("Known = %v", err)
+	}
+	e.api.ready = false
+	if l, err := e.w.Channels(ctx, true); err != nil || len(l.Channels) != 125 {
+		t.Fatalf("offline with a list = %d, %v", len(l.Channels), err)
+	}
+}
+
+func TestWatchChannelsOfflineWithoutList(t *testing.T) {
+	e := newWatchEnv(t, fire10)
+	e.api.ready = false
+	if _, err := e.w.Channels(ctx, false); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("Channels = %v", err)
+	}
+}
+
+func TestWatchSearch(t *testing.T) {
+	e := newWatchEnv(t, fire10)
 	found, err := e.w.Search(ctx, "cha")
 	if err != nil || len(found) != 1 || found[0].Username != "chan" {
 		t.Fatalf("Search = %+v, %v", found, err)
-	}
-	e.api.ready = false
-	if _, err := e.w.Channels(ctx, false); err != nil {
-		t.Fatalf("cached list should not need the account: %v", err)
-	}
-	if _, err := e.w.Channels(ctx, true); !errors.Is(err, ErrNotReady) {
-		t.Fatalf("refresh = %v", err)
 	}
 }
 

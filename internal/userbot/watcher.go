@@ -16,7 +16,6 @@ import (
 	"time"
 
 	tgdown "github.com/gotd/td/telegram/downloader"
-	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 
@@ -129,7 +128,10 @@ type Watcher struct {
 
 	mu         sync.Mutex
 	dialogsAt  time.Time
-	dialogs    []ChannelInfo
+	dialogs    []ChannelInfo // last complete scan; nil before the first
+	partial    []ChannelInfo // the running scan's results so far
+	scanning   bool
+	scanErr    string
 	recent     map[int64]*recent
 	allReacts  []ReactionStat
 	photoMiss  map[int64]time.Time // channels whose photo could not be fetched recently
@@ -138,7 +140,7 @@ type Watcher struct {
 
 func NewWatcher(api API, st *store.Store, hub *events.Hub, n notify.Notifier, wakeDL func(), avatarDir string) *Watcher {
 	return &Watcher{api: api, st: st, hub: hub, notifier: n, wakeDL: wakeDL, avatarDir: avatarDir, wake: make(chan struct{}, 1),
-		Now: time.Now, MaxFlood: 300 * time.Second, DialogsTTL: 5 * time.Minute, RecentTTL: time.Minute,
+		Now: time.Now, MaxFlood: 300 * time.Second, DialogsTTL: 30 * time.Minute, RecentTTL: time.Minute,
 		recent: map[int64]*recent{}, photoMiss: map[int64]time.Time{}, photoSlots: make(chan struct{}, 2)}
 }
 
@@ -717,46 +719,210 @@ func infoOf(c *tg.Channel) ChannelInfo {
 	return ChannelInfo{ChannelID: c.ID, Title: c.Title, Username: c.Username, Participants: n}
 }
 
-// Channels lists the broadcast channels the account has joined (cached for DialogsTTL).
-func (w *Watcher) Channels(ctx context.Context, refresh bool) ([]ChannelInfo, error) {
-	w.mu.Lock()
-	if !refresh && w.dialogs != nil && w.Now().Sub(w.dialogsAt) < w.DialogsTTL {
-		out := w.dialogs
-		w.mu.Unlock()
-		return out, nil
+// ChannelList is the account's joined broadcast channels as far as the background scan got.
+type ChannelList struct {
+	Channels  []ChannelInfo `json:"channels"`
+	Loading   bool          `json:"loading"`    // a scan is running; Channels may be partial
+	UpdatedAt int64         `json:"updated_at"` // when the last complete scan finished; 0 for never
+	Error     string        `json:"error"`      // why the last scan stopped early
+}
+
+// Channels returns the joined broadcast channels known so far and starts a background scan of
+// the account's dialogs when the list is older than DialogsTTL (or refresh is set). Telegram
+// throttles messages.getDialogs hard, so the scan pages slowly, waits out every FLOOD_WAIT and
+// resumes where it stopped; the picker polls while Loading.
+func (w *Watcher) Channels(ctx context.Context, refresh bool) (ChannelList, error) {
+	if !w.api.WaitReady(ctx, 0) {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		if w.dialogs == nil {
+			return ChannelList{}, ErrNotReady
+		}
+		return w.channelList(), nil
 	}
-	w.mu.Unlock()
-	var out []ChannelInfo
-	err := w.api.With(ctx, func(api *tg.Client) error {
-		var seen []*tg.Channel
-		out = []ChannelInfo{}
-		err := dialogs.NewQueryBuilder(api).GetDialogs().BatchSize(100).ForEach(ctx, func(_ context.Context, e dialogs.Elem) error {
-			d, ok := e.Dialog.(*tg.Dialog)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	stale := w.dialogs == nil || w.Now().Sub(w.dialogsAt) >= w.DialogsTTL
+	if (refresh || stale) && !w.scanning {
+		w.scanning, w.scanErr = true, ""
+		go w.scanDialogs()
+	}
+	return w.channelList(), nil
+}
+
+// channelList snapshots the scan state; w.mu must be held.
+func (w *Watcher) channelList() ChannelList {
+	list := w.dialogs
+	if w.scanning && w.partial != nil {
+		list = w.partial
+	}
+	out := ChannelList{Channels: append([]ChannelInfo{}, list...), Loading: w.scanning, Error: w.scanErr}
+	if !w.dialogsAt.IsZero() {
+		out.UpdatedAt = w.dialogsAt.Unix()
+	}
+	return out
+}
+
+const (
+	dialogsPage   = 100
+	maxDialogWait = 5 * time.Minute
+)
+
+func (w *Watcher) scanDialogs() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	found, err := w.collectDialogs(ctx)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.scanning, w.partial = false, nil
+	if err != nil {
+		log.Printf("watch: dialogs scan: %v", err)
+		w.scanErr = watchReason(err)
+		return
+	}
+	w.dialogs, w.dialogsAt = found, w.Now()
+}
+
+// collectDialogs pages through messages.getDialogs, publishing partial results as it goes.
+func (w *Watcher) collectDialogs(ctx context.Context) ([]ChannelInfo, error) {
+	out := []ChannelInfo{}
+	seen := map[int64]bool{}
+	req := &tg.MessagesGetDialogsRequest{OffsetPeer: &tg.InputPeerEmpty{}, Limit: dialogsPage}
+	for page := 0; ; page++ {
+		var res tg.MessagesDialogsClass
+		err := w.api.With(ctx, func(api *tg.Client) error {
+			var err error
+			res, err = api.MessagesGetDialogs(ctx, req)
+			return err
+		})
+		if d, ok := tgerr.AsFloodWait(err); ok && d <= maxDialogWait {
+			log.Printf("watch: dialogs page %d: flood wait %s", page, d)
+			if !sleep(ctx, d+time.Second) {
+				return nil, ctx.Err()
+			}
+			page--
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var dlgs []tg.DialogClass
+		var msgs []tg.MessageClass
+		var chats []tg.ChatClass
+		var users []tg.UserClass
+		last := true
+		switch r := res.(type) {
+		case *tg.MessagesDialogs:
+			dlgs, msgs, chats, users = r.Dialogs, r.Messages, r.Chats, r.Users
+		case *tg.MessagesDialogsSlice:
+			dlgs, msgs, chats, users = r.Dialogs, r.Messages, r.Chats, r.Users
+			last = len(r.Dialogs) < dialogsPage
+		default:
+			return out, nil
+		}
+		channels := map[int64]*tg.Channel{}
+		for _, c := range chats {
+			if ch, ok := c.(*tg.Channel); ok {
+				channels[ch.ID] = ch
+			}
+		}
+		var keep []*tg.Channel
+		for _, dc := range dlgs {
+			d, ok := dc.(*tg.Dialog)
 			if !ok {
-				return nil
+				continue
 			}
 			pc, ok := d.Peer.(*tg.PeerChannel)
 			if !ok {
-				return nil
+				continue
 			}
-			c, ok := e.Entities.Channels()[pc.ChannelID]
-			if !ok || c.Min || !c.Broadcast || c.Left {
-				return nil
+			c := channels[pc.ChannelID]
+			if c == nil || c.Min || !c.Broadcast || c.Left || seen[c.ID] {
+				continue
 			}
-			seen = append(seen, c)
+			seen[c.ID] = true
+			keep = append(keep, c)
 			out = append(out, infoOf(c))
-			return nil
-		})
-		savePeers(ctx, w.st, w.Now, seen...)
-		return err
-	})
-	if err != nil {
-		return nil, userErr(err)
+		}
+		savePeers(ctx, w.st, w.Now, keep...)
+		w.mu.Lock()
+		w.partial = append([]ChannelInfo{}, out...)
+		w.mu.Unlock()
+		if last || len(dlgs) == 0 {
+			return out, nil
+		}
+		next, ok := dialogOffset(dlgs[len(dlgs)-1], msgs, channels, users)
+		if !ok {
+			return out, nil
+		}
+		next.Limit = dialogsPage
+		req = next
 	}
-	w.mu.Lock()
-	w.dialogs, w.dialogsAt = out, w.Now()
-	w.mu.Unlock()
-	return out, nil
+}
+
+// dialogOffset builds the request for the page after the dialog d (Telegram pages dialogs by
+// the date and id of each dialog's top message, and its peer).
+func dialogOffset(dc tg.DialogClass, msgs []tg.MessageClass, channels map[int64]*tg.Channel, users []tg.UserClass) (*tg.MessagesGetDialogsRequest, bool) {
+	d, ok := dc.(*tg.Dialog)
+	if !ok {
+		return nil, false
+	}
+	req := &tg.MessagesGetDialogsRequest{OffsetID: d.TopMessage}
+	for _, mc := range msgs {
+		if mc.GetID() != d.TopMessage {
+			continue
+		}
+		var peer tg.PeerClass
+		var date int
+		switch m := mc.(type) {
+		case *tg.Message:
+			peer, date = m.PeerID, m.Date
+		case *tg.MessageService:
+			peer, date = m.PeerID, m.Date
+		default:
+			continue
+		}
+		if samePeer(peer, d.Peer) {
+			req.OffsetDate = date
+			break
+		}
+	}
+	switch p := d.Peer.(type) {
+	case *tg.PeerUser:
+		var hash int64
+		for _, uc := range users {
+			if u, ok := uc.(*tg.User); ok && u.ID == p.UserID {
+				hash = u.AccessHash
+			}
+		}
+		req.OffsetPeer = &tg.InputPeerUser{UserID: p.UserID, AccessHash: hash}
+	case *tg.PeerChat:
+		req.OffsetPeer = &tg.InputPeerChat{ChatID: p.ChatID}
+	case *tg.PeerChannel:
+		c := channels[p.ChannelID]
+		if c == nil {
+			return nil, false
+		}
+		req.OffsetPeer = &tg.InputPeerChannel{ChannelID: c.ID, AccessHash: c.AccessHash}
+	default:
+		return nil, false
+	}
+	return req, true
+}
+
+func samePeer(a, b tg.PeerClass) bool {
+	switch x := a.(type) {
+	case *tg.PeerUser:
+		y, ok := b.(*tg.PeerUser)
+		return ok && x.UserID == y.UserID
+	case *tg.PeerChat:
+		y, ok := b.(*tg.PeerChat)
+		return ok && x.ChatID == y.ChatID
+	case *tg.PeerChannel:
+		y, ok := b.(*tg.PeerChannel)
+		return ok && x.ChannelID == y.ChannelID
+	}
+	return false
 }
 
 // Search finds public broadcast channels by name.

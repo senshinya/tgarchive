@@ -18,7 +18,7 @@ import (
 
 // WatchService is the channel watcher (userbot.Watcher).
 type WatchService interface {
-	Channels(ctx context.Context, refresh bool) ([]userbot.ChannelInfo, error)
+	Channels(ctx context.Context, refresh bool) (userbot.ChannelList, error)
 	Search(ctx context.Context, q string) ([]userbot.ChannelInfo, error)
 	Resolve(ctx context.Context, input string) (*userbot.ChannelInfo, error)
 	Known(ctx context.Context, id int64) (*store.Channel, error)
@@ -93,12 +93,12 @@ func (s *Server) listChannels(w http.ResponseWriter, r *http.Request) {
 		watchErr(w, err)
 		return
 	}
-	out, err := s.withWatched(r.Context(), list)
+	items, err := s.withWatched(r.Context(), list.Channels)
 	if err != nil {
 		storeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, map[string]any{"channels": items, "loading": list.Loading, "updated_at": list.UpdatedAt, "error": list.Error})
 }
 
 func (s *Server) searchChannels(w http.ResponseWriter, r *http.Request) {
