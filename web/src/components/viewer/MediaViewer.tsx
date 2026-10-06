@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { convMedia, errorMessage } from '../../api/client';
 import type { Message } from '../../api/types';
-import { senderName } from '../../lib/format';
+import { chatName } from '../../lib/format';
 import { useStore, type ViewerItem, type ViewerTarget } from '../../state/store';
 import { Spinner } from '../../ui/Spinner';
 import { VISUAL_KINDS, mainMedia, readyThumb } from '../media/util';
@@ -137,7 +137,7 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
   const titleOf = (it: ViewerItem) => {
     if (listed) return listed.title;
     const chat = store.chats.value.find((c) => c.id === (it.chatId ?? chatId));
-    return chat ? senderName(chat.sender) : '';
+    return chat ? chatName(chat) : '';
   };
 
   const [gallery, setGallery] = useState<GalleryModule | null>(loadedGallery);

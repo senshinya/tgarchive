@@ -19,7 +19,8 @@ function lastMsg(b: BubbleContent): Message {
 /**
  * Splits an ascending message list into date separators and sender groups. Messages of one
  * media group that are adjacent become a single album bubble. In a bot's merged timeline each
- * chat is a different sender, so a change of chat also starts a new group.
+ * chat is a different sender, so a change of chat also starts a new group; watched channel posts
+ * are never grouped.
  */
 export function groupMessages(messages: Message[], now: Date = new Date()): ListEntry[] {
   const sorted = [...messages].sort((a, b) => a.id - b.id);
@@ -47,7 +48,8 @@ export function groupMessages(messages: Message[], now: Date = new Date()): List
       else group[group.length - 1] = { kind: 'album', key: prev.key, msgs: [prev.msg, m] };
       continue;
     }
-    if (prev && (m.date - lastMsg(prev).date > GROUP_GAP_SECONDS || lastMsg(prev).chat_id !== m.chat_id)) flush();
+    // Channel posts stand alone, as in a Telegram channel: each is its own group with its own tail.
+    if (prev && (m.date - lastMsg(prev).date > GROUP_GAP_SECONDS || lastMsg(prev).chat_id !== m.chat_id || m.source === 'channel_watch')) flush();
     group.push({ kind: 'message', key: String(m.id), msg: m });
   }
   flush();

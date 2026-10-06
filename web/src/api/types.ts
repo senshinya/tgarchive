@@ -19,10 +19,34 @@ export interface Sender {
   has_avatar: boolean;
 }
 
+/** A watched channel as chats and watches carry it. */
+export interface ChannelRef {
+  channel_id: number;
+  title: string;
+  username: string;
+  has_avatar: boolean;
+}
+
+/** What the chat list knows about a channel conversation's watch. */
+export interface WatchBrief {
+  id: number;
+  enabled: boolean;
+  status: 'ok' | 'error';
+  error: string;
+  window_minutes: number;
+  pending: number;
+  hits: number;
+}
+
 export interface Chat {
   id: number;
+  /** private: a bot × sender chat; channel: a watched channel (bot_id 0, empty sender). */
+  kind: 'private' | 'channel';
   bot_id: number;
   sender: Sender;
+  channel: ChannelRef | null;
+  /** The channel's watch; null for private chats and for channels no longer watched. */
+  watch: WatchBrief | null;
   last_message_at: number;
   last_kind: string;
   last_text: string;
@@ -93,7 +117,7 @@ export interface Message {
   id: number;
   chat_id: number;
   tg_message_id: number;
-  source: 'bot_update' | 'userbot_fetch';
+  source: 'bot_update' | 'userbot_fetch' | 'channel_watch';
   media_group_id: string;
   date: number;
   edit_date: number;
@@ -109,6 +133,86 @@ export interface Message {
   media: Media[];
   /** Present when the message is a Telegraph link with an archiving job. */
   article?: ArticleSummary;
+  /** Counters when a watched channel post was archived (channel_watch only). */
+  stats?: PostStats;
+}
+
+/** One reaction counter; key is the emoji, "custom:<id>" or "paid". */
+export interface ReactionStat {
+  key: string;
+  emoji?: string;
+  custom_id?: string;
+  /** The custom emoji's sticker media and its type (tgs / webm / webp). */
+  media_id?: number;
+  mime?: string;
+  count: number;
+}
+
+export interface PostStats {
+  reactions: ReactionStat[];
+  total: number;
+  views: number;
+  forwards: number;
+  replies: number;
+  hit?: { at: number; reasons: string[] };
+}
+
+/** A channel as the watch picker lists it. */
+export interface ChannelInfo {
+  channel_id: number;
+  title: string;
+  username: string;
+  participants: number;
+  watched: boolean;
+}
+
+export type CondCmp = 'gte' | 'lte';
+export type CondLeaf =
+  | { metric: 'reaction'; key: string; cmp: CondCmp; value: number }
+  | { metric: 'total' | 'views' | 'forwards' | 'replies'; cmp: CondCmp; value: number }
+  | { metric: 'ratio'; num: string; den: 'total' | 'views'; cmp: CondCmp; value: number }
+  | { metric: 'type'; cmp: 'is' | 'not'; value: 'photo' | 'video' | 'file' | 'text' }
+  | { metric: 'text'; cmp: 'contains' | 'not_contains'; value: string };
+export interface CondGroup {
+  op: 'and' | 'or';
+  items: CondNode[];
+}
+export type CondNode = CondGroup | CondLeaf;
+
+export interface Watch {
+  id: number;
+  channel: ChannelRef;
+  chat_id: number;
+  window_minutes: number;
+  cond: CondGroup | null;
+  enabled: boolean;
+  status: 'ok' | 'error';
+  error: string;
+  pending: number;
+  hits: number;
+  created_at: number;
+}
+
+export interface WatchInput {
+  channel_id: number;
+  window_minutes: number;
+  cond: CondGroup;
+  enabled: boolean;
+}
+
+export interface TestPost {
+  tg_message_id: number;
+  date: number;
+  kind: string;
+  text: string;
+  stats: PostStats;
+  hit: boolean;
+  reasons: string[];
+}
+
+export interface WatchTestResult {
+  posts: TestPost[];
+  reactions_available: { all: boolean; list: ReactionStat[] };
 }
 
 export type ArticleState = 'queued' | 'fetching' | 'fetched' | 'failed';
@@ -252,6 +356,7 @@ export type ArchiveEvent =
   | { type: 'media.updated'; data: { media_id: number; message_ids: number[] | null } }
   | { type: 'bot.status'; data: { bot_id: number; status: string; error: string } }
   | { type: 'download.progress'; data: { items: DownloadProgress[]; speed: number } }
+  | { type: 'watch.updated'; data: { watch_id: number } }
   /** Synthetic, never sent by the server: the store broadcasts it to `onEvent` listeners after it
    * resynced following a reconnect, so views holding their own fetched data refetch it. */
   | { type: 'resync'; data: null };
@@ -263,4 +368,5 @@ export const EVENT_TYPES = [
   'media.updated',
   'bot.status',
   'download.progress',
+  'watch.updated',
 ] as const;

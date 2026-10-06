@@ -130,7 +130,7 @@ type ReceiptInfo struct {
 func (s *Store) GetReceiptInfo(ctx context.Context, messageID int64) (*ReceiptInfo, error) {
 	var ri ReceiptInfo
 	err := s.db.QueryRowContext(ctx, `
-		SELECT m.id, c.bot_id, c.sender_id, m.tg_message_id, m.source, m.receipt
+		SELECT m.id, COALESCE(c.bot_id, 0), COALESCE(c.sender_id, 0), m.tg_message_id, m.source, m.receipt
 		FROM messages m JOIN chats c ON c.id = m.chat_id WHERE m.id = ? AND m.deleted_at = 0`, messageID,
 	).Scan(&ri.MessageID, &ri.BotID, &ri.TgChatID, &ri.TgMessageID, &ri.Source, &ri.Receipt)
 	if errors.Is(err, sql.ErrNoRows) {

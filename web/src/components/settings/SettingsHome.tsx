@@ -1,7 +1,7 @@
-import { KeyRound, Plus, Smartphone } from 'lucide-preact';
+import { KeyRound, Plus, Radio, Smartphone } from 'lucide-preact';
 import { useEffect, useState } from 'preact/hooks';
 import { ApiError, avatarUrl, errorMessage } from '../../api/client';
-import type { Bot, TelegramApp, UserbotInfo } from '../../api/types';
+import type { Bot, TelegramApp, UserbotInfo, Watch } from '../../api/types';
 import { botName } from '../../lib/format';
 import { navigate } from '../../lib/router';
 import { useStore } from '../../state/store';
@@ -45,12 +45,17 @@ export function SettingsHome() {
   const store = useStore();
   const [app, setApp] = useState<TelegramApp | null>(null);
   const [userbot, setUserbot] = useState<UserbotInfo | null | 'unavailable'>(null);
+  const [watches, setWatches] = useState<Watch[] | null | 'unavailable'>(null);
 
   useEffect(() => {
     void store.loadBots();
     store.api.telegramApp().then(setApp, (e) => store.showToast(errorMessage(e)));
     store.api.userbot().then(setUserbot, (e) => {
       if (e instanceof ApiError && e.status === 404) setUserbot('unavailable');
+      else store.showToast(errorMessage(e));
+    });
+    store.api.watches().then(setWatches, (e) => {
+      if (e instanceof ApiError && e.status === 404) setWatches('unavailable');
       else store.showToast(errorMessage(e));
     });
   }, []);
@@ -64,6 +69,13 @@ export function SettingsHome() {
   let userbotSubtitle = '加载中…';
   if (userbot === 'unavailable') userbotSubtitle = '未启用';
   else if (userbot) userbotSubtitle = userbot.state === 'ready' && userbot.name ? `已登录 · ${userbot.name}` : USERBOT_STATE[userbot.state] ?? userbot.state;
+
+  let watchSubtitle = '加载中…';
+  if (watches === 'unavailable') watchSubtitle = '未启用';
+  else if (watches) {
+    const errors = watches.filter((w) => w.enabled && w.status === 'error').length;
+    watchSubtitle = watches.length === 0 ? '按 reaction 等条件自动存档频道帖子' : `${watches.length} 个监听${errors ? ` · ${errors} 个出错` : ''}`;
+  }
 
   return (
     <SettingsShell title="管理" back={{ name: 'home' }}>
@@ -86,6 +98,9 @@ export function SettingsHome() {
           subtitle={userbotSubtitle}
           onClick={() => navigate({ name: 'settings-userbot' })}
         />
+        {watches !== 'unavailable' && (
+          <ListItem icon={<Radio size={24} />} title="频道监听" subtitle={watchSubtitle} onClick={() => navigate({ name: 'settings-watches' })} />
+        )}
       </Section>
     </SettingsShell>
   );

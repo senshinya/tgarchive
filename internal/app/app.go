@@ -46,6 +46,7 @@ type App struct {
 	sup     *botapiserver.Supervisor
 	ub      *userbot.Service
 	fetcher *userbot.Fetcher
+	watcher *userbot.Watcher
 	tw      *telegraph.Worker
 	media   string
 	wg      sync.WaitGroup
@@ -95,6 +96,7 @@ func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer, w
 	dl.Register("mt", &userbot.MTSource{API: ub})
 	dl.Register("web", downloader.NewWebSource(cfg.MediaMaxBytes, webDialCheck))
 	fetcher := userbot.NewFetcher(ub, st, rc, clients, hub, dl.Wake, mediaDir)
+	watcher := userbot.NewWatcher(ub, st, hub, notifier, dl.Wake, avatarDir)
 	tw := telegraph.NewWorker(st, telegraph.NewClient(cfg.TelegraphAPIURL), rc, hub, dl.Wake)
 	av := &avatars.Refresher{Store: st, Clients: clients, Mapper: mapper, Dir: avatarDir}
 	mgr := collector.New(ctx, collector.Deps{
@@ -108,20 +110,21 @@ func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer, w
 	}
 	srv := &httpapi.Server{
 		Cfg: cfg, Store: st, Box: box, Clients: clients, Manager: mgr, Downloader: dl, Hub: hub, Avatars: av,
-		TgApp: tg, BotAPI: sup, Userbot: ub,
+		TgApp: tg, BotAPI: sup, Userbot: ub, Watcher: watcher,
 		Web: web.FS(), MediaDir: mediaDir, AvatarDir: avatarDir, HTTP: hc, Now: time.Now,
 	}
 	return &App{Handler: srv.Handler(), ctx: ctx, cancel: cancel, st: st, mgr: mgr, dl: dl, av: av, mapper: mapper, tg: tg, sup: sup,
-		ub: ub, fetcher: fetcher, tw: tw, media: mediaDir}, nil
+		ub: ub, fetcher: fetcher, watcher: watcher, tw: tw, media: mediaDir}, nil
 }
 
 func (a *App) Start() error {
 	a.wg.Add(2)
 	go func() { defer a.wg.Done(); a.dl.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.maintain() }()
-	a.wg.Add(3)
+	a.wg.Add(4)
 	go func() { defer a.wg.Done(); a.ub.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.fetcher.Run(a.ctx) }()
+	go func() { defer a.wg.Done(); a.watcher.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.tw.Run(a.ctx) }()
 	if a.sup != nil {
 		creds, err := a.tg.Load(a.ctx)
@@ -190,6 +193,7 @@ func (a *App) maintain() {
 			log.Printf("maintenance: removed %d stale bot api cache files", n)
 		}
 		a.av.RefreshAll(a.ctx)
+		a.watcher.RefreshChannels(a.ctx)
 		t.Reset(24 * time.Hour)
 	}
 }

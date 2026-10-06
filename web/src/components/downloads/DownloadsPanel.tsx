@@ -2,7 +2,7 @@ import { ArrowDownToLine, File, Film, Image, Music, RotateCw } from 'lucide-prea
 import type { ComponentChildren } from 'preact';
 import { useEffect } from 'preact/hooks';
 import type { ActiveDownload, DownloadItem } from '../../api/types';
-import { formatProgress, formatSize, kindLabel, peerColor, senderName } from '../../lib/format';
+import { formatProgress, formatSize, kindLabel, peerColor, chatName } from '../../lib/format';
 import { convRoute, navigate } from '../../lib/router';
 import { useStore } from '../../state/store';
 import { ProgressRing } from '../../ui/ProgressRing';
@@ -20,11 +20,12 @@ function KindIcon({ kind }: { kind: string }) {
 function DownloadRow({ item, progress, children }: { item: DownloadItem; progress?: { done: number; total: number }; children?: ComponentChildren }) {
   const store = useStore();
   const chat = store.chats.value.find((c) => c.id === item.chat_id);
-  const who = chat ? senderName(chat.sender) : '';
+  const who = chat ? chatName(chat) : '';
   // Opens the conversation the file belongs to — the bot timeline in bot mode — and asks it to
   // scroll to the message once it is shown.
   const open = () => {
-    const key = store.listMode.value === 'bot' && chat ? -chat.bot_id : item.chat_id;
+    // Channel conversations belong to no bot: botKeyOf gives 0 and the chat itself opens.
+    const key = (store.listMode.value === 'bot' && store.botKeyOf(item.chat_id)) || item.chat_id;
     store.jumpTo.value = { key, messageId: item.message_id };
     // fromList: the conversation's back button then returns here instead of going home.
     navigate(convRoute(key), { fromList: true });

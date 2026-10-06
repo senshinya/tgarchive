@@ -1,4 +1,5 @@
-import { ArrowLeft, Images } from 'lucide-preact';
+import { ArrowLeft, Images, SlidersHorizontal } from 'lucide-preact';
+import type { Chat } from '../../api/types';
 import { avatarUrl } from '../../api/client';
 import { botName, senderName } from '../../lib/format';
 import { navigate } from '../../lib/router';
@@ -30,6 +31,7 @@ function HeaderPeer({ chatId }: { chatId: number }) {
     );
   }
   const chat = store.chats.value.find((c) => c.id === chatId);
+  if (chat?.kind === 'channel') return <ChannelPeer chat={chat} />;
   const bot = chat ? store.botsById.value.get(chat.bot_id) : undefined;
   const name = chat ? senderName(chat.sender) : '会话';
   return (
@@ -50,11 +52,36 @@ function HeaderPeer({ chatId }: { chatId: number }) {
   );
 }
 
+/** The status line of a watched channel's conversation. */
+export function channelStatus(chat: Chat): string {
+  const w = chat.watch;
+  if (!w) return '未监听';
+  if (!w.enabled) return '已停用';
+  if (w.status === 'error') return `出错：${w.error}`;
+  return `监听中 · 观察 ${w.pending} 条 · 窗口 ${w.window_minutes} 分钟`;
+}
+
+function ChannelPeer({ chat }: { chat: Chat }) {
+  const ch = chat.channel;
+  const name = ch?.title || '频道';
+  const failing = chat.watch?.enabled && chat.watch.status === 'error';
+  return (
+    <>
+      <Avatar name={name} peerId={ch?.channel_id ?? chat.id} src={ch?.has_avatar ? avatarUrl('channels', ch.channel_id) : null} size="medium" />
+      <span class="MiddleHeader-text">
+        <span class="MiddleHeader-title">{name}</span>
+        <span class={`MiddleHeader-status${failing ? ' error' : ''}`}>{channelStatus(chat)}</span>
+      </span>
+    </>
+  );
+}
+
 function MiddleHeader({ chatId }: { chatId: number }) {
   const store = useStore();
   const toggleShared = () => {
     store.sharedMediaOpen.value = !store.sharedMediaOpen.value;
   };
+  const watchId = store.chats.value.find((c) => c.id === chatId)?.watch?.id ?? 0;
   // A chat opened from the list pushed a `{ fromList: true }` history entry (ChatsPanel), so
   // going back lands on whatever was there before (usually "/") without adding a fresh entry —
   // keeping Android's hardware back button in sync. A deep link (no such marker) has nothing to
@@ -72,6 +99,11 @@ function MiddleHeader({ chatId }: { chatId: number }) {
       <button type="button" class="MiddleHeader-info" onClick={toggleShared}>
         <HeaderPeer chatId={chatId} />
       </button>
+      {watchId > 0 && (
+        <IconButton label="监听设置" onClick={() => navigate({ name: 'settings-watch', watchId })}>
+          <SlidersHorizontal size={22} />
+        </IconButton>
+      )}
       <IconButton label="共享媒体" onClick={toggleShared}>
         <Images size={24} />
       </IconButton>

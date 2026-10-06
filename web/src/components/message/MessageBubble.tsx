@@ -7,7 +7,8 @@ import { useStore } from '../../state/store';
 import { ArticleCard } from '../article/ArticleCard';
 import { Album } from '../media/Album';
 import { MessageMedia } from '../media/MessageMedia';
-import { VISUAL_KINDS, mainMedia } from '../media/util';
+import { VISUAL_KINDS, extraString, mainMedia } from '../media/util';
+import { PostFooter } from '../watch/PostFooter';
 import { Appendix, ForwardHeader, MessageMeta, OriginHeader, ReplyQuote } from './MessageParts';
 import { RichText } from './RichText';
 import './message.scss';
@@ -54,7 +55,10 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
   const visual = album ? msgs.every((m) => m.kind === 'photo' || m.kind === 'video') : VISUAL_KINDS.includes(head.kind);
   const hasHeader = showName || Boolean(head.forward_origin) || head.source === 'userbot_fetch';
   const hasReply = head.reply_to_tg_message_id > 0;
-  const mediaOnly = visual && !caption && !hasHeader && !hasReply;
+  // A watched channel post: its counters as archived, shown Telegram-channel style.
+  const post = head.source === 'channel_watch' ? (last.stats ?? head.stats) : undefined;
+  const hasFooter = Boolean(post) && !noBubble;
+  const mediaOnly = visual && !caption && !hasHeader && !hasReply && !hasFooter;
   const unsupported = !album && head.kind === 'other';
   const solid = !noBubble && !mediaOnly;
   const editDate = Math.max(...msgs.map((m) => m.edit_date));
@@ -85,10 +89,11 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
     .filter(Boolean)
     .join(' ');
 
+  const metaProps = { date: last.date, editDate, views: post?.views, author: post ? extraString(head, 'post_author') : undefined };
   let meta;
   if (caption || unsupported) meta = null;
-  else if (visual || noBubble) meta = <MessageMeta date={last.date} editDate={editDate} variant="overlay" />;
-  else meta = <MessageMeta date={last.date} editDate={editDate} variant="standalone" />;
+  else if ((visual || noBubble) && !hasFooter) meta = <MessageMeta {...metaProps} variant="overlay" />;
+  else meta = <MessageMeta {...metaProps} variant="standalone" />;
 
   return (
     <div class={classes} data-message-id={head.id}>
@@ -128,9 +133,10 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
           <div class="text-content" dir="auto">
             {caption ? <RichText text={caption.text} entities={caption.entities} /> : <span class="unsupported">不支持的消息类型</span>}
             {!album && head.article && <ArticleCard msg={head} />}
-            <MessageMeta date={last.date} editDate={editDate} variant="inline" />
+            <MessageMeta {...metaProps} variant="inline" />
           </div>
         )}
+        {post && hasFooter && <PostFooter stats={post} />}
         {meta}
         {solid && bubble.last && <Appendix />}
       </div>

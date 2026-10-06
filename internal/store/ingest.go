@@ -12,9 +12,13 @@ import (
 type IngestInput struct {
 	BotID  int64
 	Sender model.Sender
-	Msg    *model.Message
-	Offset int64 // when > 0, bots.update_offset advances to it in the same transaction
-	Now    int64
+	// ChannelID, when set, files the message in that watched channel's conversation instead of a
+	// bot × sender chat (BotID and Sender are then unused); Stats is its stats_json.
+	ChannelID int64
+	Stats     string
+	Msg       *model.Message
+	Offset    int64 // when > 0, bots.update_offset advances to it in the same transaction
+	Now       int64
 	// TelegraphPath, when set, queues a Telegraph job for the message in the same transaction,
 	// but only if the message is newly created (an edit never queues a second snapshot).
 	TelegraphPath string
@@ -50,22 +54,23 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 	}
 
 	err = s.withTx(ctx, func(tx *sql.Tx) error {
-		snd := in.Sender
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO senders (tg_user_id, first_name, last_name, username, updated_at) VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT (tg_user_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name,
-				username = excluded.username, updated_at = excluded.updated_at`,
-			snd.TgUserID, snd.FirstName, snd.LastName, snd.Username, in.Now); err != nil {
-			return err
-		}
-
-		err := tx.QueryRowContext(ctx, "SELECT id FROM chats WHERE bot_id = ? AND sender_id = ?", in.BotID, snd.TgUserID).Scan(&res.ChatID)
-		if errors.Is(err, sql.ErrNoRows) {
-			if err := tx.QueryRowContext(ctx, "INSERT INTO chats (bot_id, sender_id) VALUES (?, ?) RETURNING id", in.BotID, snd.TgUserID).Scan(&res.ChatID); err != nil {
+		if in.ChannelID != 0 {
+			var watched, n int
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM channel_watches WHERE channel_id = ?", in.ChannelID).Scan(&watched); err != nil {
 				return err
 			}
-			res.ChatCreated = true
-		} else if err != nil {
+			if watched == 0 {
+				return ErrNoWatch
+			}
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM chats WHERE channel_id = ?", in.ChannelID).Scan(&n); err != nil {
+				return err
+			}
+			id, err := channelChat(ctx, tx, in.ChannelID, 0)
+			if err != nil {
+				return err
+			}
+			res.ChatID, res.ChatCreated = id, n == 0
+		} else if err := privateChat(ctx, tx, in, res); err != nil {
 			return err
 		}
 
@@ -76,10 +81,12 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 		case errors.Is(err, sql.ErrNoRows):
 			if err := tx.QueryRowContext(ctx, `
 				INSERT INTO messages (chat_id, tg_message_id, source, media_group_id, date, edit_date, kind, text, entities_json,
-					forward_origin_json, reply_to_tg_message_id, origin_chat_id, origin_chat_title, origin_link, extra_json, raw_format, raw_json)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+					forward_origin_json, reply_to_tg_message_id, origin_chat_id, origin_chat_title, origin_link, extra_json, raw_format, raw_json,
+					stats_json)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 				res.ChatID, m.TgMessageID, m.Source, m.MediaGroupID, m.Date, m.EditDate, string(m.Kind), m.Text, string(entJSON),
 				fwd, m.ReplyToTgMessageID, m.OriginChatID, m.OriginChatTitle, m.OriginLink, string(m.Extra), m.RawFormat, string(m.Raw),
+				in.Stats,
 			).Scan(&res.MessageID); err != nil {
 				return err
 			}
@@ -106,8 +113,9 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 		default:
 			res.MessageID = existing
 			if _, err := tx.ExecContext(ctx, `
-				UPDATE messages SET edit_date = ?, kind = ?, text = ?, entities_json = ?, extra_json = ?, raw_json = ? WHERE id = ?`,
-				m.EditDate, string(m.Kind), m.Text, string(entJSON), string(m.Extra), string(m.Raw), existing); err != nil {
+				UPDATE messages SET edit_date = ?, kind = ?, text = ?, entities_json = ?, extra_json = ?, raw_json = ?,
+					stats_json = CASE WHEN ? != '' THEN ? ELSE stats_json END WHERE id = ?`,
+				m.EditDate, string(m.Kind), m.Text, string(entJSON), string(m.Extra), string(m.Raw), in.Stats, in.Stats, existing); err != nil {
 				return err
 			}
 			// Article media belong to the message's Telegraph snapshot, not to its Telegram content.
@@ -129,7 +137,7 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 
 		if res.Created {
 			lastAt := m.Date
-			if m.Source == model.SourceUserbotFetch {
+			if m.Source == model.SourceUserbotFetch || m.Source == model.SourceChannelWatch {
 				lastAt = in.Now
 			}
 			if _, err := tx.ExecContext(ctx, "UPDATE chats SET last_message_at = ? WHERE id = ? AND last_message_at < ?", lastAt, res.ChatID, lastAt); err != nil {
@@ -156,6 +164,29 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 	return res, nil
 }
 
+// privateChat finds or creates the bot × sender chat of in, refreshing the sender's names.
+func privateChat(ctx context.Context, tx *sql.Tx, in IngestInput, res *IngestResult) error {
+	snd := in.Sender
+	if _, err := tx.ExecContext(ctx, `
+			INSERT INTO senders (tg_user_id, first_name, last_name, username, updated_at) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (tg_user_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name,
+				username = excluded.username, updated_at = excluded.updated_at`,
+		snd.TgUserID, snd.FirstName, snd.LastName, snd.Username, in.Now); err != nil {
+		return err
+	}
+
+	err := tx.QueryRowContext(ctx, "SELECT id FROM chats WHERE bot_id = ? AND sender_id = ?", in.BotID, snd.TgUserID).Scan(&res.ChatID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.QueryRowContext(ctx, "INSERT INTO chats (bot_id, sender_id) VALUES (?, ?) RETURNING id", in.BotID, snd.TgUserID).Scan(&res.ChatID); err != nil {
+			return err
+		}
+		res.ChatCreated = true
+	} else if err != nil {
+		return err
+	}
+	return nil
+}
+
 // upsertMedia dedupes by dedupe_key. A failed row seen again is requeued; a not-yet-done row
 // takes the newest bot_id/source_ref because Bot API file_ids are only valid for the receiving bot.
 func upsertMedia(ctx context.Context, tx *sql.Tx, botID int64, md model.Media) (int64, error) {
@@ -175,9 +206,10 @@ func upsertMedia(ctx context.Context, tx *sql.Tx, botID int64, md model.Media) (
 	return id, err
 }
 
-// collectOrphans deletes media rows no message links to and returns their stored paths.
+// collectOrphans deletes media rows no message (nor custom emoji) links to and returns their stored paths.
 func collectOrphans(ctx context.Context, tx *sql.Tx) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, "SELECT id, path FROM media WHERE NOT EXISTS (SELECT 1 FROM message_media mm WHERE mm.media_id = media.id)")
+	rows, err := tx.QueryContext(ctx, `SELECT id, path FROM media WHERE NOT EXISTS (SELECT 1 FROM message_media mm WHERE mm.media_id = media.id)
+		AND NOT EXISTS (SELECT 1 FROM custom_emoji ce WHERE ce.media_id = media.id)`)
 	if err != nil {
 		return nil, err
 	}

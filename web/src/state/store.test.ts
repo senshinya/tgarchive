@@ -1,13 +1,73 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/client';
 import type { Message } from '../api/types';
-import { fakeApi, makeBot, makeChat, makeMedia, makeMessage } from '../test/fixtures';
-import { createStore } from './store';
+import { fakeApi, makeBot, makeChannelChat, makeChat, makeMedia, makeMessage } from '../test/fixtures';
+import { CHANNELS_FILTER, createStore } from './store';
 
 const page = (from: number, to: number, chat = 10): Message[] =>
   Array.from({ length: to - from + 1 }, (_, i) => makeMessage({ id: from + i, chat_id: chat }));
 
 const ids = (ms: Message[]) => ms.map((m) => m.id);
+
+describe('store: channel conversations', () => {
+  const setup = async () => {
+    const api = fakeApi({
+      bots: vi.fn(async () => [makeBot({ id: 1 }), makeBot({ id: 2 })]),
+      chats: vi.fn(async () => [
+        makeChannelChat({ id: 50, last_message_at: 300 }),
+        makeChat({ id: 10, bot_id: 1, last_message_at: 200 }),
+        makeChat({ id: 11, bot_id: 2, last_message_at: 400 }),
+      ]),
+    });
+    const s = createStore(api, { chatsReloadDelay: 0 });
+    await s.loadBots();
+    await s.loadChats();
+    return { s, api };
+  };
+
+  it('lists channels with everything, under the 频道 tab alone, and never under a bot', async () => {
+    const { s } = await setup();
+    expect(s.visibleChats.value.map((c) => c.id)).toEqual([50, 10, 11]);
+    s.botFilter.value = CHANNELS_FILTER;
+    expect(s.visibleChats.value.map((c) => c.id)).toEqual([50]);
+    s.botFilter.value = 1;
+    expect(s.visibleChats.value.map((c) => c.id)).toEqual([10]);
+  });
+
+  it('falls back to 全部 when the 频道 tab has nothing left', async () => {
+    const { s, api } = await setup();
+    s.botFilter.value = CHANNELS_FILTER;
+    api.chats = vi.fn(async () => [makeChat({ id: 10, bot_id: 1 })]);
+    await s.loadChats();
+    expect(s.effectiveBotFilter.value).toBe(0);
+  });
+
+  it('mixes bot timelines and channels by recency in bot mode, keeping channels out of bots', async () => {
+    const { s } = await setup();
+    expect(s.botModeRows.value.map((r) => (r.kind === 'bot' ? `b${r.entry.bot.id}` : `c${r.chat.id}`))).toEqual(['b2', 'c50', 'b1']);
+    expect(s.botEntries.value.find((e) => e.bot.id === 1)?.senders).toBe(1);
+    expect(s.botKeyOf(50)).toBe(0);
+  });
+
+  it('reloads the chat list on watch.updated', async () => {
+    const { s, api } = await setup();
+    await s.handleEvent({ type: 'watch.updated', data: { watch_id: 3 } });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(api.chats).toHaveBeenCalledTimes(2);
+  });
+
+  it('files a new channel post into the open channel conversation only', async () => {
+    const { s, api } = await setup();
+    api.messages = vi.fn(async () => []);
+    api.botMessages = vi.fn(async () => []);
+    await s.refreshLatest(50);
+    await s.refreshLatest(-1);
+    api.message = vi.fn(async (id: number) => makeMessage({ id, chat_id: 50, source: 'channel_watch' }));
+    await s.handleEvent({ type: 'message.created', data: { chat_id: 50, message_id: 9 } });
+    expect(s.conv(50).items.map((m) => m.id)).toEqual([9]);
+    expect(s.conv(-1).items).toEqual([]);
+  });
+});
 
 describe('store', () => {
   it('filters chats by the selected bot', async () => {

@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 import type { Api } from '../api/client';
-import type { Article, ArticleMedia, Bot, Chat, Media, Message } from '../api/types';
+import type { Article, ArticleMedia, Bot, ChannelInfo, Chat, Media, Message, Watch } from '../api/types';
 
 export function makeBot(over: Partial<Bot> = {}): Bot {
   return {
@@ -19,11 +19,48 @@ export function makeBot(over: Partial<Bot> = {}): Bot {
 export function makeChat(over: Partial<Chat> = {}): Chat {
   return {
     id: 10,
+    kind: 'private',
     bot_id: 1,
     sender: { tg_user_id: 42, first_name: 'Alice', last_name: '', username: 'alice', has_avatar: false },
+    channel: null,
+    watch: null,
     last_message_at: 1_790_000_000,
     last_kind: 'text',
     last_text: 'hello',
+    ...over,
+  };
+}
+
+/** A watched channel's conversation. */
+export function makeChannelChat(over: Partial<Chat> = {}): Chat {
+  return makeChat({
+    id: 50,
+    kind: 'channel',
+    bot_id: 0,
+    sender: { tg_user_id: 0, first_name: '', last_name: '', username: '', has_avatar: false },
+    channel: { channel_id: 500, title: 'News', username: 'news', has_avatar: false },
+    watch: { id: 3, enabled: true, status: 'ok', error: '', window_minutes: 30, pending: 2, hits: 5 },
+    ...over,
+  });
+}
+
+export function makeChannelInfo(over: Partial<ChannelInfo> = {}): ChannelInfo {
+  return { channel_id: 500, title: 'News', username: 'news', participants: 1200, watched: false, ...over };
+}
+
+export function makeWatch(over: Partial<Watch> = {}): Watch {
+  return {
+    id: 3,
+    channel: { channel_id: 500, title: 'News', username: 'news', has_avatar: false },
+    chat_id: 50,
+    window_minutes: 30,
+    cond: { op: 'and', items: [{ metric: 'reaction', key: '🔥', cmp: 'gte', value: 10 }] },
+    enabled: true,
+    status: 'ok',
+    error: '',
+    pending: 2,
+    hits: 5,
+    created_at: 1_790_000_000,
     ...over,
   };
 }
@@ -112,6 +149,17 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     userbotCode: vi.fn(async () => ({ state: 'ready' as const, phone: '+1', name: 'Me', tg_user_id: 5, error: '' })),
     userbotPassword: vi.fn(async () => ({ state: 'ready' as const, phone: '+1', name: 'Me', tg_user_id: 5, error: '' })),
     userbotLogout: vi.fn(async () => undefined),
+    channels: vi.fn(async () => []),
+    searchChannels: vi.fn(async () => []),
+    resolveChannel: vi.fn(async () => makeChannelInfo()),
+    testWatch: vi.fn(async () => ({ posts: [], reactions_available: { all: false, list: [] } })),
+    watches: vi.fn(async () => []),
+    watch: vi.fn(async (id: number) => makeWatch({ id })),
+    createWatch: vi.fn(async () => makeWatch()),
+    updateWatch: vi.fn(async (id: number) => makeWatch({ id })),
+    deleteWatch: vi.fn(async () => undefined),
+    watchSettings: vi.fn(async () => ({ poll_seconds: 60 })),
+    saveWatchSettings: vi.fn(async (poll_seconds: number) => ({ poll_seconds })),
   };
   return { ...base, ...over };
 }

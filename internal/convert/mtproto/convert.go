@@ -454,3 +454,15 @@ func or(v, def string) string {
 	}
 	return v
 }
+
+// CustomEmojiMedia turns a custom emoji document (messages.getCustomEmojiDocuments) into a
+// sticker media keyed like any other document, so a sticker message using it shares the file.
+func CustomEmojiMedia(d *tg.Document) (model.Media, error) {
+	msg := &model.Message{}
+	if err := document(msg, d, MediaRef{}, map[string]any{}); err != nil {
+		return model.Media{}, err
+	}
+	m := msg.Media[0]
+	m.Kind = "sticker"
+	return m, nil
+}
