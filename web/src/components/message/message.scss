@@ -375,3 +375,16 @@
   box-shadow: 0 1px 2px var(--color-default-shadow);
   animation: fade-in 0.2s ease-out;
 }
+
+.message-views {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  margin-right: 0.125rem;
+}
+
+.message-signature {
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -142,8 +142,9 @@ export interface ReactionStat {
   key: string;
   emoji?: string;
   custom_id?: string;
-  /** The custom emoji's sticker media. */
+  /** The custom emoji's sticker media and its type (tgs / webm / webp). */
   media_id?: number;
+  mime?: string;
   count: number;
 }
 

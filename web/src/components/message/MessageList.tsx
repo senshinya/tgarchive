@@ -30,6 +30,7 @@ function download(href: string) {
 }
 
 function senderInfo(chat: Chat | undefined, fallbackPeer: number): SenderInfo {
+  if (chat?.kind === 'channel') return { name: chat.channel?.title ?? '', peerId: chat.channel?.channel_id ?? fallbackPeer };
   return chat ? { name: senderName(chat.sender), peerId: chat.sender.tg_user_id } : { name: '', peerId: fallbackPeer };
 }
 

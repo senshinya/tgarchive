@@ -185,3 +185,48 @@ html.is-apple .ChatItem-subtitle .sender-name {
     background: var(--color-primary-shade);
   }
 }
+
+.left-header .watch-button {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--color-text-secondary);
+}
+
+.left-header .DownloadsButton + .watch-button {
+  margin-left: 0;
+}
+
+.watch-button + .ListModeSwitch {
+  margin-left: 0.25rem;
+}
+
+.BotTabs-icon {
+  flex-shrink: 0;
+}
+
+.ChannelItem {
+  .ChatItem-title {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ChatItem-channel-icon {
+    flex-shrink: 0;
+    color: var(--color-text-secondary);
+  }
+
+  &.selected .ChatItem-channel-icon,
+  &.selected .ChatItem-error {
+    color: inherit;
+  }
+}
+
+.ChatItem-error {
+  flex-shrink: 0;
+  display: flex;
+  color: var(--color-error);
+}

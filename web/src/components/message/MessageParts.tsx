@@ -1,16 +1,37 @@
-import { Lock } from 'lucide-preact';
+import { Eye, Lock } from 'lucide-preact';
 import type { ForwardOrigin, Message } from '../../api/types';
 import { safeHref } from '../../lib/entities';
 import { formatFullDate, formatTime, hashString, peerColor, previewText } from '../../lib/format';
+import { formatCount } from '../../lib/watchCond';
 import { extraString } from '../media/util';
 
 export type MetaVariant = 'inline' | 'overlay' | 'standalone';
 
-/** Time + 已编辑; inline floats at the end of text, overlay sits on media, standalone gets its own row. */
-export function MessageMeta({ date, editDate, variant }: { date: number; editDate: number; variant: MetaVariant }) {
+/** Time + 已编辑 (channel posts also: views, author signature); inline floats at the end of text,
+ * overlay sits on media, standalone gets its own row. */
+export function MessageMeta({
+  date,
+  editDate,
+  variant,
+  views,
+  author,
+}: {
+  date: number;
+  editDate: number;
+  variant: MetaVariant;
+  views?: number;
+  author?: string;
+}) {
   const title = editDate > 0 ? `${formatFullDate(date)}\n已编辑：${formatFullDate(editDate)}` : formatFullDate(date);
   return (
     <span class={`MessageMeta ${variant}`} title={title}>
+      {views !== undefined && (
+        <span class="message-views">
+          {formatCount(views)}
+          <Eye size={14} />
+        </span>
+      )}
+      {author && <span class="message-signature">{author}</span>}
       {editDate > 0 && <span class="message-edited">已编辑</span>}
       <span class="message-time">{formatTime(date)}</span>
     </span>

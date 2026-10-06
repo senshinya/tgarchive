@@ -235,7 +235,7 @@ func TestDeleteWatch(t *testing.T) {
 		t.Fatalf("chats after purge = %+v", chats)
 	}
 	got, _ := s.CustomEmojiMedia(ctx, []int64{77, 78})
-	if len(got) != 1 || got[77] != emoji {
+	if len(got) != 1 || got[77].MediaID != emoji || got[77].Mime != "image/webp" {
 		t.Fatalf("custom emoji = %v", got)
 	}
 	s.db.QueryRow("SELECT COUNT(*) FROM media").Scan(&n)

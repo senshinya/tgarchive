@@ -274,9 +274,15 @@ func (s *Store) AddWatchHit(ctx context.Context, id int64) error {
 	return err
 }
 
+// EmojiMedia is the sticker media of a registered custom emoji.
+type EmojiMedia struct {
+	MediaID int64
+	Mime    string
+}
+
 // CustomEmojiMedia maps custom emoji document ids to their media rows, for those registered.
-func (s *Store) CustomEmojiMedia(ctx context.Context, docIDs []int64) (map[int64]int64, error) {
-	out := map[int64]int64{}
+func (s *Store) CustomEmojiMedia(ctx context.Context, docIDs []int64) (map[int64]EmojiMedia, error) {
+	out := map[int64]EmojiMedia{}
 	if len(docIDs) == 0 {
 		return out, nil
 	}
@@ -285,17 +291,19 @@ func (s *Store) CustomEmojiMedia(ctx context.Context, docIDs []int64) (map[int64
 		args[i] = id
 	}
 	ph := strings.TrimSuffix(strings.Repeat("?,", len(docIDs)), ",")
-	rows, err := s.db.QueryContext(ctx, "SELECT document_id, media_id FROM custom_emoji WHERE document_id IN ("+ph+")", args...)
+	rows, err := s.db.QueryContext(ctx, `SELECT ce.document_id, ce.media_id, m.mime FROM custom_emoji ce JOIN media m ON m.id = ce.media_id
+		WHERE ce.document_id IN (`+ph+")", args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var d, m int64
-		if err := rows.Scan(&d, &m); err != nil {
+		var d int64
+		var e EmojiMedia
+		if err := rows.Scan(&d, &e.MediaID, &e.Mime); err != nil {
 			return nil, err
 		}
-		out[d] = m
+		out[d] = e
 	}
 	return out, rows.Err()
 }

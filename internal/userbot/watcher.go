@@ -62,6 +62,7 @@ type ReactionStat struct {
 	Emoji    string `json:"emoji,omitempty"`
 	CustomID string `json:"custom_id,omitempty"`
 	MediaID  int64  `json:"media_id,omitempty"`
+	Mime     string `json:"mime,omitempty"` // the custom emoji sticker's type (tgs / webm / webp)
 	Count    int    `json:"count"`
 }
 
@@ -529,7 +530,7 @@ func (w *Watcher) postStats(ctx context.Context, api *tg.Client, msgs []*tg.Mess
 		for i := range ps.Reactions {
 			if r := &ps.Reactions[i]; r.CustomID != "" {
 				id, _ := strconv.ParseInt(r.CustomID, 10, 64)
-				r.MediaID = media[id]
+				r.MediaID, r.Mime = media[id].MediaID, media[id].Mime
 			}
 		}
 	}
@@ -537,11 +538,11 @@ func (w *Watcher) postStats(ctx context.Context, api *tg.Client, msgs []*tg.Mess
 }
 
 // customEmoji maps custom emoji ids to media rows, registering unknown ones (best effort).
-func (w *Watcher) customEmoji(ctx context.Context, api *tg.Client, ids []int64) map[int64]int64 {
+func (w *Watcher) customEmoji(ctx context.Context, api *tg.Client, ids []int64) map[int64]store.EmojiMedia {
 	known, err := w.st.CustomEmojiMedia(ctx, ids)
 	if err != nil {
 		log.Printf("watch: custom emoji lookup: %v", err)
-		return map[int64]int64{}
+		return map[int64]store.EmojiMedia{}
 	}
 	var missing []int64
 	for _, id := range ids {
@@ -572,7 +573,7 @@ func (w *Watcher) customEmoji(ctx context.Context, api *tg.Client, ids []int64) 
 			log.Printf("watch: register custom emoji %d: %v", d.ID, err)
 			continue
 		}
-		known[d.ID] = id
+		known[d.ID] = store.EmojiMedia{MediaID: id, Mime: md.Mime}
 		added = true
 	}
 	if added && w.wakeDL != nil {
@@ -939,7 +940,7 @@ func (w *Watcher) available(ctx context.Context, api *tg.Client, ch *tg.Channel)
 			for i := range out.List {
 				if r := &out.List[i]; r.CustomID != "" {
 					id, _ := strconv.ParseInt(r.CustomID, 10, 64)
-					r.MediaID = media[id]
+					r.MediaID, r.Mime = media[id].MediaID, media[id].Mime
 				}
 			}
 		}
