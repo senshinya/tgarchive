@@ -316,6 +316,19 @@ func TestWatchSkipsPostsFirstSeenAfterTheirWindow(t *testing.T) {
 	}
 }
 
+func TestWatchShortWindowStillJudgesPostsSeenLate(t *testing.T) {
+	e := newWatchEnv(t, fire10)
+	e.st.UpdateWatch(ctx, e.watch, 1, fire10, true, 2)
+	e.tg.reacted(5, 0, false, 10, nil)
+	e.w.PollOnce(ctx)
+	e.tg.reacted(6, 0, false, 10, map[string]int{"🔥": 15}) // date = now + 6s
+	e.now = e.now.Add(150 * time.Second)                   // seen 84s after its 1-minute window
+	e.w.PollOnce(ctx)
+	if got := e.archived(t); !equalIDs(tgIDs(got), []int64{6}) {
+		t.Fatalf("archived = %v", tgIDs(got))
+	}
+}
+
 func TestWatchOnEmptyChannelSeesItsFirstPost(t *testing.T) {
 	e := newWatchEnv(t, fire10)
 	e.w.PollOnce(ctx)

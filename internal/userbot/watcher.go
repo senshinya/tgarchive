@@ -311,13 +311,17 @@ func (w *Watcher) poll(ctx context.Context, api *tg.Client, wv store.WatchView, 
 	if len(posts) > 0 {
 		window := int64(wv.WindowMinutes) * 60
 		now := w.Now().Unix()
+		// Polling only every so often, a post can be first seen just after a short window closed;
+		// those still get their one look. Only posts missed by more than a round (the account was
+		// offline) are skipped.
+		grace := int64((w.PollInterval(ctx) + 2*time.Minute) / time.Second)
 		pend := make([]store.Pending, 0, len(posts))
 		top := wv.LastSeenID
 		for _, m := range posts {
 			top = max(top, int64(m.ID))
 			// A post first seen after its window (the account was offline) was never observed:
 			// it is skipped rather than judged on counts gathered long after.
-			if int64(m.Date)+window <= now {
+			if int64(m.Date)+window+grace <= now {
 				continue
 			}
 			g, _ := m.GetGroupedID()
