@@ -751,7 +751,7 @@ func (w *Watcher) Channels(ctx context.Context, refresh bool) ([]ChannelInfo, er
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return nil, userErr(err)
 	}
 	w.mu.Lock()
 	w.dialogs, w.dialogsAt = out, w.Now()
@@ -777,7 +777,18 @@ func (w *Watcher) Search(ctx context.Context, q string) ([]ChannelInfo, error) {
 		savePeers(ctx, w.st, w.Now, found...)
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return nil, userErr(err)
+	}
+	return out, nil
+}
+
+// userErr turns a Telegram error into a user-facing one, keeping ErrNotReady recognisable.
+func userErr(err error) error {
+	if errors.Is(err, ErrNotReady) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return errors.New(watchReason(err))
 }
 
 var (
