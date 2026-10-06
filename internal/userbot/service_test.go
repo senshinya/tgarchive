@@ -366,6 +366,24 @@ func TestConcurrentUnauthorizedAlertsOnce(t *testing.T) {
 	}
 }
 
+// A 401 landing after the revocation's reconnect already moved the state back to connecting is
+// the same revocation: no second alert.
+func TestLateUnauthorizedAfterReconnectAlertsOnce(t *testing.T) {
+	f := newFakeTG()
+	f.authorized = true
+	e := newSvcEnv(t, f, true)
+	e.waitState(t, StateReady)
+	e.svc.mu.Lock()
+	gen := e.svc.logoutGen
+	e.svc.mu.Unlock()
+	e.svc.unauthorized(ctx, gen)
+	e.svc.setState(StateConnecting, "")
+	e.svc.unauthorized(ctx, gen)
+	if n := e.n.count(); n != 1 {
+		t.Fatalf("notifications = %d, want 1", n)
+	}
+}
+
 func TestSessionStoreEncrypts(t *testing.T) {
 	e := newSvcEnv(t, newFakeTG(), false)
 	ss := &sessionStore{st: e.st, box: e.box, now: e.svc.Now}
