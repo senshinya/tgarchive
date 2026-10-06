@@ -127,18 +127,19 @@ type Watcher struct {
 	DialogsTTL time.Duration
 	RecentTTL  time.Duration
 
-	mu        sync.Mutex
-	dialogsAt time.Time
-	dialogs   []ChannelInfo
-	recent    map[int64]*recent
-	allReacts []ReactionStat
-	photoMiss map[int64]time.Time // channels whose photo could not be fetched recently
+	mu         sync.Mutex
+	dialogsAt  time.Time
+	dialogs    []ChannelInfo
+	recent     map[int64]*recent
+	allReacts  []ReactionStat
+	photoMiss  map[int64]time.Time // channels whose photo could not be fetched recently
+	photoSlots chan struct{}
 }
 
 func NewWatcher(api API, st *store.Store, hub *events.Hub, n notify.Notifier, wakeDL func(), avatarDir string) *Watcher {
 	return &Watcher{api: api, st: st, hub: hub, notifier: n, wakeDL: wakeDL, avatarDir: avatarDir, wake: make(chan struct{}, 1),
 		Now: time.Now, MaxFlood: 300 * time.Second, DialogsTTL: 5 * time.Minute, RecentTTL: time.Minute,
-		recent: map[int64]*recent{}, photoMiss: map[int64]time.Time{}}
+		recent: map[int64]*recent{}, photoMiss: map[int64]time.Time{}, photoSlots: make(chan struct{}, 2)}
 }
 
 // Wake makes Run poll now (a watch was added or changed).
@@ -213,7 +214,7 @@ func (w *Watcher) pollWatch(ctx context.Context, wv store.WatchView) (stop bool)
 		sleep(ctx, min(d, w.MaxFlood))
 		return true
 	}
-	if err != nil && transient(err) {
+	if err != nil && watchTransient(err) {
 		if ctx.Err() == nil {
 			log.Printf("watch %d: %v", wv.ID, err)
 		}
@@ -228,6 +229,16 @@ func (w *Watcher) pollWatch(ctx context.Context, wv store.WatchView) (stop bool)
 		w.publish(wv.ID)
 	}
 	return false
+}
+
+// watchTransient reports errors a later round may not see: the connection going away, or
+// Telegram's own server-side failures (5xx, negative codes such as -503 Timeout). Only answers
+// about the channel itself put a watch into error.
+func watchTransient(err error) bool {
+	if e, ok := tgerr.As(err); ok && (e.Code >= 500 || e.Code < 0) {
+		return true
+	}
+	return transient(err)
 }
 
 func watchReason(err error) string {
@@ -283,25 +294,34 @@ func (w *Watcher) poll(ctx context.Context, api *tg.Client, wv store.WatchView, 
 		changed = true
 	}
 	if wv.LastSeenID == 0 {
-		// A watch only observes posts published after it was created.
+		// A watch only observes posts published after it was created (or re-enabled).
 		top, err := latestID(ctx, api, in)
-		if err != nil || top == 0 {
+		if err != nil {
 			return changed, err
 		}
-		return changed, w.st.AddPending(ctx, wv.ID, nil, top)
+		if top == 0 {
+			top = store.WatchStartEmpty
+		}
+		return true, w.st.SetWatchStart(ctx, wv.ID, top)
 	}
-	posts, err := newPosts(ctx, api, in, int(wv.LastSeenID))
+	posts, err := newPosts(ctx, api, in, int(max(wv.LastSeenID, 0)))
 	if err != nil {
 		return changed, err
 	}
 	if len(posts) > 0 {
 		window := int64(wv.WindowMinutes) * 60
+		now := w.Now().Unix()
 		pend := make([]store.Pending, 0, len(posts))
 		top := wv.LastSeenID
 		for _, m := range posts {
+			top = max(top, int64(m.ID))
+			// A post first seen after its window (the account was offline) was never observed:
+			// it is skipped rather than judged on counts gathered long after.
+			if int64(m.Date)+window <= now {
+				continue
+			}
 			g, _ := m.GetGroupedID()
 			pend = append(pend, store.Pending{TgMessageID: int64(m.ID), GroupedID: g, Date: int64(m.Date), Deadline: int64(m.Date) + window})
-			top = max(top, int64(m.ID))
 		}
 		if err := w.st.AddPending(ctx, wv.ID, pend, top); err != nil {
 			return changed, err
@@ -419,7 +439,11 @@ func (w *Watcher) judge(ctx context.Context, api *tg.Client, wv store.WatchView,
 			}
 			st := statsOf(g.msgs, convs)
 			if cond.Eval(st) {
-				if err := w.archive(ctx, api, wv, ch, g.msgs, convs, cond.Explain(st), now); err != nil {
+				err := w.archive(ctx, api, wv, ch, g.msgs, convs, cond.Explain(st), now)
+				if errors.Is(err, store.ErrNoWatch) {
+					return changed, nil // deleted while this poll ran
+				}
+				if err != nil {
 					return changed, err
 				}
 				done = true
@@ -590,6 +614,7 @@ func (w *Watcher) archive(ctx context.Context, api *tg.Client, wv store.WatchVie
 	if err != nil {
 		return err
 	}
+	created := false
 	for _, c := range convs {
 		c.Source = model.SourceChannelWatch
 		ir, err := w.st.Ingest(ctx, store.IngestInput{ChannelID: ch.ID, Msg: c, Stats: string(b), Now: now})
@@ -598,12 +623,15 @@ func (w *Watcher) archive(ctx context.Context, api *tg.Client, wv store.WatchVie
 		}
 		typ := "message.updated"
 		if ir.Created {
-			typ = "message.created"
+			typ, created = "message.created", true
 		}
 		w.hub.Publish(events.Event{Type: typ, Data: map[string]int64{"chat_id": ir.ChatID, "message_id": ir.MessageID}})
 	}
-	if err := w.st.AddWatchHit(ctx, wv.ID); err != nil {
-		return err
+	// A retry after a partial failure re-archives the same post: count it once.
+	if created {
+		if err := w.st.AddWatchHit(ctx, wv.ID); err != nil {
+			return err
+		}
 	}
 	if w.wakeDL != nil {
 		w.wakeDL()
@@ -977,24 +1005,45 @@ func (w *Watcher) allReactions(ctx context.Context, api *tg.Client) []ReactionSt
 }
 
 // ChannelPhoto stores a channel's small profile photo at avatars/channels/<id>.jpg (removing a
-// stale one when the channel has no photo) and records it on the channel when it is watched.
+// stale one when the channel has no photo) and records it on the channel when it is stored
+// (picker-only channels just get the file).
 // Failures are remembered for ten minutes so a missing photo is not refetched on every request.
 func (w *Watcher) ChannelPhoto(ctx context.Context, id int64) (string, error) {
+	return w.channelPhoto(ctx, id, false)
+}
+
+// channelPhoto is ChannelPhoto; force refetches a photo already on disk (daily refresh).
+func (w *Watcher) channelPhoto(ctx context.Context, id int64, force bool) (string, error) {
 	w.mu.Lock()
 	if t, ok := w.photoMiss[id]; ok && w.Now().Sub(t) < 10*time.Minute {
 		w.mu.Unlock()
 		return "", store.ErrNotFound
 	}
 	w.mu.Unlock()
+	// At most two photo fetches at a time: a picker full of channels must not flood the account
+	// the poller and the fetcher share.
+	select {
+	case w.photoSlots <- struct{}{}:
+		defer func() { <-w.photoSlots }()
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 	rel := filepath.Join("channels", fmt.Sprintf("%d.jpg", id))
 	dst := filepath.Join(w.avatarDir, rel)
+	if _, err := os.Stat(dst); err == nil && !force {
+		// Already on disk (from the picker, or a request that waited in front of this one).
+		if serr := w.st.SetChannelAvatar(ctx, id, rel); serr != nil && !errors.Is(serr, store.ErrNotFound) {
+			log.Printf("watch: save channel %d avatar: %v", id, serr)
+		}
+		return rel, nil
+	}
 	has := false
 	err := w.api.With(ctx, func(api *tg.Client) error {
 		ch, err := w.channel(ctx, api, id)
 		if err != nil {
 			return err
 		}
-		if err := w.st.UpsertChannel(ctx, store.Channel{ChannelID: ch.ID, Title: ch.Title, Username: ch.Username}, w.Now().Unix()); err != nil {
+		if _, err := w.st.RefreshChannelInfo(ctx, store.Channel{ChannelID: ch.ID, Title: ch.Title, Username: ch.Username}, w.Now().Unix()); err != nil {
 			return err
 		}
 		photo, ok := ch.Photo.(*tg.ChatPhoto)
@@ -1060,7 +1109,7 @@ func (w *Watcher) RefreshChannels(ctx context.Context) {
 		w.mu.Lock()
 		delete(w.photoMiss, id)
 		w.mu.Unlock()
-		if _, err := w.ChannelPhoto(ctx, id); err != nil && !errors.Is(err, store.ErrNotFound) && ctx.Err() == nil {
+		if _, err := w.channelPhoto(ctx, id, true); err != nil && !errors.Is(err, store.ErrNotFound) && ctx.Err() == nil {
 			log.Printf("watch: refresh channel %d: %v", id, err)
 		}
 	}

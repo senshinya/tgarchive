@@ -1,4 +1,4 @@
-import type { Bot, Sender } from '../api/types';
+import type { Bot, Chat, Sender } from '../api/types';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
@@ -124,6 +124,11 @@ export function previewText(kind: string, text: string): string {
   const t = text.replace(/\s+/g, ' ').trim();
   if (t) return t;
   return kind ? kindLabel(kind) : '';
+}
+
+/** The display name of a conversation: its channel's title, or its sender's name. */
+export function chatName(chat: Chat): string {
+  return chat.kind === 'channel' ? chat.channel?.title || '频道' : senderName(chat.sender);
 }
 
 export function senderName(s: Pick<Sender, 'first_name' | 'last_name' | 'username' | 'tg_user_id'>): string {

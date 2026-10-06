@@ -55,7 +55,13 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 
 	err = s.withTx(ctx, func(tx *sql.Tx) error {
 		if in.ChannelID != 0 {
-			var n int
+			var watched, n int
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM channel_watches WHERE channel_id = ?", in.ChannelID).Scan(&watched); err != nil {
+				return err
+			}
+			if watched == 0 {
+				return ErrNoWatch
+			}
 			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM chats WHERE channel_id = ?", in.ChannelID).Scan(&n); err != nil {
 				return err
 			}
@@ -107,8 +113,9 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 		default:
 			res.MessageID = existing
 			if _, err := tx.ExecContext(ctx, `
-				UPDATE messages SET edit_date = ?, kind = ?, text = ?, entities_json = ?, extra_json = ?, raw_json = ? WHERE id = ?`,
-				m.EditDate, string(m.Kind), m.Text, string(entJSON), string(m.Extra), string(m.Raw), existing); err != nil {
+				UPDATE messages SET edit_date = ?, kind = ?, text = ?, entities_json = ?, extra_json = ?, raw_json = ?,
+					stats_json = CASE WHEN ? != '' THEN ? ELSE stats_json END WHERE id = ?`,
+				m.EditDate, string(m.Kind), m.Text, string(entJSON), string(m.Extra), string(m.Raw), in.Stats, in.Stats, existing); err != nil {
 				return err
 			}
 			// Article media belong to the message's Telegraph snapshot, not to its Telegram content.

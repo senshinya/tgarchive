@@ -27,6 +27,7 @@ type watchTG struct {
 	*channelTG
 	mu        sync.Mutex
 	chanErr   string // error type returned by channels.getChannels
+	chanCode  int    // its code (default 400)
 	historyN  int    // getHistory calls
 	available tg.ChatReactionsClass
 	emojiDocs int // getCustomEmojiDocuments calls
@@ -45,7 +46,7 @@ func (w *watchTG) serve(req bin.Encoder) (bin.Encoder, error) {
 	switch r := req.(type) {
 	case *tg.ChannelsGetChannelsRequest:
 		if w.chanErr != "" {
-			return nil, tgerr.New(400, w.chanErr)
+			return nil, tgerr.New(max(w.chanCode, 400), w.chanErr)
 		}
 		return &tg.MessagesChats{Chats: []tg.ChatClass{w.ch}}, nil
 	case *tg.MessagesGetHistoryRequest:
@@ -280,6 +281,79 @@ func TestWatchDropsExpiredAndDeletedPosts(t *testing.T) {
 	}
 	if w := e.get(t); w.Pending != 0 || w.Status != store.WatchOK {
 		t.Fatalf("watch = %+v", w)
+	}
+}
+
+func TestWatchReenableDoesNotCatchUp(t *testing.T) {
+	e := newWatchEnv(t, fire10)
+	e.tg.reacted(5, 0, false, 10, nil)
+	e.w.PollOnce(ctx)
+	e.st.UpdateWatch(ctx, e.watch, 30, fire10, false, 2)
+	e.tg.reacted(6, 0, false, 10, map[string]int{"🔥": 99}) // posted while disabled
+	e.st.UpdateWatch(ctx, e.watch, 30, fire10, true, 3)
+	e.w.PollOnce(ctx)
+	e.w.PollOnce(ctx)
+	if got := e.archived(t); len(got) != 0 {
+		t.Fatalf("archived missed posts: %v", tgIDs(got))
+	}
+	if w := e.get(t); w.LastSeenID != 6 {
+		t.Fatalf("watch = %+v", w)
+	}
+}
+
+func TestWatchSkipsPostsFirstSeenAfterTheirWindow(t *testing.T) {
+	e := newWatchEnv(t, fire10)
+	e.tg.reacted(5, 0, false, 10, nil)
+	e.w.PollOnce(ctx)
+	e.tg.reacted(6, 0, false, 10, map[string]int{"🔥": 99}) // published while the account was offline
+	e.now = e.now.Add(3 * time.Hour)
+	e.w.PollOnce(ctx)
+	if got := e.archived(t); len(got) != 0 {
+		t.Fatalf("archived = %v", tgIDs(got))
+	}
+	if w := e.get(t); w.LastSeenID != 6 || w.Pending != 0 {
+		t.Fatalf("watch = %+v", w)
+	}
+}
+
+func TestWatchOnEmptyChannelSeesItsFirstPost(t *testing.T) {
+	e := newWatchEnv(t, fire10)
+	e.w.PollOnce(ctx)
+	if w := e.get(t); w.LastSeenID != store.WatchStartEmpty {
+		t.Fatalf("watch = %+v", w)
+	}
+	e.tg.reacted(1, 0, false, 10, map[string]int{"🔥": 20})
+	e.w.PollOnce(ctx)
+	if got := e.archived(t); !equalIDs(tgIDs(got), []int64{1}) {
+		t.Fatalf("archived = %v", tgIDs(got))
+	}
+}
+
+func TestWatchServerErrorsAreTransient(t *testing.T) {
+	e := newWatchEnv(t, fire10)
+	e.tg.failGet = nil
+	e.tg.chanErr = "INTERNAL"
+	e.tg.chanCode = 500
+	e.w.PollOnce(ctx)
+	if w := e.get(t); w.Status != store.WatchOK || e.n.count() != 0 {
+		t.Fatalf("watch = %+v, notified %d", w, e.n.count())
+	}
+}
+
+func TestPickerPhotoDoesNotStoreChannel(t *testing.T) {
+	e := newWatchEnv(t, fire10)
+	e.tg.ch.ID, e.tg.ch.Photo = 500, &tg.ChatPhoto{PhotoID: 9}
+	e.st.PutPeers(ctx, []store.Peer{{ChannelID: 500, AccessHash: 5005}}, 1)
+	e.st.DeleteWatch(ctx, e.watch, true)
+	// Channel 500 is still stored (purge keeps channels); a fresh id stays out of the table.
+	if ids, _ := e.st.ChannelIDs(ctx); len(ids) != 0 {
+		t.Fatalf("ChannelIDs = %v", ids)
+	}
+	if _, err := e.w.ChannelPhoto(ctx, 500); err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := e.st.ChannelIDs(ctx); len(ids) != 0 {
+		t.Fatalf("picker photo listed the channel for refresh: %v", ids)
 	}
 }
 

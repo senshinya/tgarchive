@@ -6,6 +6,7 @@ import { route } from '../../lib/router';
 import { formatCount, validateCond } from '../../lib/watchCond';
 import { fakeApi, makeChannelChat, makeChannelInfo, makeMessage, makeWatch } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
+import { DownloadsPanel } from '../downloads/DownloadsPanel';
 import { ChatsPanel } from '../left/ChatsPanel';
 import { MessageBubble } from '../message/MessageBubble';
 import { MiddleColumn } from '../middle/MiddleColumn';
@@ -199,6 +200,30 @@ describe('channel conversations in the UI', () => {
     fireEvent.click(screen.getByTitle('为何存档'));
     expect(container.textContent).toContain('🔥 23 ≥ 10');
     expect(container.querySelector('.OriginHeader, .origin-title')).toBeNull();
+  });
+});
+
+describe('channel conversations elsewhere', () => {
+  it('names and opens a channel download by its conversation, in bot mode too', async () => {
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChannelChat()]),
+      downloads: vi.fn(async () => ({
+        active: [],
+        queued: { count: 0, bytes: 0 },
+        failed: [{ media_id: 5, message_id: 9, chat_id: 50, kind: 'photo', file_name: '', size: 10, error: 'boom' }],
+        speed: 0,
+      })),
+    });
+    const r = renderWithStore(<DownloadsPanel />, api);
+    await act(async () => {
+      await r.store.loadChats();
+      await r.store.loadDownloads();
+    });
+    r.store.setListMode('bot');
+    expect(r.container.textContent).toContain('News');
+    fireEvent.click(r.container.querySelector('.DownloadRow-main')!);
+    expect(route.value).toEqual({ name: 'chat', chatId: 50 });
+    r.store.setListMode('people');
   });
 });
 

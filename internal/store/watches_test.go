@@ -254,3 +254,60 @@ func TestStatsJSONRoundTrip(t *testing.T) {
 		t.Fatalf("views = %+v", views)
 	}
 }
+
+func TestReenableStartsOver(t *testing.T) {
+	s := newStore(t)
+	id := seedWatch(t, s)
+	s.AddPending(ctx, id, []Pending{{TgMessageID: 10, Date: 1, Deadline: 2}}, 10)
+	s.UpdateWatch(ctx, id, 30, "{}", true, 3) // still enabled: nothing reset
+	if w, _ := s.GetWatch(ctx, id); w.LastSeenID != 10 || w.Pending != 1 {
+		t.Fatalf("enabled → enabled = %+v", w)
+	}
+	s.UpdateWatch(ctx, id, 30, "{}", false, 4)
+	s.UpdateWatch(ctx, id, 30, "{}", true, 5)
+	if w, _ := s.GetWatch(ctx, id); w.LastSeenID != 0 || w.Pending != 0 {
+		t.Fatalf("re-enabled = %+v", w)
+	}
+	if err := s.SetWatchStart(ctx, id, WatchStartEmpty); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetWatchStart(ctx, id, 99); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a started watch keeps its start: %v", err)
+	}
+}
+
+func TestChannelIngestNeedsAWatch(t *testing.T) {
+	s := newStore(t)
+	id := seedWatch(t, s)
+	res, _ := s.Ingest(ctx, IngestInput{ChannelID: chanID, Msg: channelPost(1, ""), Stats: `{"views":1}`, Now: 1})
+	// Re-archiving refreshes the stats snapshot.
+	s.Ingest(ctx, IngestInput{ChannelID: chanID, Msg: channelPost(1, ""), Stats: `{"views":2}`, Now: 2})
+	if v, _ := s.GetMessageView(ctx, res.MessageID); string(v.Stats) != `{"views":2}` {
+		t.Fatalf("stats = %s", v.Stats)
+	}
+	s.DeleteWatch(ctx, id, true)
+	if _, err := s.Ingest(ctx, IngestInput{ChannelID: chanID, Msg: channelPost(2, ""), Now: 3}); !errors.Is(err, ErrNoWatch) {
+		t.Fatalf("ingest after purge: %v", err)
+	}
+	if chats, _ := s.ListChats(ctx, 0); len(chats) != 0 {
+		t.Fatalf("purged conversation came back: %+v", chats)
+	}
+}
+
+func TestChannelInfoOnlyForStoredChannels(t *testing.T) {
+	s := newStore(t)
+	if ok, err := s.RefreshChannelInfo(ctx, Channel{ChannelID: 9, Title: "x"}, 1); ok || err != nil {
+		t.Fatalf("unknown channel = %v %v", ok, err)
+	}
+	seedWatch(t, s)
+	s.UpsertChannel(ctx, Channel{ChannelID: 77, Title: "orphan"}, 1)
+	if ok, _ := s.RefreshChannelInfo(ctx, Channel{ChannelID: chanID, Title: "Renamed"}, 2); !ok {
+		t.Fatal("stored channel not refreshed")
+	}
+	if c, _ := s.GetChannel(ctx, chanID); c.Title != "Renamed" {
+		t.Fatalf("channel = %+v", c)
+	}
+	if ids, _ := s.ChannelIDs(ctx); len(ids) != 1 || ids[0] != chanID {
+		t.Fatalf("ChannelIDs = %v", ids)
+	}
+}

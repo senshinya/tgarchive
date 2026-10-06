@@ -9,6 +9,10 @@ import (
 	"tgarchive/internal/model"
 )
 
+// ErrNoWatch is returned when archiving into a channel that is no longer watched (the watch was
+// deleted while a poll was running).
+var ErrNoWatch = errors.New("channel not watched")
+
 // ErrExists is returned when creating something that must be unique (a second watch on a channel).
 var ErrExists = errors.New("already exists")
 
@@ -64,6 +68,17 @@ func (s *Store) UpsertChannel(ctx context.Context, c Channel, now int64) error {
 	return err
 }
 
+// RefreshChannelInfo updates a stored channel's title and username; channels not stored (seen
+// only in the picker) are left out. Reports whether the channel is stored.
+func (s *Store) RefreshChannelInfo(ctx context.Context, c Channel, now int64) (bool, error) {
+	err := affected(s.db.ExecContext(ctx, "UPDATE channels SET title = ?, username = ?, updated_at = ? WHERE channel_id = ?",
+		c.Title, c.Username, now, c.ChannelID))
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func (s *Store) GetChannel(ctx context.Context, id int64) (*Channel, error) {
 	c := Channel{ChannelID: id}
 	err := s.db.QueryRowContext(ctx, "SELECT title, username, avatar_path FROM channels WHERE channel_id = ?", id).
@@ -78,9 +93,10 @@ func (s *Store) SetChannelAvatar(ctx context.Context, id int64, path string) err
 	return affected(s.db.ExecContext(ctx, "UPDATE channels SET avatar_path = ? WHERE channel_id = ?", path, id))
 }
 
-// ChannelIDs lists every stored channel (for the daily info refresh).
+// ChannelIDs lists the channels that have a conversation or a watch (for the daily info refresh).
 func (s *Store) ChannelIDs(ctx context.Context) ([]int64, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT channel_id FROM channels ORDER BY channel_id")
+	rows, err := s.db.QueryContext(ctx, `SELECT channel_id FROM channels c WHERE EXISTS (SELECT 1 FROM chats WHERE channel_id = c.channel_id)
+		OR EXISTS (SELECT 1 FROM channel_watches WHERE channel_id = c.channel_id) ORDER BY channel_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -131,13 +147,44 @@ func channelChat(ctx context.Context, tx *sql.Tx, channelID, now int64) (int64, 
 	return id, err
 }
 
-// UpdateWatch changes a watch's settings. Disabling a watch clears its error.
+// UpdateWatch changes a watch's settings. Disabling a watch clears its error; re-enabling one
+// starts it over from the channel's newest post (it never catches up on what it missed).
 func (s *Store) UpdateWatch(ctx context.Context, id int64, window int, cond string, enabled bool, now int64) error {
-	return affected(s.db.ExecContext(ctx, `
-		UPDATE channel_watches SET window_minutes = ?, cond_json = ?, enabled = ?, updated_at = ?,
-			status = CASE WHEN ? THEN status ELSE 'ok' END, last_error = CASE WHEN ? THEN last_error ELSE '' END
-		WHERE id = ?`, window, cond, enabled, now, enabled, enabled, id))
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		var was bool
+		err := tx.QueryRowContext(ctx, "SELECT enabled FROM channel_watches WHERE id = ?", id).Scan(&was)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE channel_watches SET window_minutes = ?, cond_json = ?, enabled = ?, updated_at = ?,
+				status = CASE WHEN ? THEN status ELSE 'ok' END, last_error = CASE WHEN ? THEN last_error ELSE '' END
+			WHERE id = ?`, window, cond, enabled, now, enabled, enabled, id); err != nil {
+			return err
+		}
+		if enabled && !was {
+			if _, err := tx.ExecContext(ctx, "UPDATE channel_watches SET last_seen_id = 0 WHERE id = ?", id); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, "DELETE FROM watch_pending WHERE watch_id = ?", id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
+
+// SetWatchStart records where a watch starts observing: the channel's newest post id, or
+// WatchStartEmpty for a channel without posts (0 means not started yet).
+func (s *Store) SetWatchStart(ctx context.Context, id, lastSeen int64) error {
+	return affected(s.db.ExecContext(ctx, "UPDATE channel_watches SET last_seen_id = ? WHERE id = ? AND last_seen_id = 0", lastSeen, id))
+}
+
+// WatchStartEmpty marks a started watch on a channel that had no posts yet.
+const WatchStartEmpty = -1
 
 const watchCols = `w.id, w.channel_id, w.window_minutes, w.cond_json, w.enabled, w.status, w.last_error, w.last_seen_id, w.hits,
 	w.created_at, w.updated_at, c.title, c.username, c.avatar_path, COALESCE((SELECT id FROM chats WHERE channel_id = w.channel_id), 0),
