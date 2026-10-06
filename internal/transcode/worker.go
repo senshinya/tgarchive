@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"tgarchive/internal/store"
@@ -96,9 +95,9 @@ func (w *Worker) Step(ctx context.Context) bool {
 		_, err := w.set(ctx, job.ID, store.CompatNone, s.Video, "", "")
 		return err == nil
 	}
-	rel := strings.TrimSuffix(job.Path, filepath.Ext(job.Path)) + ".compat.mp4"
+	rel := store.CompatRel(job.Path)
 	dst := filepath.Join(w.mediaDir, rel)
-	part := dst + ".part"
+	part := filepath.Join(w.mediaDir, store.CompatPartRel(job.Path))
 	start := time.Now()
 	jctx, cancel := context.WithTimeout(ctx, jobTimeout)
 	err = w.media.Convert(jctx, src, part)
@@ -117,7 +116,7 @@ func (w *Worker) Step(ctx context.Context) bool {
 		_, err := w.set(ctx, job.ID, store.CompatFailed, s.Video, "", err.Error())
 		return err == nil
 	}
-	ok, err := w.set(ctx, job.ID, store.CompatDone, s.Video, rel, "")
+	ok, err := w.set(ctx, job.ID, store.CompatDone, CompatCodec(s), rel, "")
 	if !ok {
 		os.Remove(dst) // the media was deleted while we converted it, or the record failed
 		return err == nil

@@ -42,7 +42,7 @@ RUN apk add --no-cache libssl3 libcrypto3 zlib libstdc++ libgcc ca-certificates 
 COPY --from=botapi /usr/local/bin/telegram-bot-api /usr/local/bin/telegram-bot-api
 COPY --from=build /out/tgarchive /usr/local/bin/tgarchive
 # 缺运行库时在这里失败，而不是上线后子进程起不来
-RUN telegram-bot-api --version && ffmpeg -hide_banner -encoders | grep -q libx264
+RUN telegram-bot-api --version && ffprobe -version >/dev/null && ffmpeg -hide_banner -encoders | grep -q libx264
 LABEL org.opencontainers.image.source="https://github.com/senshinya/tgarchive" \
       org.opencontainers.image.licenses="GPL-3.0-only"
 USER 10001:10001

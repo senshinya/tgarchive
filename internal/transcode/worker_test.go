@@ -72,7 +72,7 @@ func setup(t *testing.T, jobs ...store.CompatJob) (*fakeStore, *fakeMedia, *Work
 	os.MkdirAll(filepath.Join(dir, "1"), 0o755)
 	st := &fakeStore{jobs: jobs, set: map[int64]record{}, gone: map[int64]bool{}}
 	md := &fakeMedia{streams: map[string]Streams{
-		"a.mp4": {"av1", "aac"}, "h.mp4": {"h264", "aac"}, "m.mov": {"mpeg4", "mp3"},
+		"a.mp4": {"av1", "aac", mp4}, "h.mp4": {"h264", "aac", mp4}, "m.mov": {"mpeg4", "mp3", mp4}, "d.mp4": {"hevc", "ac3", mp4},
 	}}
 	var done []int64
 	w := NewWorker(st, md, dir, func(id int64) { done = append(done, id) })
@@ -80,7 +80,7 @@ func setup(t *testing.T, jobs ...store.CompatJob) (*fakeStore, *fakeMedia, *Work
 }
 
 func TestWorkerConvertsOnlyWhatBrowsersCannotPlay(t *testing.T) {
-	st, _, w, dir, done := setup(t,
+	st, _, w, dir, done := setup(t, store.CompatJob{ID: 4, Path: "1/d.mp4"},
 		store.CompatJob{ID: 3, Path: "1/a.mp4"}, store.CompatJob{ID: 2, Path: "1/h.mp4"}, store.CompatJob{ID: 1, Path: "1/m.mov"})
 	ctx := context.Background()
 	for w.Step(ctx) {
@@ -100,7 +100,10 @@ func TestWorkerConvertsOnlyWhatBrowsersCannotPlay(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "1", "a.compat.mp4.part")); err == nil {
 		t.Fatal("part file must be renamed away")
 	}
-	if len(*done) != 2 {
+	if r := st.set[4]; r.state != store.CompatDone || r.codec == "hevc" {
+		t.Fatalf("hevc with ac3 must always play the copy, got %+v", r)
+	}
+	if len(*done) != 3 {
 		t.Fatalf("onDone calls = %v", *done)
 	}
 }

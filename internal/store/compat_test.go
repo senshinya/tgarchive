@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -58,5 +59,25 @@ func TestCompatJobs(t *testing.T) {
 	}
 	if ok, err := s.SetCompat(ctx, 9999, CompatNone, "h264", "", ""); ok || err != nil {
 		t.Fatalf("unknown media = %v %v", ok, err)
+	}
+}
+
+func TestOrphanedVideoTakesItsCopyAlong(t *testing.T) {
+	s := newStore(t)
+	bot, _ := s.UpsertBot(ctx, &Bot{TgBotID: 777, TokenEnc: []byte("x"), CreatedAt: 1})
+	m := photoMsg(1, "bot:v")
+	m.Kind, m.Media[0].Kind, m.Media[0].Mime = "video", "video", "video/mp4"
+	msgID := ingest(t, s, bot, m).MessageID
+	if _, err := s.MarkMediaDone(ctx, mediaIDs(t, s, msgID)[0], "1/2026/10/v.mov", 4); err != nil {
+		t.Fatal(err)
+	}
+	_, orphans, err := s.DeleteMessage(ctx, msgID, 9000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Derived from the original's path, so a copy a crash left unrecorded goes too.
+	want := []string{"1/2026/10/v.mov", "1/2026/10/v.compat.mp4", "1/2026/10/v.compat.mp4.part"}
+	if !reflect.DeepEqual(orphans, want) {
+		t.Fatalf("orphans = %v, want %v", orphans, want)
 	}
 }

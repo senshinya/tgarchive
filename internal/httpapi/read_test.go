@@ -203,13 +203,6 @@ func TestServeMediaCompat(t *testing.T) {
 	if w := do(e.h, "GET", fmt.Sprintf("/media/%d?download=1", e.media), nil); w.Body.String() != "photo-bytes" {
 		t.Fatalf("download must stay the original, got %q", w.Body)
 	}
-	// The copy goes with the original when its message is deleted.
-	if w := do(e.h, "DELETE", fmt.Sprintf("/api/messages/%d", e.photoMsg), nil); w.Code != 204 {
-		t.Fatalf("delete = %d", w.Code)
-	}
-	if _, err := os.Stat(filepath.Join(e.srv.MediaDir, "1", "p.compat.mp4")); err == nil {
-		t.Fatal("compat copy of an orphaned media must be removed")
-	}
 }
 
 func TestDeleteAndRetry(t *testing.T) {

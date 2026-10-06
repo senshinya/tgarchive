@@ -11,21 +11,25 @@ import (
 	"testing"
 )
 
+const mp4 = "mov,mp4,m4a,3gp,3g2,mj2"
+
 func TestNeeds(t *testing.T) {
 	cases := []struct {
 		s    Streams
 		want bool
 	}{
-		{Streams{"h264", "aac"}, false},
-		{Streams{"hevc", "aac"}, false},
-		{Streams{"vp9", "opus"}, false},
-		{Streams{"h264", ""}, false}, // silent clip
-		{Streams{"", "aac"}, false},  // audio only
-		{Streams{"av1", "aac"}, true},
-		{Streams{"mpeg4", "mp3"}, true},
-		{Streams{"msmpeg4v3", "mp3"}, true},
-		{Streams{"h264", "ac3"}, true},
-		{Streams{"h264", "pcm_s16le"}, true},
+		{Streams{"h264", "aac", mp4}, false},
+		{Streams{"hevc", "aac", mp4}, false},
+		{Streams{"h264", "", mp4}, false}, // silent clip
+		{Streams{"", "aac", mp4}, false},  // audio only
+		{Streams{"vp9", "opus", "matroska,webm"}, false},
+		{Streams{"av1", "aac", mp4}, true},
+		{Streams{"mpeg4", "mp3", mp4}, true},
+		{Streams{"mjpeg", "pcm_s16le", "avi"}, true},
+		{Streams{"h264", "ac3", mp4}, true},
+		{Streams{"h264", "aac", "avi"}, true},
+		{Streams{"h264", "aac", "mpegts"}, true},
+		{Streams{"h264", "aac", "matroska,webm"}, true}, // MKV: Safari cannot play it
 	}
 	for _, c := range cases {
 		if got := Needs(c.s); got != c.want {
@@ -34,13 +38,27 @@ func TestNeeds(t *testing.T) {
 	}
 }
 
+func TestCompatCodec(t *testing.T) {
+	// A codec the browser may decode itself is passed on; when audio or the container forced the
+	// copy, the name matches no browser check so the copy always plays.
+	if got := CompatCodec(Streams{"av1", "aac", mp4}); got != "av1" {
+		t.Fatalf("av1 = %q", got)
+	}
+	if got := CompatCodec(Streams{"hevc", "ac3", mp4}); got == "hevc" || !strings.HasPrefix(got, "hevc+ac3") {
+		t.Fatalf("hevc+ac3 = %q", got)
+	}
+}
+
+// TestProbeSkipsCoverArt: only the attached-picture flag marks cover art, so a real Motion-JPEG
+// clip is still a video.
 func TestProbeSkipsCoverArt(t *testing.T) {
 	c := &Converter{FFprobe: "ffprobe", Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return []byte(`{"streams":[{"codec_type":"video","codec_name":"mjpeg"},{"codec_type":"audio","codec_name":"aac"},
-			{"codec_type":"video","codec_name":"av1"},{"codec_type":"audio","codec_name":"mp3"}]}`), nil
+		return []byte(`{"streams":[{"codec_type":"video","codec_name":"mjpeg","disposition":{"attached_pic":1}},
+			{"codec_type":"audio","codec_name":"aac"},{"codec_type":"video","codec_name":"av1","disposition":{"attached_pic":0}},
+			{"codec_type":"audio","codec_name":"mp3"}],"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2"}}`), nil
 	}}
 	s, err := c.Probe(context.Background(), "x.mp4")
-	if err != nil || s != (Streams{"av1", "aac"}) {
+	if err != nil || s != (Streams{"av1", "aac", mp4}) {
 		t.Fatalf("Probe = %+v, %v", s, err)
 	}
 }
@@ -57,7 +75,10 @@ func TestConvertFallsBackToSoftware(t *testing.T) {
 	if err := c.Convert(context.Background(), "in.mp4", "out.part"); err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 2 || !slices.Contains(calls[0], "-vaapi_device") || !slices.Contains(calls[1], "libx264") || slices.Contains(calls[1], "-vaapi_device") {
+	if c.VAAPIDevice != "" {
+		t.Fatal("a device that failed where software worked must not be tried again")
+	}
+	if len(calls) != 2 || !slices.Contains(calls[0], "-vaapi_device") && slices.Contains(calls[0], "0:V:0") || !slices.Contains(calls[1], "libx264") || slices.Contains(calls[1], "-vaapi_device") {
 		t.Fatalf("calls = %q", calls)
 	}
 	last := calls[1]
@@ -102,7 +123,7 @@ func TestConvertWithFFmpeg(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := c.Probe(ctx, dst)
-	if err != nil || got != (Streams{"h264", "aac"}) {
+	if err != nil || got.Video != "h264" || got.Audio != "aac" || Needs(got) {
 		t.Fatalf("output = %+v, %v", got, err)
 	}
 	out, _ := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,pix_fmt", "-of", "csv=p=0", dst).Output()
