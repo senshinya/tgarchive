@@ -1,3 +1,4 @@
+import { mediaUrl } from '../../api/client';
 import type { Media, Message, MessageKind } from '../../api/types';
 
 export function mainMedia(msg: Message): Media | undefined {
@@ -33,4 +34,27 @@ export function displayKind(msg: Message): MessageKind {
   if (msg.kind !== 'document') return msg.kind;
   const main = mainMedia(msg);
   return main && IMAGE_DOCUMENT_MIMES.includes(main.mime) && main.size <= IMAGE_DOCUMENT_MAX_BYTES ? 'photo' : msg.kind;
+}
+
+/** canPlayType probes for the codecs a server-side copy can stand in for; any other codec with a
+ * copy (MPEG-4 Part 2, WMV, ...) plays in no browser. */
+const CODEC_PROBES: Record<string, string> = {
+  av1: 'video/mp4; codecs="av01.0.08M.08"',
+  hevc: 'video/mp4; codecs="hvc1.1.6.L93.B0"',
+  vp9: 'video/mp4; codecs="vp09.00.10.08"',
+};
+
+let probe: HTMLVideoElement | undefined;
+
+export function canPlayCodec(codec: string): boolean {
+  const type = CODEC_PROBES[codec];
+  if (!type || typeof document === 'undefined') return false;
+  probe ??= document.createElement('video');
+  return probe.canPlayType(type) !== '';
+}
+
+/** What a <video> plays: the archived file, or the server's H.264 copy when this browser cannot
+ * decode the original. Downloads always use mediaUrl(id, true), the original. */
+export function playUrl(id: number, compatCodec?: string): string {
+  return compatCodec && !canPlayCodec(compatCodec) ? `/media/${id}?compat=1` : mediaUrl(id);
 }

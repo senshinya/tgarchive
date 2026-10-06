@@ -32,7 +32,9 @@ FROM aiogram/telegram-bot-api:10.3@sha256:50a9ed1f229930add49fd3aad5fa4119f269e4
 # ---- 运行 ----
 FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 # telegram-bot-api 的 ELF NEEDED：libssl.so.3 libcrypto.so.3 libz.so.1 libstdc++.so.6 libgcc_s.so.1（+ musl）
-RUN apk add --no-cache libssl3 libcrypto3 zlib libstdc++ libgcc ca-certificates tzdata \
+# ffmpeg 为浏览器播不了的视频生成 H.264 兼容版；x86_64 另装 Intel 核显的 VAAPI 驱动（iHD）
+RUN apk add --no-cache libssl3 libcrypto3 zlib libstdc++ libgcc ca-certificates tzdata ffmpeg \
+ && if [ "$(apk --print-arch)" = x86_64 ]; then apk add --no-cache intel-media-driver; fi \
  && addgroup -S -g 10001 tgarchive \
  && adduser -S -D -H -u 10001 -G tgarchive -h /data -s /sbin/nologin tgarchive \
  && mkdir -p /data \
@@ -40,7 +42,7 @@ RUN apk add --no-cache libssl3 libcrypto3 zlib libstdc++ libgcc ca-certificates 
 COPY --from=botapi /usr/local/bin/telegram-bot-api /usr/local/bin/telegram-bot-api
 COPY --from=build /out/tgarchive /usr/local/bin/tgarchive
 # 缺运行库时在这里失败，而不是上线后子进程起不来
-RUN telegram-bot-api --version
+RUN telegram-bot-api --version && ffprobe -version >/dev/null && ffmpeg -hide_banner -encoders | grep -q libx264
 LABEL org.opencontainers.image.source="https://github.com/senshinya/tgarchive" \
       org.opencontainers.image.licenses="GPL-3.0-only"
 USER 10001:10001

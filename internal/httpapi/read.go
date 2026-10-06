@@ -231,7 +231,17 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
-	p, ok := within(s.MediaDir, m.Path)
+	// ?compat=1 plays the browser-playable copy of a video; downloads always get the original.
+	compat := r.URL.Query().Get("compat") == "1"
+	if compat && m.CompatState != store.CompatDone {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	rel, etag := m.Path, fmt.Sprintf(`"m%d"`, m.ID)
+	if compat {
+		rel, etag = m.CompatPath, fmt.Sprintf(`"c%d"`, m.ID)
+	}
+	p, ok := within(s.MediaDir, rel)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
@@ -248,6 +258,9 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ct := m.Mime
+	if compat {
+		ct = "video/mp4"
+	}
 	if ct == "" {
 		ct = mime.TypeByExtension(filepath.Ext(p))
 	}
@@ -263,8 +276,8 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Content-Security-Policy", mediaCSP)
 	h.Set("Cache-Control", "private, max-age=31536000, immutable")
-	h.Set("ETag", fmt.Sprintf(`"m%d"`, m.ID))
-	if !inline || r.URL.Query().Get("download") == "1" {
+	h.Set("ETag", etag)
+	if !inline || (!compat && r.URL.Query().Get("download") == "1") {
 		name := m.FileName
 		if name == "" {
 			name = filepath.Base(p)

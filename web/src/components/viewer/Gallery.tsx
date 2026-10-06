@@ -5,6 +5,7 @@ import 'photoswipe/style.css';
 import { createPortal } from 'preact/compat';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { mediaUrl } from '../../api/client';
+import { playUrl } from '../media/util';
 import type { ViewerItem } from '../../state/store';
 import { createVideoSlide, onPlayerControl, type VideoSlide } from './videoSlide';
 import { viewerKeyAction } from './viewerKeys';
@@ -101,11 +102,13 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
       if (content.type !== 'video') return;
       e.preventDefault();
       const it = content.data.item as ViewerItem;
+      const src = playUrl(it.mediaId, it.compatCodec);
       const v = createVideoSlide({
         mediaId: it.mediaId,
         kind: it.kind,
-        src: mediaUrl(it.mediaId),
-        mime: it.mime ?? '',
+        src,
+        // The copy is always MP4, whatever the original's container.
+        mime: src === mediaUrl(it.mediaId) ? (it.mime ?? '') : 'video/mp4',
         poster: it.thumbId ? mediaUrl(it.thumbId) : undefined,
         title: titleOf(it),
       });

@@ -28,6 +28,8 @@ export interface ViewerItem {
   width?: number;
   height?: number;
   mime?: string;
+  /** The original's codec when an H.264 copy exists (see playUrl). */
+  compatCodec?: string;
 }
 
 /** Opens the viewer on a chat's media (walking the whole chat), or on an explicit list such as

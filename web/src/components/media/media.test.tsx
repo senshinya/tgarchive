@@ -4,13 +4,14 @@ import type { Message } from '../../api/types';
 import { fakeApi, makeMedia, makeMessage } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
 import { Album } from './Album';
+import { Animation } from './Animation';
 import { Contact, Dice, Location, Poll } from './Cards';
 import { Document } from './Document';
 import { MessageMedia } from './MessageMedia';
 import { Photo } from './Photo';
 import { Sticker } from './Sticker';
 import { Video } from './Video';
-import { IMAGE_DOCUMENT_MAX_BYTES, displayKind } from './util';
+import { IMAGE_DOCUMENT_MAX_BYTES, displayKind, playUrl } from './util';
 import { Voice } from './Voice';
 import { toViewerItems } from '../viewer/MediaViewer';
 
@@ -282,5 +283,32 @@ describe('images sent as files', () => {
   it('pages through the viewer as a photo', () => {
     expect(toViewerItems([imageDoc('image/gif')])).toEqual([expect.objectContaining({ mediaId: 70, kind: 'photo', mime: 'image/gif' })]);
     expect(toViewerItems([imageDoc('application/pdf')])).toEqual([]);
+  });
+});
+
+describe('server-side copies of unplayable videos', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('plays the H.264 copy only when this browser cannot decode the original', () => {
+    const can = vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('');
+    expect(playUrl(5, 'av1')).toBe('/media/5?compat=1');
+    expect(playUrl(5, 'mpeg4')).toBe('/media/5?compat=1');
+    expect(playUrl(5)).toBe('/media/5');
+    can.mockReturnValue('probably');
+    expect(playUrl(5, 'av1')).toBe('/media/5');
+    expect(playUrl(5, 'mpeg4')).toBe('/media/5?compat=1'); // no browser plays MPEG-4 Part 2
+  });
+
+  it('feeds the copy to inline players and the viewer', () => {
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('');
+    const msg = makeMessage({
+      id: 8,
+      kind: 'animation',
+      text: '',
+      media: [makeMedia({ id: 80, kind: 'animation', mime: 'video/mp4', compat_codec: 'av1' })],
+    });
+    const { container } = renderWithStore(<Animation msg={msg} onOpen={() => {}} />);
+    expect(container.querySelector('video')!.getAttribute('src')).toBe('/media/80?compat=1');
+    expect(toViewerItems([msg])).toEqual([expect.objectContaining({ mediaId: 80, compatCodec: 'av1' })]);
   });
 });

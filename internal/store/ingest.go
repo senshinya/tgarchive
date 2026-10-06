@@ -208,7 +208,7 @@ func upsertMedia(ctx context.Context, tx *sql.Tx, botID int64, md model.Media) (
 
 // collectOrphans deletes media rows no message (nor custom emoji) links to and returns their stored paths.
 func collectOrphans(ctx context.Context, tx *sql.Tx) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id, path FROM media WHERE NOT EXISTS (SELECT 1 FROM message_media mm WHERE mm.media_id = media.id)
+	rows, err := tx.QueryContext(ctx, `SELECT id, kind, path FROM media WHERE NOT EXISTS (SELECT 1 FROM message_media mm WHERE mm.media_id = media.id)
 		AND NOT EXISTS (SELECT 1 FROM custom_emoji ce WHERE ce.media_id = media.id)`)
 	if err != nil {
 		return nil, err
@@ -217,14 +217,20 @@ func collectOrphans(ctx context.Context, tx *sql.Tx) ([]string, error) {
 	paths := []string{}
 	for rows.Next() {
 		var id int64
-		var p string
-		if err := rows.Scan(&id, &p); err != nil {
+		var kind, p string
+		if err := rows.Scan(&id, &kind, &p); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		ids = append(ids, id)
-		if p != "" {
-			paths = append(paths, p)
+		if p == "" {
+			continue
+		}
+		paths = append(paths, p)
+		if kind == "video" || kind == "animation" || kind == "video_note" {
+			// A browser-playable copy, or one a crash left half-written or unrecorded; removing a
+			// file that does not exist is a no-op.
+			paths = append(paths, CompatRel(p), CompatPartRel(p))
 		}
 	}
 	rows.Close()

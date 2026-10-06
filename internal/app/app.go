@@ -28,6 +28,7 @@ import (
 	"tgarchive/internal/store"
 	"tgarchive/internal/telegraph"
 	"tgarchive/internal/tgapp"
+	"tgarchive/internal/transcode"
 	"tgarchive/internal/userbot"
 	"tgarchive/web"
 )
@@ -48,6 +49,7 @@ type App struct {
 	fetcher *userbot.Fetcher
 	watcher *userbot.Watcher
 	tw      *telegraph.Worker
+	tc      *transcode.Worker
 	media   string
 	wg      sync.WaitGroup
 }
@@ -83,10 +85,25 @@ func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer, w
 	tg := tgapp.New(st, box)
 	notifier := &notify.Bark{File: cfg.BarkNotifyFile}
 	rc := receipt.New(st, clients)
-	dl := downloader.New(st, mediaDir, cfg.MediaMaxBytes, func(mediaID int64) {
-		rc.MediaSettled(ctx, mediaID)
+	mediaUpdated := func(mediaID int64) {
 		ids, _ := st.MessagesForMedia(ctx, mediaID)
 		hub.Publish(events.Event{Type: "media.updated", Data: map[string]any{"media_id": mediaID, "message_ids": ids}})
+	}
+	var tc *transcode.Worker
+	if cfg.Transcode {
+		if conv := transcode.NewConverter(cfg.VAAPIDevice); conv != nil {
+			tc = transcode.NewWorker(st, conv, mediaDir, mediaUpdated)
+			log.Printf("transcode: enabled (hardware device %q)", conv.VAAPIDevice)
+		} else {
+			log.Printf("transcode: ffmpeg/ffprobe not found, videos are served as archived")
+		}
+	}
+	dl := downloader.New(st, mediaDir, cfg.MediaMaxBytes, func(mediaID int64) {
+		rc.MediaSettled(ctx, mediaID)
+		mediaUpdated(mediaID)
+		if tc != nil {
+			tc.Wake()
+		}
 	})
 	dl.OnProgress(func(items []downloader.Progress, speed int64) {
 		hub.Publish(events.Event{Type: "download.progress", Data: map[string]any{"items": items, "speed": speed}})
@@ -114,7 +131,7 @@ func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer, w
 		Web: web.FS(), MediaDir: mediaDir, AvatarDir: avatarDir, HTTP: hc, Now: time.Now,
 	}
 	return &App{Handler: srv.Handler(), ctx: ctx, cancel: cancel, st: st, mgr: mgr, dl: dl, av: av, mapper: mapper, tg: tg, sup: sup,
-		ub: ub, fetcher: fetcher, watcher: watcher, tw: tw, media: mediaDir}, nil
+		ub: ub, fetcher: fetcher, watcher: watcher, tw: tw, tc: tc, media: mediaDir}, nil
 }
 
 func (a *App) Start() error {
@@ -126,6 +143,10 @@ func (a *App) Start() error {
 	go func() { defer a.wg.Done(); a.fetcher.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.watcher.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.tw.Run(a.ctx) }()
+	if a.tc != nil {
+		a.wg.Add(1)
+		go func() { defer a.wg.Done(); a.tc.Run(a.ctx) }()
+	}
 	if a.sup != nil {
 		creds, err := a.tg.Load(a.ctx)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {

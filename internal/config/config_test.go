@@ -34,22 +34,27 @@ func TestLoadDefaults(t *testing.T) {
 	if c.TelegraphAPIURL != "https://api.telegra.ph" {
 		t.Fatalf("TelegraphAPIURL = %q", c.TelegraphAPIURL)
 	}
+	if !c.Transcode || c.VAAPIDevice != "/dev/dri/renderD128" {
+		t.Fatalf("unexpected transcode defaults: %+v", c)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
 	c, err := Load(env(map[string]string{
-		"TOKEN_ENC_KEY":        validKey,
-		"REQUIRE_FORWARD_AUTH": "false",
-		"MEDIA_MAX_BYTES":      "1048576",
-		"DATA_DIR":             "/srv",
-		"BARK_NOTIFY_FILE":     "/run/bark/notify.json",
-		"TELEGRAPH_API_URL":    "http://127.0.0.1:9999",
+		"TOKEN_ENC_KEY":          validKey,
+		"REQUIRE_FORWARD_AUTH":   "false",
+		"MEDIA_MAX_BYTES":        "1048576",
+		"DATA_DIR":               "/srv",
+		"BARK_NOTIFY_FILE":       "/run/bark/notify.json",
+		"TELEGRAPH_API_URL":      "http://127.0.0.1:9999",
+		"TRANSCODE":              "false",
+		"TRANSCODE_VAAPI_DEVICE": "/dev/dri/renderD129",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.RequireForwardAuth || c.MediaMaxBytes != 1048576 || c.BotAPIDirLocal != "/srv/botapi" || c.BarkNotifyFile != "/run/bark/notify.json" ||
-		c.TelegraphAPIURL != "http://127.0.0.1:9999" {
+		c.TelegraphAPIURL != "http://127.0.0.1:9999" || c.Transcode || c.VAAPIDevice != "/dev/dri/renderD129" {
 		t.Fatalf("overrides not applied: %+v", c)
 	}
 }
@@ -61,6 +66,7 @@ func TestLoadRejects(t *testing.T) {
 		"non-hex key":        {"TOKEN_ENC_KEY": strings.Repeat("zz", 32)},
 		"bad forward auth":   {"TOKEN_ENC_KEY": validKey, "REQUIRE_FORWARD_AUTH": "yes"},
 		"bad managed":        {"TOKEN_ENC_KEY": validKey, "BOT_API_MANAGED": "yes"},
+		"bad transcode":      {"TOKEN_ENC_KEY": validKey, "TRANSCODE": "1"},
 		"quoted max bytes":   {"TOKEN_ENC_KEY": validKey, "MEDIA_MAX_BYTES": `"100"`},
 		"negative max bytes": {"TOKEN_ENC_KEY": validKey, "MEDIA_MAX_BYTES": "-1"},
 	}

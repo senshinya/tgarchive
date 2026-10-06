@@ -2,7 +2,7 @@ import { mediaUrl } from '../../api/client';
 import type { Message } from '../../api/types';
 import { fitMedia } from '../../lib/album';
 import { MediaStatus } from './MediaStatus';
-import { mainMedia, readyThumb } from './util';
+import { mainMedia, playUrl, readyThumb } from './util';
 import './media.scss';
 
 interface Props {
@@ -22,7 +22,7 @@ export function Animation({ msg, onOpen, fill }: Props) {
     <div class={`media-inner Animation${fill ? ' fill' : ''}`} style={style}>
       {main.state === 'done' ? (
         <video
-          src={mediaUrl(main.id)}
+          src={playUrl(main.id, main.compat_codec)}
           poster={thumb ? mediaUrl(thumb.id) : undefined}
           autoplay
           loop
