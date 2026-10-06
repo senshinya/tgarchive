@@ -22,12 +22,33 @@ type SenderView struct {
 }
 
 type ChatView struct {
-	ID            int64      `json:"id"`
-	BotID         int64      `json:"bot_id"`
-	Sender        SenderView `json:"sender"`
-	LastMessageAt int64      `json:"last_message_at"`
-	LastKind      string     `json:"last_kind"`
-	LastText      string     `json:"last_text"`
+	ID            int64        `json:"id"`
+	Kind          string       `json:"kind"` // private / channel
+	BotID         int64        `json:"bot_id"`
+	Sender        SenderView   `json:"sender"`
+	Channel       *ChannelView `json:"channel"`
+	Watch         *WatchBrief  `json:"watch"`
+	LastMessageAt int64        `json:"last_message_at"`
+	LastKind      string       `json:"last_kind"`
+	LastText      string       `json:"last_text"`
+}
+
+type ChannelView struct {
+	ChannelID int64  `json:"channel_id"`
+	Title     string `json:"title"`
+	Username  string `json:"username"`
+	HasAvatar bool   `json:"has_avatar"`
+}
+
+// WatchBrief is what the chat list and header show about a channel conversation's watch.
+type WatchBrief struct {
+	ID            int64  `json:"id"`
+	Enabled       bool   `json:"enabled"`
+	Status        string `json:"status"`
+	Error         string `json:"error"`
+	WindowMinutes int    `json:"window_minutes"`
+	Pending       int64  `json:"pending"`
+	Hits          int64  `json:"hits"`
 }
 
 type MediaView struct {
@@ -70,14 +91,27 @@ type MessageView struct {
 	Extra              json.RawMessage `json:"extra,omitempty"`
 	Media              []MediaView     `json:"media"`
 	Article            *ArticleSummary `json:"article,omitempty"`
+	// Stats is the snapshot taken when a watched channel post was archived (channel_watch only).
+	Stats json.RawMessage `json:"stats,omitempty"`
 }
 
+// ListChats lists conversations, most recent first: every bot × sender chat of botID (all bots
+// for 0), and with botID 0 also the watched channels' conversations.
 func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT c.id, c.bot_id, c.last_message_at, s.tg_user_id, s.first_name, s.last_name, s.username, s.avatar_path,
+		SELECT c.id, c.kind, COALESCE(c.bot_id, 0), c.last_message_at,
+			COALESCE(s.tg_user_id, 0), COALESCE(s.first_name, ''), COALESCE(s.last_name, ''), COALESCE(s.username, ''),
+			COALESCE(s.avatar_path, ''),
+			COALESCE(c.channel_id, 0), COALESCE(ch.title, ''), COALESCE(ch.username, ''), COALESCE(ch.avatar_path, ''),
+			COALESCE(w.id, 0), COALESCE(w.enabled, 0), COALESCE(w.status, ''), COALESCE(w.last_error, ''),
+			COALESCE(w.window_minutes, 0), COALESCE(w.hits, 0),
+			(SELECT COUNT(*) FROM watch_pending p WHERE p.watch_id = w.id),
 			COALESCE((SELECT m.kind FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 ORDER BY m.id DESC LIMIT 1), ''),
 			COALESCE((SELECT substr(m.text, 1, 200) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 ORDER BY m.id DESC LIMIT 1), '')
-		FROM chats c JOIN senders s ON s.tg_user_id = c.sender_id
+		FROM chats c
+			LEFT JOIN senders s ON s.tg_user_id = c.sender_id
+			LEFT JOIN channels ch ON ch.channel_id = c.channel_id
+			LEFT JOIN channel_watches w ON w.channel_id = c.channel_id
 		WHERE (? = 0 OR c.bot_id = ?)
 		ORDER BY c.last_message_at DESC, c.id DESC`, botID, botID)
 	if err != nil {
@@ -87,31 +121,42 @@ func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) 
 	out := []ChatView{}
 	for rows.Next() {
 		var v ChatView
-		var avatar string
-		if err := rows.Scan(&v.ID, &v.BotID, &v.LastMessageAt, &v.Sender.TgUserID, &v.Sender.FirstName, &v.Sender.LastName,
-			&v.Sender.Username, &avatar, &v.LastKind, &v.LastText); err != nil {
+		var avatar, chAvatar string
+		var ch ChannelView
+		var w WatchBrief
+		if err := rows.Scan(&v.ID, &v.Kind, &v.BotID, &v.LastMessageAt, &v.Sender.TgUserID, &v.Sender.FirstName, &v.Sender.LastName,
+			&v.Sender.Username, &avatar, &ch.ChannelID, &ch.Title, &ch.Username, &chAvatar,
+			&w.ID, &w.Enabled, &w.Status, &w.Error, &w.WindowMinutes, &w.Hits, &w.Pending, &v.LastKind, &v.LastText); err != nil {
 			return nil, err
 		}
 		v.Sender.HasAvatar = avatar != ""
+		if ch.ChannelID != 0 {
+			ch.HasAvatar = chAvatar != ""
+			v.Channel = &ch
+		}
+		if w.ID != 0 {
+			v.Watch = &w
+		}
 		out = append(out, v)
 	}
 	return out, rows.Err()
 }
 
 const msgCols = `id, chat_id, tg_message_id, source, media_group_id, date, edit_date, kind, text, entities_json, forward_origin_json,
-	reply_to_tg_message_id, origin_chat_title, origin_link, extra_json`
+	reply_to_tg_message_id, origin_chat_title, origin_link, extra_json, stats_json`
 
 func scanMessageView(r scanner) (MessageView, error) {
 	var v MessageView
-	var ents, fwd, extra string
+	var ents, fwd, extra, stats string
 	err := r.Scan(&v.ID, &v.ChatID, &v.TgMessageID, &v.Source, &v.MediaGroupID, &v.Date, &v.EditDate, &v.Kind, &v.Text, &ents, &fwd,
-		&v.ReplyToTgMessageID, &v.OriginChatTitle, &v.OriginLink, &extra)
+		&v.ReplyToTgMessageID, &v.OriginChatTitle, &v.OriginLink, &extra, &stats)
 	if ents == "" {
 		ents = "[]"
 	}
 	v.Entities = json.RawMessage(ents)
 	v.ForwardOrigin = rawOrNil(fwd)
 	v.Extra = rawOrNil(extra)
+	v.Stats = rawOrNil(stats)
 	return v, err
 }
 

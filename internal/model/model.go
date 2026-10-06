@@ -27,6 +27,7 @@ const (
 const (
 	SourceBotUpdate    = "bot_update"
 	SourceUserbotFetch = "userbot_fetch"
+	SourceChannelWatch = "channel_watch"
 
 	RawBotAPI  = "botapi"
 	RawMTProto = "mtproto"
