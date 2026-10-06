@@ -54,6 +54,13 @@ function readListMode(): ListMode {
   }
 }
 
+/** botFilter value of the 频道 tab: watched channels only. */
+export const CHANNELS_FILTER = -1;
+
+/** One row of the left column in bot mode: a bot's merged timeline, or a channel conversation
+ * (channels never merge into a bot). */
+export type BotModeRow = { kind: 'bot'; entry: BotEntry } | { kind: 'channel'; chat: Chat };
+
 /** One row of the left column in bot mode: a bot's merged timeline. */
 export interface BotEntry {
   bot: Bot;
@@ -94,7 +101,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
   const bots = signal<Bot[]>([]);
   const chats = signal<Chat[]>([]);
   const chatsLoaded = signal(false);
-  const botFilter = signal(0); // 0 = 全部
+  const botFilter = signal(0); // 0 = 全部, CHANNELS_FILTER = 频道, else a bot id
   const conversations = signal<Record<number, Conversation>>({});
   const toast = signal<Toast | null>(null);
   const viewer = signal<ViewerTarget | null>(null); // media viewer target
@@ -114,21 +121,37 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
   const botsById = computed(() => new Map(bots.value.map((b) => [b.id, b])));
   // Falls back to "全部" when the selected bot was purged from `bots` but the reload that
   // should reset `botFilter` to 0 hasn't landed yet (or a future consumer forgets to reset it).
-  const effectiveBotFilter = computed(() => (botFilter.value && botsById.value.has(botFilter.value) ? botFilter.value : 0));
-  const visibleChats = computed(() =>
-    effectiveBotFilter.value ? chats.value.filter((c) => c.bot_id === effectiveBotFilter.value) : chats.value,
-  );
+  const channelChats = computed(() => chats.value.filter((c) => c.kind === 'channel'));
+  const effectiveBotFilter = computed(() => {
+    const f = botFilter.value;
+    if (f === CHANNELS_FILTER) return channelChats.value.length > 0 ? f : 0;
+    return f && botsById.value.has(f) ? f : 0;
+  });
+  const visibleChats = computed(() => {
+    const f = effectiveBotFilter.value;
+    if (f === CHANNELS_FILTER) return channelChats.value;
+    return f ? chats.value.filter((c) => c.kind !== 'channel' && c.bot_id === f) : chats.value;
+  });
 
   // Bots with archived chats, most recently active first, then bots still running but empty.
   const botEntries = computed<BotEntry[]>(() => {
     const out: BotEntry[] = [];
     for (const bot of bots.value) {
-      const own = chats.value.filter((c) => c.bot_id === bot.id);
+      const own = chats.value.filter((c) => c.kind !== 'channel' && c.bot_id === bot.id);
       if (own.length === 0 && bot.status === 'removed') continue;
       const last = own.reduce<Chat | undefined>((a, c) => (!a || c.last_message_at > a.last_message_at ? c : a), undefined);
       out.push({ bot, last, senders: own.length });
     }
     return out.sort((a, b) => (b.last?.last_message_at ?? -1) - (a.last?.last_message_at ?? -1));
+  });
+
+  // Bot mode: bot timelines and channel conversations, most recently active first.
+  const botModeRows = computed<BotModeRow[]>(() => {
+    const rows: { at: number; row: BotModeRow }[] = [
+      ...botEntries.value.map((entry) => ({ at: entry.last?.last_message_at ?? -1, row: { kind: 'bot' as const, entry } })),
+      ...channelChats.value.map((chat) => ({ at: chat.last_message_at, row: { kind: 'channel' as const, chat } })),
+    ];
+    return rows.sort((a, b) => b.at - a.at).map((r) => r.row);
   });
 
   const downloadSummary = computed<DownloadSummary>(() => {
@@ -182,10 +205,11 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     }
   }
 
-  /** The merged-timeline key of the bot that owns chat `chatId`; 0 while the chat is unknown. */
+  /** The merged-timeline key of the bot that owns chat `chatId`; 0 while the chat is unknown and
+   * for channel conversations, which belong to no bot. */
   function botKeyOf(chatId: number): number {
     const chat = chats.value.find((c) => c.id === chatId);
-    return chat ? -chat.bot_id : 0;
+    return chat && chat.kind !== 'channel' ? -chat.bot_id : 0;
   }
 
   function showToast(text: string) {
@@ -330,13 +354,11 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
       case 'message.updated': {
         const { chat_id, message_id } = ev.data;
         scheduleChatsReload();
-        let botKey = botKeyOf(chat_id);
         // A new sender's first message lands in a chat we have never listed: learn its bot
         // before deciding whether an open bot timeline wants it.
-        if (!botKey && Object.entries(conversations.value).some(([k, c]) => Number(k) < 0 && c.loaded)) {
-          await loadChats();
-          botKey = botKeyOf(chat_id);
-        }
+        const known = chats.value.some((c) => c.id === chat_id);
+        if (!known && Object.entries(conversations.value).some(([k, c]) => Number(k) < 0 && c.loaded)) await loadChats();
+        const botKey = botKeyOf(chat_id);
         if (conv(chat_id).loaded || (botKey && conv(botKey).loaded)) await refreshMessage(message_id, chat_id);
         return;
       }
@@ -362,6 +384,9 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
         if (downloads.value) downloads.value = { ...downloads.value, speed: ev.data.speed };
         return;
       }
+      case 'watch.updated':
+        scheduleChatsReload();
+        return;
       case 'bot.status': {
         const { bot_id, status, error } = ev.data;
         if (!botsById.value.has(bot_id)) {
@@ -436,6 +461,8 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     listMode,
     setListMode,
     botEntries,
+    botModeRows,
+    channelChats,
     botKeyOf,
     botsById,
     visibleChats,

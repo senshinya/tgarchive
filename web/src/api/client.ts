@@ -2,13 +2,18 @@ import type {
   AddBotResult,
   Article,
   Bot,
+  ChannelInfo,
   Chat,
+  CondGroup,
   Downloads,
   Message,
   RejectedSender,
   SharedMediaType,
   TelegramApp,
   UserbotInfo,
+  Watch,
+  WatchInput,
+  WatchTestResult,
   WhitelistEntry,
 } from './types';
 
@@ -95,6 +100,19 @@ export interface Api {
   userbotCode(code: string): Promise<UserbotInfo>;
   userbotPassword(password: string): Promise<UserbotInfo>;
   userbotLogout(): Promise<void>;
+  /** Broadcast channels the user account has joined; refresh bypasses the server's cache. */
+  channels(refresh?: boolean): Promise<ChannelInfo[]>;
+  searchChannels(q: string): Promise<ChannelInfo[]>;
+  resolveChannel(input: string): Promise<ChannelInfo>;
+  /** Judges a channel's latest posts against a draft condition (null: none yet). */
+  testWatch(channelId: number, cond: CondGroup | null): Promise<WatchTestResult>;
+  watches(): Promise<Watch[]>;
+  watch(id: number): Promise<Watch>;
+  createWatch(input: WatchInput): Promise<Watch>;
+  updateWatch(id: number, input: WatchInput): Promise<Watch>;
+  deleteWatch(id: number, purge: boolean): Promise<void>;
+  watchSettings(): Promise<{ poll_seconds: number }>;
+  saveWatchSettings(pollSeconds: number): Promise<{ poll_seconds: number }>;
 }
 
 export const api: Api = {
@@ -128,6 +146,17 @@ export const api: Api = {
   userbotCode: (code) => request('POST', '/api/admin/userbot/code', { code }),
   userbotPassword: (password) => request('POST', '/api/admin/userbot/password', { password }),
   userbotLogout: () => request('POST', '/api/admin/userbot/logout'),
+  channels: (refresh = false) => request('GET', `/api/admin/channels${refresh ? '?refresh=1' : ''}`),
+  searchChannels: (q) => request('GET', `/api/admin/channels/search${qs({ q })}`),
+  resolveChannel: (input) => request('POST', '/api/admin/channels/resolve', { input }),
+  testWatch: (channelId, cond) => request('POST', '/api/admin/watches/test', { channel_id: channelId, cond }),
+  watches: () => request('GET', '/api/admin/watches'),
+  watch: (id) => request('GET', `/api/admin/watches/${id}`),
+  createWatch: (input) => request('POST', '/api/admin/watches', input),
+  updateWatch: (id, input) => request('PUT', `/api/admin/watches/${id}`, input),
+  deleteWatch: (id, purge) => request('DELETE', `/api/admin/watches/${id}${purge ? '?purge=1' : ''}`),
+  watchSettings: () => request('GET', '/api/admin/watch-settings'),
+  saveWatchSettings: (pollSeconds) => request('PUT', '/api/admin/watch-settings', { poll_seconds: pollSeconds }),
 };
 
 /** A conversation's messages: a chat for a positive key, a bot's merged timeline for -botId. */
@@ -144,7 +173,7 @@ export function mediaUrl(id: number, download = false): string {
   return `/media/${id}${download ? '?download=1' : ''}`;
 }
 
-export function avatarUrl(kind: 'bots' | 'senders', tgId: number): string {
+export function avatarUrl(kind: 'bots' | 'senders' | 'channels', tgId: number): string {
   return `/avatars/${kind}/${tgId}`;
 }
 

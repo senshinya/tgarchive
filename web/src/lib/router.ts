@@ -11,7 +11,10 @@ export type Route =
   | { name: 'settings-add-bot' }
   | { name: 'settings-bot'; botId: number }
   | { name: 'settings-telegram-app' }
-  | { name: 'settings-userbot' };
+  | { name: 'settings-userbot' }
+  | { name: 'settings-watches' }
+  | { name: 'settings-watch-new' }
+  | { name: 'settings-watch'; watchId: number };
 
 export function parseRoute(pathname: string): Route {
   const parts = pathname.split('/').filter(Boolean);
@@ -31,6 +34,9 @@ export function parseRoute(pathname: string): Route {
     if (parts[1] === 'bots' && parts.length === 3 && id(parts[2])) return { name: 'settings-bot', botId: id(parts[2]) };
     if (parts[1] === 'telegram-app' && parts.length === 2) return { name: 'settings-telegram-app' };
     if (parts[1] === 'userbot' && parts.length === 2) return { name: 'settings-userbot' };
+    if (parts[1] === 'watches' && parts.length === 2) return { name: 'settings-watches' };
+    if (parts[1] === 'watches' && parts[2] === 'new' && parts.length === 3) return { name: 'settings-watch-new' };
+    if (parts[1] === 'watches' && parts.length === 3 && id(parts[2])) return { name: 'settings-watch', watchId: id(parts[2]) };
   }
   return { name: 'home' };
 }
@@ -59,6 +65,12 @@ export function routePath(r: Route): string {
       return '/settings/telegram-app';
     case 'settings-userbot':
       return '/settings/userbot';
+    case 'settings-watches':
+      return '/settings/watches';
+    case 'settings-watch-new':
+      return '/settings/watches/new';
+    case 'settings-watch':
+      return `/settings/watches/${r.watchId}`;
   }
 }
 

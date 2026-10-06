@@ -29,6 +29,9 @@ describe('router', () => {
       { name: 'settings-bot', botId: 3 },
       { name: 'settings-telegram-app' },
       { name: 'settings-userbot' },
+      { name: 'settings-watches' },
+      { name: 'settings-watch-new' },
+      { name: 'settings-watch', watchId: 4 },
     ];
     for (const r of all) expect(parseRoute(routePath(r))).toEqual(r);
   });
