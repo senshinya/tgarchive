@@ -89,6 +89,7 @@ type Service struct {
 	codeHash  string
 	clear     clearMode
 	logoutGen uint64
+	revoked   bool // the session's revocation was handled (and alerted); cleared by the next login
 }
 
 func New(st *store.Store, box *seal.Box, creds CredsLoader, d Dialer, n notify.Notifier) *Service {
@@ -267,7 +268,7 @@ func (s *Service) markReady(ctx context.Context, gen uint64, u *tg.User, phone s
 	// Defense in depth: a fresh successful login must never be undone by a stale pending
 	// clear armed by an earlier logout/revocation that never got consumed by a detach()
 	// (see Logout's api == nil branch, which is the normal way this gets disarmed).
-	s.state, s.lastErr, s.phone, s.codeHash, s.clear = StateReady, "", "", "", clearNone
+	s.state, s.lastErr, s.phone, s.codeHash, s.clear, s.revoked = StateReady, "", "", "", clearNone, false
 	return nil
 }
 
@@ -282,11 +283,13 @@ func (s *Service) markReady(ctx context.Context, gen uint64, u *tg.User, phone s
 // (which revokes the key mid-call) is not a revocation and must not overwrite logged_out.
 func (s *Service) unauthorized(ctx context.Context, gen uint64) {
 	s.mu.Lock()
-	if s.logoutGen != gen || s.state == StateError {
+	// revoked, not just the error state: the reconnect that follows moves the state back to
+	// connecting while slower in-flight calls (a fetch, a watch poll) may still come back 401.
+	if s.logoutGen != gen || s.state == StateError || s.revoked {
 		s.mu.Unlock()
 		return
 	}
-	s.state, s.lastErr, s.clear = StateError, msgRevoked, clearSession
+	s.state, s.lastErr, s.clear, s.revoked = StateError, msgRevoked, clearSession, true
 	s.mu.Unlock()
 
 	if err := s.st.SetUserbotStatus(ctx, store.UserbotError, msgRevoked, s.Now().Unix()); err != nil {
