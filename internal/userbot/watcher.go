@@ -34,9 +34,10 @@ const (
 	MinPollSeconds     = 30
 	MaxPollSeconds     = 600
 
-	historyPage  = 100
-	historyPages = 5
-	testPosts    = 5
+	historyPage   = 100
+	historyPages  = 5
+	backfillPages = 10 // a starting watch takes in at most this many pages of recent posts
+	testPosts     = 5
 )
 
 var (
@@ -296,15 +297,13 @@ func (w *Watcher) poll(ctx context.Context, api *tg.Client, wv store.WatchView, 
 		changed = true
 	}
 	if wv.LastSeenID == 0 {
-		// A watch only observes posts published after it was created (or re-enabled).
-		top, err := latestID(ctx, api, in)
-		if err != nil {
-			return changed, err
+		// Starting (created or re-enabled): posts published within the window are taken in
+		// as if they had been seen as they came, so each is watched until its own deadline.
+		if err := w.start(ctx, api, in, wv); err != nil {
+			return true, err
 		}
-		if top == 0 {
-			top = store.WatchStartEmpty
-		}
-		return true, w.st.SetWatchStart(ctx, wv.ID, top)
+		_, err := w.judge(ctx, api, wv, ch, cond)
+		return true, err
 	}
 	posts, err := newPosts(ctx, api, in, int(max(wv.LastSeenID, 0)))
 	if err != nil {
@@ -352,6 +351,54 @@ func latestID(ctx context.Context, api *tg.Client, peer tg.InputPeerClass) (int6
 		top = max(top, int64(m.GetID()))
 	}
 	return top, nil
+}
+
+// start takes in the posts published within the window and records the newest post id as the
+// watch's starting point (WatchStartEmpty for a channel without posts).
+func (w *Watcher) start(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, wv store.WatchView) error {
+	window := int64(wv.WindowMinutes) * 60
+	since := w.Now().Unix() - window
+	var top int64
+	var pend []store.Pending
+	offset := 0
+	for page := 0; page < backfillPages; page++ {
+		res, err := api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: peer, OffsetID: offset, Limit: historyPage})
+		if err != nil {
+			return err
+		}
+		list, _, _, err := messagesOf(res)
+		if err != nil {
+			return err
+		}
+		older := false
+		for _, mc := range list {
+			id := mc.GetID()
+			top = max(top, int64(id))
+			if offset == 0 || id < offset {
+				offset = id
+			}
+			m, ok := mc.(*tg.Message)
+			if !ok {
+				continue
+			}
+			if int64(m.Date) < since {
+				older = true
+				continue
+			}
+			g, _ := m.GetGroupedID()
+			pend = append(pend, store.Pending{TgMessageID: int64(m.ID), GroupedID: g, Date: int64(m.Date), Deadline: int64(m.Date) + window})
+		}
+		if older || len(list) < historyPage {
+			break
+		}
+	}
+	if top == 0 {
+		return w.st.SetWatchStart(ctx, wv.ID, store.WatchStartEmpty)
+	}
+	if err := w.st.SetWatchStart(ctx, wv.ID, top); err != nil {
+		return err
+	}
+	return w.st.AddPending(ctx, wv.ID, pend, top)
 }
 
 // newPosts returns the channel's posts above minID (service messages skipped), oldest first.
@@ -700,7 +747,8 @@ func getChannel(ctx context.Context, api *tg.Client, ch *tg.Channel) (*tg.Channe
 	return nil, errNoChat
 }
 
-// InitialLastSeen returns the newest post id of a channel, where a new watch starts observing.
+// InitialLastSeen returns the newest post id of a channel; creating a watch calls it to check the
+// channel can be read.
 func (w *Watcher) InitialLastSeen(ctx context.Context, channelID int64) (int64, error) {
 	var top int64
 	err := w.api.With(ctx, func(api *tg.Client) error {

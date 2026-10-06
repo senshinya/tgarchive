@@ -15,7 +15,7 @@
 - 左栏「按人」「按 bot」两种模式下频道会话都单独显示
 
 ### 明确不做
-- 回溯已有老帖（添加监听只观察之后的新帖）
+- 回溯窗口之外的老帖（添加或重新启用监听时，只纳入发布时间在窗口内的帖子）
 - 存档后继续更新 reaction 数（只记命中时的快照）
 - 自动加入私有频道（邀请链接）
 - 监听群组/超级群（只支持广播频道）
@@ -28,7 +28,7 @@
 ### Poller（`internal/userbot/watcher.go`）
 - 每个周期（全局设置 `watch_poll_seconds`，默认 60，范围 30–600）对每个启用的监听依次执行；userbot 非 `ready` 时整轮跳过
 - **拉新帖**：`messages.getHistory(peer, min_id = last_seen_id, limit = 100)`，取 `ID > last_seen_id` 的 `tg.Message`（跳过 service message）；满 100 条时以最小 id 为 `offset_id` 继续，最多 5 页。每条写入 `watch_pending`（`deadline = date + window*60`），推进 `last_seen_id`
-- **初始化**：`last_seen_id = 0` 时只取最新一条帖子的 id 作为 `last_seen_id`，不入观察表（不回溯）。创建监听时若 userbot 就绪则同步初始化
+- **初始化**：`last_seen_id = 0`（新建或重新启用）时向前翻页（最多 10 页），发布时间在窗口内的帖子按各自 `deadline = date + window` 入观察表并在同一轮判定（已满足的立即存档），最新帖子 id 作为 `last_seen_id`；频道无帖子时记为 −1。创建请求只校验频道可读，起点由轮询器设置
 - **判定**：取该监听全部观察中的帖子 id，按 100 一批 `channels.getMessages`（一次拿到正文、媒体、reactions、views、forwards、replies）。按相册（`grouped_id`，无则单条）分组计算统计并按条件树求值：
   - 命中 → 整组存档（§4），删除该组观察记录
   - 未命中且组内全部 `deadline ≤ now` → 删除观察记录

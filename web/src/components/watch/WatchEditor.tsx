@@ -190,7 +190,10 @@ function WatchForm({ channel, watch, onChangeChannel }: { channel: ChannelRef; w
             <Switch checked={enabled} label="启用监听" onChange={setEnabled} />
           </div>
         </div>
-        <Description>新帖发布后的 {windowError ? 'x' : windowValue} 分钟内，任一时刻满足条件即存档；到期未满足则放弃。</Description>
+        <Description>
+          帖子发布后的 {windowError ? 'x' : windowValue} 分钟内，任一时刻满足条件即存档；到期未满足则放弃。开始监听（或重新启用）时，最近{' '}
+          {windowError ? 'x' : windowValue} 分钟内已发布的帖子也一并纳入。
+        </Description>
       </Section>
       <Section title="条件">
         <CondEditor value={cond} onChange={setCond} reactions={reactions} bad={showErrors ? bad : new Set()} />

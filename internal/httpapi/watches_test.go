@@ -133,7 +133,8 @@ func TestWatchCRUD(t *testing.T) {
 	if got.ID == 0 || got.Channel.Title != "News" || got.ChatID == 0 || got.WindowMinutes != 30 || string(got.Cond) != condOK {
 		t.Fatalf("created = %+v", got)
 	}
-	if v, _ := e.st.GetWatch(context.Background(), got.ID); v.LastSeenID != 42 {
+	// The poller sets the starting point (taking in the window's posts), not the request.
+	if v, _ := e.st.GetWatch(context.Background(), got.ID); v.LastSeenID != 0 {
 		t.Fatalf("last seen = %d", v.LastSeenID)
 	}
 	if w := call(e.h, "POST", "/api/admin/watches", watchReq(500, 30, condOK)); w.Code != 409 || !strings.Contains(w.Body.String(), "已在监听") {
