@@ -319,14 +319,14 @@ func KeyLabel(key string) string {
 	return key
 }
 
-// Count formats a counter Telegram-style: 999, 1.2k, 8.1k, 12k, 1.5M.
+// Count formats a counter Telegram-style: 999, 1.2K, 8.1K, 12K, 1.5M (as the web UI does).
 func Count(v int) string {
 	f := float64(v)
 	switch {
 	case v < 1000:
 		return strconv.Itoa(v)
 	case v < 1000000:
-		return short(f/1000) + "k"
+		return short(f/1000) + "K"
 	}
 	return short(f/1000000) + "M"
 }

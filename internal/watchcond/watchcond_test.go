@@ -74,7 +74,7 @@ func TestExplain(t *testing.T) {
 		{"metric":"reaction","key":"paid","cmp":"gte","value":1},
 		{"metric":"type","cmp":"is","value":"photo"},
 		{"metric":"text","cmp":"contains","value":"World"}]}`)
-	want := []string{"🔥 23 ≥ 10", "浏览 8.1k ≥ 5000", "🔥 占比 56.1% ≥ 50%", "reaction 总数/浏览 0.5% ≥ 0.5%", "⭐ 10 ≥ 1",
+	want := []string{"🔥 23 ≥ 10", "浏览 8.1K ≥ 5000", "🔥 占比 56.1% ≥ 50%", "reaction 总数/浏览 0.5% ≥ 0.5%", "⭐ 10 ≥ 1",
 		"类型为图片", "包含「World」"}
 	if got := n.Explain(post); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Explain = %q\nwant      %q", got, want)
@@ -82,7 +82,7 @@ func TestExplain(t *testing.T) {
 }
 
 func TestCount(t *testing.T) {
-	for v, want := range map[int]string{0: "0", 999: "999", 1000: "1k", 1250: "1.2k", 8123: "8.1k", 12500: "12k", 1500000: "1.5M"} {
+	for v, want := range map[int]string{0: "0", 999: "999", 1000: "1K", 1250: "1.2K", 8123: "8.1K", 12500: "12K", 1500000: "1.5M"} {
 		if got := Count(v); got != want {
 			t.Errorf("Count(%d) = %s, want %s", v, got, want)
 		}

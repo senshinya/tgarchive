@@ -273,6 +273,18 @@ func (s *Store) SetWatchStatus(ctx context.Context, id int64, status, lastErr st
 // a post is never both skipped and unrecorded. Posts already pending are left as they are.
 func (s *Store) AddPending(ctx context.Context, watchID int64, posts []Pending, lastSeen int64) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
+		// A watch reset to 0 meanwhile (re-enabled while this poll ran) starts over: this
+		// poll's posts belong to the old run.
+		var cur int64
+		if err := tx.QueryRowContext(ctx, "SELECT last_seen_id FROM channel_watches WHERE id = ?", watchID).Scan(&cur); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		if cur == 0 {
+			return nil
+		}
 		for _, p := range posts {
 			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO watch_pending (watch_id, tg_message_id, grouped_id, date, deadline)
 				VALUES (?, ?, ?, ?, ?)`, watchID, p.TgMessageID, p.GroupedID, p.Date, p.Deadline); err != nil {
