@@ -545,6 +545,35 @@ describe('conversation windows', () => {
     expect(s.conv(10).items.find((m) => m.id === 60)?.text).toBe('edited');
   });
 
+  it('drops a page that arrives after a jump replaced the conversation', async () => {
+    let releaseOlder: (ms: Message[]) => void = () => {};
+    const messages = vi.fn(async (_c: number, before = 0, limit = 50, extra: { after?: number; around?: number } = {}) => {
+      if (before) return new Promise<Message[]>((r) => (releaseOlder = r));
+      return serve(_c, before, limit, extra);
+    });
+    const s = createStore(fakeApi({ messages }));
+    await s.refreshLatest(10); // 151..200
+    const older = s.loadOlder(10); // in flight
+    await s.loadAround(10, 60); // the user jumps meanwhile
+    releaseOlder(page(101, 150));
+    await older;
+    expect(ids(s.conv(10).items)).toEqual(ids(page(36, 85)));
+    expect(s.conv(10)).toMatchObject({ hasMore: true, hasNewer: true, loading: false });
+  });
+
+  it('keeps only the latest of two jumps', async () => {
+    let releaseFirst: (ms: Message[]) => void = () => {};
+    const messages = vi.fn(async (_c: number, before = 0, limit = 50, extra: { after?: number; around?: number } = {}) =>
+      extra.around === 20 ? new Promise<Message[]>((r) => (releaseFirst = r)) : serve(_c, before, limit, extra),
+    );
+    const s = createStore(fakeApi({ messages }));
+    const first = s.loadAround(10, 20);
+    await s.loadAround(10, 60);
+    releaseFirst(page(1, 45));
+    await first;
+    expect(ids(s.conv(10).items)).toEqual(ids(page(36, 85)));
+  });
+
   it('replaces a window with the latest page on refresh', async () => {
     const s = createStore(fakeApi({ messages: serve }));
     await s.loadAround(10, 60);

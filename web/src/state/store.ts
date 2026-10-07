@@ -126,6 +126,9 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
   let toastSeq = 0;
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
   const eventListeners = new Set<(ev: ArchiveEvent) => void>();
+  // Bumped when a jump replaces a conversation, so pages requested before it are dropped on arrival.
+  const generations = new Map<number, number>();
+  const generation = (key: number) => generations.get(key) ?? 0;
   // Read marks in flight, by chat: the newest id waiting to be sent and the throttle timer.
   const readMarks = new Map<number, { pending: number; timer: ReturnType<typeof setTimeout> }>();
 
@@ -269,8 +272,10 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
   async function refreshLatest(chatId: number, opts: { reset?: boolean } = {}) {
     if (conv(chatId).loading) return;
     setConv(chatId, { loading: true, error: '' });
+    const gen = generation(chatId);
     try {
       const page = await convMessages(api, chatId, 0, PAGE_SIZE);
+      if (gen !== generation(chatId)) return;
       const c = conv(chatId);
       const newestKnown = c.items.length ? c.items[c.items.length - 1].id : 0;
       const overlaps = !opts.reset && !c.hasNewer && c.loaded && page.length > 0 && page[0].id <= newestKnown;
@@ -285,21 +290,24 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
         setConv(chatId, { items: page, hasMore: page.length >= PAGE_SIZE, hasNewer: false, loading: false, loaded: true });
       }
     } catch (e) {
-      setConv(chatId, { loading: false, error: errorMessage(e) });
+      if (gen === generation(chatId)) setConv(chatId, { loading: false, error: errorMessage(e) });
     }
   }
 
   /** Replaces a conversation with the window around message `messageId` (for a jump far back). */
   async function loadAround(chatId: number, messageId: number) {
+    const gen = generation(chatId) + 1;
+    generations.set(chatId, gen);
     setConv(chatId, { loading: true, error: '' });
     try {
       const page = await convMessages(api, chatId, 0, PAGE_SIZE, { around: messageId });
+      if (gen !== generation(chatId)) return;
       const half = Math.floor(PAGE_SIZE / 2);
       const older = page.filter((m) => m.id <= messageId).length;
       const newer = page.length - older;
       setConv(chatId, { items: page, hasMore: older >= PAGE_SIZE - half, hasNewer: newer >= half, loading: false, loaded: true });
     } catch (e) {
-      setConv(chatId, { loading: false, error: errorMessage(e) });
+      if (gen === generation(chatId)) setConv(chatId, { loading: false, error: errorMessage(e) });
     }
   }
 
@@ -308,11 +316,13 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     const c = conv(chatId);
     if (!c.loaded || c.loading || !c.hasNewer) return;
     setConv(chatId, { loading: true, error: '' });
+    const gen = generation(chatId);
     try {
       const page = await convMessages(api, chatId, 0, PAGE_SIZE, { after: c.items[c.items.length - 1]?.id ?? 0 });
+      if (gen !== generation(chatId)) return;
       setConv(chatId, { items: mergeById(conv(chatId).items, page), hasNewer: page.length >= PAGE_SIZE, loading: false });
     } catch (e) {
-      setConv(chatId, { loading: false, error: errorMessage(e) });
+      if (gen === generation(chatId)) setConv(chatId, { loading: false, error: errorMessage(e) });
     }
   }
 
@@ -320,11 +330,13 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     const c = conv(chatId);
     if (!c.loaded || c.loading || !c.hasMore) return;
     setConv(chatId, { loading: true, error: '' });
+    const gen = generation(chatId);
     try {
       const page = await convMessages(api, chatId, c.items[0]?.id ?? 0, PAGE_SIZE);
+      if (gen !== generation(chatId)) return;
       setConv(chatId, { items: mergeById(page, conv(chatId).items), hasMore: page.length >= PAGE_SIZE, loading: false });
     } catch (e) {
-      setConv(chatId, { loading: false, error: errorMessage(e) });
+      if (gen === generation(chatId)) setConv(chatId, { loading: false, error: errorMessage(e) });
     }
   }
 
