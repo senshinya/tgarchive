@@ -2,7 +2,7 @@ import { computed, signal } from '@preact/signals';
 import { createContext } from 'preact';
 import { useContext } from 'preact/hooks';
 import { ApiError, PAGE_SIZE, convMessages, errorMessage, type Api } from '../api/client';
-import type { ArchiveEvent, Bot, Chat, Downloads, Entity, Message } from '../api/types';
+import type { ArchiveEvent, Bot, Chat, Downloads, Entity, Message, WallSource, WallType } from '../api/types';
 
 export interface Conversation {
   items: Message[]; // ascending by id
@@ -39,7 +39,9 @@ export interface ViewerItem {
 export type ViewerTarget =
   // chatId is a conversation key: a chat id, or -botId to walk a bot's merged timeline.
   | { chatId: number; messageId: number; mediaId: number }
-  | { list: ViewerItem[]; mediaId: number; title: string };
+  | { list: ViewerItem[]; mediaId: number; title: string }
+  // The media wall: starts from the items the wall has loaded, then walks the whole wall.
+  | { wall: { type: WallType; source: WallSource }; seed: ViewerItem[]; mediaId: number };
 
 export interface Toast {
   id: number;

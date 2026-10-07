@@ -189,3 +189,37 @@ describe('MediaViewer history (system back closes only the viewer)', () => {
     back.mockRestore();
   });
 });
+
+describe('MediaViewer on the media wall', () => {
+  it('starts from the wall items, walks the whole wall with its filters and titles items by their chat', async () => {
+    const bobPhoto = makeMessage({ id: 3, chat_id: 11, kind: 'photo', media: [makeMedia({ id: 103, role: 'main', kind: 'photo' })] });
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    const api = fakeApi({
+      chats: vi.fn(async () => [
+        makeChat({ id: 10 }),
+        makeChat({ id: 11, sender: { tg_user_id: 7, first_name: 'Bob', last_name: '', username: '', has_avatar: false } }),
+      ]),
+      allMedia: vi.fn(async () => {
+        await gate;
+        return [bobPhoto, photoMsg(2, 102), photoMsg(1, 101)];
+      }),
+    });
+    const r = renderWithStore(<MediaViewer />, api);
+    await act(async () => {
+      await r.store.loadChats();
+    });
+    const seed = [{ mediaId: 102, kind: 'photo', date: 1, text: '', entities: [], chatId: 10 }];
+    act(() => {
+      r.store.viewer.value = { wall: { type: 'photo', source: 'private' }, seed, mediaId: 102 };
+    });
+    await screen.findByText('1 / 1', { exact: false });
+    expect(api.allMedia).toHaveBeenCalledWith('photo', 'private', 0, expect.any(Number));
+    await act(async () => release());
+    await screen.findByText('2 / 3', { exact: false });
+    expect(api.chatMedia).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '下一个' }));
+    expect(current(r.container).dataset.media).toBe('103');
+    expect(r.container.querySelector('.MediaViewer-name')!.textContent).toBe('Bob');
+  });
+});

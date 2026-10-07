@@ -103,13 +103,18 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
     };
   }, []);
   const listed = 'list' in target ? target : null;
-  const inChat = 'list' in target ? null : target;
+  const wall = 'wall' in target ? target : null;
+  const inChat = 'chatId' in target ? target : null;
   const chatId = inChat?.chatId ?? 0;
-  const seed = listed ? listed.list : toViewerItems(store.conv(chatId).items.filter((m) => m.id === inChat?.messageId));
+  const seed = listed
+    ? listed.list
+    : wall
+      ? wall.seed
+      : toViewerItems(store.conv(chatId).items.filter((m) => m.id === inChat?.messageId));
   const [items, setItems] = useState<ViewerItem[]>(seed);
 
-  // Load the whole chat's media (newest first, paged by id) so left/right walks all of it. An
-  // explicit list is already complete.
+  // Load the whole chat's (or the wall's) media, newest first, paged by id, so left/right walks
+  // all of it. An explicit list is already complete.
   useEffect(() => {
     if (listed) return;
     let cancelled = false;
@@ -117,7 +122,9 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
       const all: Message[] = [];
       let before = 0;
       for (let i = 0; i < VIEWER_MAX_PAGES; i++) {
-        const page = await convMedia(store.api, chatId, 'media', before, VIEWER_PAGE);
+        const page = wall
+          ? await store.api.allMedia(wall.wall.type, wall.wall.source, before, VIEWER_PAGE)
+          : await convMedia(store.api, chatId, 'media', before, VIEWER_PAGE);
         all.push(...page);
         if (page.length < VIEWER_PAGE) break;
         before = page[page.length - 1].id;
@@ -174,12 +181,17 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
   );
 }
 
-/** Full-screen viewer over all photos/videos/GIFs of the chat, or over an explicit list (an
- * article's media); opened by setting store.viewer. */
+/** Full-screen viewer over all photos/videos/GIFs of the chat or of the media wall, or over an
+ * explicit list (an article's media); opened by setting store.viewer. */
 export function MediaViewer() {
   const store = useStore();
   const target = store.viewer.value;
   if (!target) return null;
-  const key = 'list' in target ? `list:${target.mediaId}` : `${target.chatId}:${target.mediaId}`;
+  const key =
+    'list' in target
+      ? `list:${target.mediaId}`
+      : 'wall' in target
+        ? `wall:${target.wall.type}:${target.wall.source}:${target.mediaId}`
+        : `${target.chatId}:${target.mediaId}`;
   return <ViewerInner key={key} target={target} />;
 }
