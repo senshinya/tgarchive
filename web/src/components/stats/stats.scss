@@ -54,7 +54,7 @@
 
 .StatsOverview {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
   gap: 1rem;
 }
 
@@ -428,5 +428,36 @@ button.Heatmap-cell {
     background: var(--color-primary);
     color: #fff;
     cursor: pointer;
+  }
+}
+
+// Phones: name and figures on one line, the bar across the full width below.
+@media (max-width: 600px) {
+  .StatsBars-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'label note'
+      'track track';
+    row-gap: 0.375rem;
+  }
+
+  .StatsBars-label {
+    grid-area: label;
+  }
+
+  .StatsBars-note {
+    grid-area: note;
+  }
+
+  .StatsBars-track {
+    grid-area: track;
+  }
+
+  .StatsFigure {
+    padding: 1rem;
+  }
+
+  .StatsFigure-value {
+    font-size: 1.625rem;
   }
 }
