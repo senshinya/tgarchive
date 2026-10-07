@@ -104,7 +104,7 @@ func TestMigration7Backfill(t *testing.T) {
 	bot := seedBot(t, old, 777)
 	a := ingest(t, old, bot, textMsg(1, "旧消息")).MessageID
 	b := ingest(t, old, bot, textMsg(2, "另一条")).MessageID
-	if _, _, err := old.DeleteMessage(ctx, b, 9000); err != nil {
+	if _, err := old.db.Exec("UPDATE messages SET deleted_at = 9000 WHERE id = ?", b); err != nil { // as v6 deleted it
 		t.Fatal(err)
 	}
 	if err := old.migrate(ctx, 0); err != nil {

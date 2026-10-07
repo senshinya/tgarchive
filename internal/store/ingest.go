@@ -261,11 +261,12 @@ func (s *Store) DeleteMessage(ctx context.Context, id, now int64) (int64, []stri
 			return err
 		}
 		// Unlinking the media (article media included) lets collectOrphans drop unshared files; the
-		// Telegraph snapshot and its job go with the message (the FK cascade only fires on a hard delete).
+		// Telegraph snapshot, its job and the favorite go with the message (the FK cascade only fires on a hard delete).
 		for _, q := range []string{
 			"DELETE FROM message_media WHERE message_id = ?",
 			"DELETE FROM articles WHERE message_id = ?",
 			"DELETE FROM telegraph_jobs WHERE message_id = ?",
+			"DELETE FROM favorites WHERE message_id = ?",
 		} {
 			if _, err := tx.ExecContext(ctx, q, id); err != nil {
 				return err

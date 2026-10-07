@@ -96,6 +96,8 @@ type MessageView struct {
 	Article            *ArticleSummary `json:"article,omitempty"`
 	// Stats is the snapshot taken when a watched channel post was archived (channel_watch only).
 	Stats json.RawMessage `json:"stats,omitempty"`
+	// Favorite is set when the message is a favorite.
+	Favorite *FavoriteInfo `json:"favorite"`
 }
 
 // ListChats lists conversations, most recent first: every bot × sender chat of botID (all bots
@@ -390,6 +392,9 @@ func (s *Store) hydrate(ctx context.Context, views []MessageView) error {
 		return err
 	}
 	if err := s.hydrateArticles(ctx, views, idx, ph, args); err != nil {
+		return err
+	}
+	if err := s.hydrateFavorites(ctx, views, idx, ph, args); err != nil {
 		return err
 	}
 	for i := range views {

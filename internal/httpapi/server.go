@@ -76,6 +76,7 @@ func (s *Server) Handler() http.Handler {
 	s.settingsRoutes(mux)
 	s.userbotRoutes(mux)
 	s.watchRoutes(mux)
+	s.favoriteRoutes(mux)
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) { writeErr(w, http.StatusNotFound, "not found") })
 	mux.Handle("GET /", s.spa())
 	return s.auth(mux)
