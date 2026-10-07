@@ -229,6 +229,14 @@ describe('search', () => {
     expect(r.search).toHaveBeenLastCalledWith('天气', 0, 0);
   });
 
+  it('focuses the box without scrolling the layout (the column may still be sliding in)', async () => {
+    const r = await searchSetup();
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    act(() => r.store.openSearch(10));
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    focus.mockRestore();
+  });
+
   it('loads the next page when scrolled to the end', async () => {
     const search = vi.fn(async (_q: string, _c?: number, before?: number) =>
       before ? { items: [hit(3, 10, '天气 b', [[0, 2]])], next: 0 } : { items: [hit(5, 10, '天气 a', [[0, 2]])], next: 5 },

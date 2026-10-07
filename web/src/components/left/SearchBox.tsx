@@ -24,7 +24,9 @@ export function SearchBox() {
   const scopeName = useConvName(scope);
   const focus = store.searchFocus.value;
   useEffect(() => {
-    if (focus) input.current?.focus();
+    // preventScroll: on narrow screens the column is still sliding in, and scrolling it into view
+    // would shift the whole layout sideways.
+    if (focus) input.current?.focus({ preventScroll: true });
   }, [focus]);
   const clear = () => {
     store.searchQuery.value = '';
