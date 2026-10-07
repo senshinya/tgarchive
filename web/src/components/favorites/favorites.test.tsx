@@ -112,6 +112,11 @@ describe('FavoritesView', () => {
 });
 
 describe('TagDialog', () => {
+  it('puts the cursor in the tag field when it opens', () => {
+    renderWithStore(<TagDialog initial={[]} onSave={vi.fn(async () => undefined)} onClose={() => {}} />);
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: '添加标签' }));
+  });
+
   it('adds, dedupes, suggests and removes tags, then saves them', async () => {
     const onSave = vi.fn(async () => undefined);
     renderWithStore(<TagDialog initial={['旅行']} onSave={onSave} onClose={() => {}} />, fakeApi({

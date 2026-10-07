@@ -1,5 +1,5 @@
 import { X } from 'lucide-preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { errorMessage } from '../../api/client';
 import type { TagCount } from '../../api/types';
 import { useStore } from '../../state/store';
@@ -17,7 +17,10 @@ export function TagDialog({ initial, onSave, onClose }: { initial: string[]; onS
   const [known, setKnown] = useState<TagCount[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
+    // Not autoFocus: browsers honour that attribute only while the page loads.
+    input.current?.focus();
     store.api.tags().then(setKnown, () => setKnown([]));
   }, []);
 
@@ -54,12 +57,12 @@ export function TagDialog({ initial, onSave, onClose }: { initial: string[]; onS
             </button>
           ))}
           <input
+            ref={input}
             type="text"
             aria-label="添加标签"
             placeholder={tags.length ? '' : '输入标签，回车添加'}
             value={text}
             maxLength={32}
-            autoFocus
             onInput={(e) => setText((e.currentTarget as HTMLInputElement).value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
