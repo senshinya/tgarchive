@@ -116,7 +116,10 @@ function ChannelItem({ chat, selected }: { chat: Chat; selected: boolean }) {
             <span class="ChatItem-time">{formatListTime(chat.last_message_at)}</span>
           )}
         </span>
-        <span class="ChatItem-subtitle">{chat.last_kind ? previewText(chat.last_kind, chat.last_text) : '暂无存档'}</span>
+        <span class="ChatItem-row">
+          <span class="ChatItem-subtitle">{chat.last_kind ? previewText(chat.last_kind, chat.last_text) : '暂无存档'}</span>
+          {chat.unread > 0 && !selected && <span class="ChatBadge">{chat.unread > 999 ? '999+' : chat.unread}</span>}
+        </span>
       </span>
     </button>
   );

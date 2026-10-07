@@ -50,6 +50,10 @@ export interface Chat {
   last_message_at: number;
   last_kind: string;
   last_text: string;
+  /** The newest message read (channels; see markRead). */
+  last_read_id: number;
+  /** Messages newer than last_read_id; always 0 for private chats. */
+  unread: number;
 }
 
 export type MediaState = 'pending' | 'done' | 'failed' | 'too_large';

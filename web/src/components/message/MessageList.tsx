@@ -97,6 +97,7 @@ export function MessageList({ chatId }: { chatId: number }) {
     // Following the bottom only while it is the latest: a window being extended stays put.
     else if (last > s.lastId && s.atBottom && !s.hasNewer) el.scrollTop = el.scrollHeight;
     record();
+    readUpTo();
     // A first page shorter than the viewport never fires scroll events: keep filling.
     if (conv.loaded && conv.hasMore && el.scrollHeight - el.clientHeight < LOAD_OLDER_THRESHOLD) void store.loadOlder(chatId);
   }, [conv.items]);
@@ -133,10 +134,17 @@ export function MessageList({ chatId }: { chatId: number }) {
     [],
   );
 
+  // A channel's newest message in view marks it read (the left column's badge).
+  const readUpTo = () => {
+    const c = store.conv(chatId);
+    if (chatId > 0 && snap.current.atBottom && !c.hasNewer && c.items.length) store.markRead(chatId, c.items[c.items.length - 1].id);
+  };
+
   const onScroll = () => {
     const el = ref.current;
     if (!el) return;
     record();
+    readUpTo();
     const below = el.scrollHeight - el.scrollTop - el.clientHeight;
     setShowDown(below > SHOW_DOWN_PX);
     if (el.scrollTop < LOAD_OLDER_THRESHOLD) void store.loadOlder(chatId);

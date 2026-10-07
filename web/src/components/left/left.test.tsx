@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Api } from '../../api/client';
 import { route } from '../../lib/router';
 import { SILENT_KEY, setSilent, silent } from '../../lib/silent';
-import { fakeApi, makeBot, makeChat, makeMessage } from '../../test/fixtures';
+import { fakeApi, makeBot, makeChannelChat, makeChat, makeMessage } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
 import { ChatsPanel } from './ChatsPanel';
 
@@ -246,5 +246,34 @@ describe('search', () => {
     });
     expect(search).toHaveBeenLastCalledWith('天气', 0, 5);
     expect(r.container.querySelectorAll('.SearchResult').length).toBe(2);
+  });
+});
+
+describe('unread badges', () => {
+  async function badgeSetup(unread: number, selected = false) {
+    const api = fakeApi({ chats: vi.fn(async () => [makeChannelChat({ id: 50, unread }), makeChat({ id: 10, unread: 0 })]) });
+    if (selected) route.value = { name: 'chat', chatId: 50 };
+    const r = renderWithStore(<ChatsPanel />, api);
+    await act(async () => {
+      await r.store.loadChats();
+    });
+    return r;
+  }
+
+  it('counts a channel’s new posts', async () => {
+    const r = await badgeSetup(3);
+    expect(r.container.querySelector('.ChannelItem .ChatBadge')?.textContent).toBe('3');
+    expect(r.container.querySelectorAll('.ChatBadge').length).toBe(1);
+  });
+
+  it('caps the number', async () => {
+    const r = await badgeSetup(1000);
+    expect(r.container.querySelector('.ChatBadge')?.textContent).toBe('999+');
+  });
+
+  it('hides it on the open conversation and when nothing is new', async () => {
+    expect((await badgeSetup(3, true)).container.querySelector('.ChatBadge')).toBeNull();
+    route.value = { name: 'home' };
+    expect((await badgeSetup(0)).container.querySelectorAll('.ChatBadge').length).toBe(0);
   });
 });

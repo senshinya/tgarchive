@@ -111,6 +111,8 @@ export interface Api {
   favorites(tag?: number, before?: number): Promise<FavoritesPage>;
   tags(): Promise<TagCount[]>;
   deleteTag(id: number): Promise<void>;
+  /** Records that a chat has been read up to a message. */
+  markRead(chatId: number, messageId: number): Promise<void>;
   addBot(token: string): Promise<AddBotResult>;
   setBotEnabled(id: number, enabled: boolean): Promise<Bot>;
   deleteBot(id: number, purge: boolean): Promise<void>;
@@ -165,6 +167,7 @@ export const api: Api = {
   favorites: (tag = 0, before = 0) => request('GET', `/api/favorites${qs({ tag, before })}`),
   tags: () => request('GET', '/api/tags'),
   deleteTag: (id) => request('DELETE', `/api/tags/${id}`),
+  markRead: (chatId, messageId) => request('POST', `/api/chats/${chatId}/read`, { message_id: messageId }),
   addBot: (token) => request('POST', '/api/admin/bots', { token }),
   setBotEnabled: (id, enabled) => request('PATCH', `/api/admin/bots/${id}`, { enabled }),
   deleteBot: (id, purge) => request('DELETE', `/api/admin/bots/${id}${purge ? '?purge=1' : ''}`),

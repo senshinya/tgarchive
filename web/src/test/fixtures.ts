@@ -27,6 +27,8 @@ export function makeChat(over: Partial<Chat> = {}): Chat {
     last_message_at: 1_790_000_000,
     last_kind: 'text',
     last_text: 'hello',
+    last_read_id: 0,
+    unread: 0,
     ...over,
   };
 }
@@ -143,6 +145,7 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     favorites: vi.fn(async () => ({ items: [], next: 0 })),
     tags: vi.fn(async () => []),
     deleteTag: vi.fn(async () => undefined),
+    markRead: vi.fn(async () => undefined),
     addBot: vi.fn(async () => ({ bot_id: 1, steps: [] })),
     setBotEnabled: vi.fn(async (id: number, enabled: boolean) => makeBot({ id, enabled })),
     deleteBot: vi.fn(async () => undefined),

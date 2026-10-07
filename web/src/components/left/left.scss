@@ -330,3 +330,23 @@ html.is-apple .ChatItem-subtitle .sender-name {
   margin-right: 0.25rem;
   vertical-align: -0.125rem;
 }
+
+// Web A's unread counter: a primary pill at the end of the preview line.
+.ChatBadge {
+  flex-shrink: 0;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 0.4375rem;
+  border-radius: 0.75rem;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
+  line-height: 1.5rem;
+  text-align: center;
+}
+
+.ChatItem-row .ChatItem-subtitle {
+  flex: 1;
+  min-width: 0;
+}

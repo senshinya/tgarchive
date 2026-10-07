@@ -126,6 +126,8 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
   let toastSeq = 0;
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
   const eventListeners = new Set<(ev: ArchiveEvent) => void>();
+  // Read marks in flight, by chat: the newest id waiting to be sent and the throttle timer.
+  const readMarks = new Map<number, { pending: number; timer: ReturnType<typeof setTimeout> }>();
 
   const botsById = computed(() => new Map(bots.value.map((b) => [b.id, b])));
   // Falls back to "全部" when the selected bot was purged from `bots` but the reload that
@@ -430,6 +432,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
         return;
       }
       case 'watch.updated':
+      case 'chat.read':
         scheduleChatsReload();
         return;
       case 'bot.status': {
@@ -473,6 +476,29 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
       showToast(errorMessage(e));
       await refreshMessage(m.id, m.chat_id);
     }
+  }
+
+  /** Marks a channel conversation read up to messageId: its badge clears at once, and the server
+   * hears about it at most once a second. Private chats have no unread count. */
+  function markRead(chatId: number, messageId: number) {
+    const chat = chats.value.find((c) => c.id === chatId);
+    if (!chat || chat.kind !== 'channel' || messageId <= chat.last_read_id) return;
+    chats.value = chats.value.map((c) => (c.id === chatId ? { ...c, last_read_id: messageId, unread: 0 } : c));
+    const mark = readMarks.get(chatId);
+    if (mark) {
+      mark.pending = messageId;
+      return;
+    }
+    const send = (id: number) => api.markRead(chatId, id).catch(() => undefined);
+    void send(messageId);
+    const entry = {
+      pending: 0,
+      timer: setTimeout(() => {
+        readMarks.delete(chatId);
+        if (entry.pending) void send(entry.pending);
+      }, 1000),
+    };
+    readMarks.set(chatId, entry);
   }
 
   /** Adds a message to the favorites or removes it, then shows its new state. */
@@ -549,6 +575,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     retryMedia,
     toggleFavorite,
     setTags,
+    markRead,
   };
 }
 

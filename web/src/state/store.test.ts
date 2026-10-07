@@ -555,3 +555,41 @@ describe('conversation windows', () => {
     expect(ids(s.conv(10).items)).toEqual(ids(page(151, 200)));
   });
 });
+
+describe('read marks', () => {
+  const setup = async () => {
+    const api = fakeApi({ chats: vi.fn(async () => [makeChannelChat({ id: 50, unread: 4, last_read_id: 10 }), makeChat({ id: 10 })]) });
+    const s = createStore(api, { chatsReloadDelay: 0 });
+    await s.loadChats();
+    return { s, api };
+  };
+
+  it('reports a channel read up to a message at most once a second, clearing its badge at once', async () => {
+    vi.useFakeTimers();
+    const { s, api } = await setup();
+    s.markRead(50, 20);
+    expect(api.markRead).toHaveBeenCalledWith(50, 20);
+    expect(s.chats.value.find((c) => c.id === 50)).toMatchObject({ unread: 0, last_read_id: 20 });
+    s.markRead(50, 21);
+    s.markRead(50, 22);
+    expect(api.markRead).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(api.markRead).toHaveBeenCalledTimes(2);
+    expect(api.markRead).toHaveBeenLastCalledWith(50, 22);
+    vi.useRealTimers();
+  });
+
+  it('ignores private chats and messages already read', async () => {
+    const { s, api } = await setup();
+    s.markRead(10, 99);
+    s.markRead(50, 5);
+    expect(api.markRead).not.toHaveBeenCalled();
+  });
+
+  it('reloads the chat list when another device read a chat', async () => {
+    const { s, api } = await setup();
+    await s.handleEvent({ type: 'chat.read', data: { chat_id: 50 } });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(api.chats).toHaveBeenCalledTimes(2);
+  });
+});

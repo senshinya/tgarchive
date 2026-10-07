@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { navigate, route } from '../../lib/router';
-import { fakeApi, makeBot, makeChat, makeMessage } from '../../test/fixtures';
+import { fakeApi, makeBot, makeChannelChat, makeChat, makeMessage } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
 import { createStore, StoreContext } from '../../state/store';
 import { MiddleColumn } from './MiddleColumn';
@@ -187,5 +187,30 @@ describe('MiddleColumn search button', () => {
     fireEvent.click(screen.getByRole('button', { name: '搜索此会话' }));
     expect(route.value).toEqual({ name: 'home' });
     delete (window as { matchMedia?: unknown }).matchMedia;
+  });
+});
+
+describe('read marks', () => {
+  it('marks a channel read up to its newest message once the bottom is in view', async () => {
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChannelChat({ id: 50, unread: 2, last_read_id: 1 })]),
+      messages: vi.fn(async () => [makeMessage({ id: 2, chat_id: 50, text: 'a' }), makeMessage({ id: 3, chat_id: 50, text: 'b' })]),
+    });
+    const r = renderWithStore(<MiddleColumn chatId={50} />, api);
+    await act(async () => {
+      await r.store.loadChats();
+    });
+    await screen.findByText('b');
+    await waitFor(() => expect(api.markRead).toHaveBeenCalledWith(50, 3));
+  });
+
+  it('does not for bot chats', async () => {
+    const api = fakeApi({ chats: vi.fn(async () => [makeChat({ id: 10 })]), messages: vi.fn(async () => [makeMessage({ id: 3, text: 'b' })]) });
+    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    await act(async () => {
+      await r.store.loadChats();
+    });
+    await screen.findByText('b');
+    expect(api.markRead).not.toHaveBeenCalled();
   });
 });
