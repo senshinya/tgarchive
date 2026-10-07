@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { route } from '../../lib/router';
-import { localToday } from '../../lib/stats';
+import { localToday, shiftDay } from '../../lib/stats';
 import { fakeApi, makeChat, makeStats } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
 import { StatsView } from './StatsView';
@@ -32,8 +32,8 @@ const stats = makeStats({
     { chat_id: 99, messages: 10, media_bytes: 0 },
   ],
   media_kinds: [
+    { kind: 'other', count: 900, bytes: 10 },
     { kind: 'photo', count: 600, bytes: 1024 },
-    { kind: 'other', count: 78, bytes: 10 },
   ],
   media_states: { done: 670, pending: 5, failed: 2, too_large: 1 },
   watches: [
@@ -87,6 +87,28 @@ describe('StatsView', () => {
     expect(screen.getByText('命中率 2.5%')).toBeTruthy();
     expect(screen.getByText('命中率 —')).toBeTruthy();
     expect(screen.getByText('命中率 100%')).toBeTruthy();
+  });
+
+  it('lists media kinds with the thumbnails and other extras last', async () => {
+    const r = await setup();
+    await screen.findByText('12,345');
+    const labels = [...r.container.querySelectorAll('.StatsKinds .StatsBars-label')].map((e) => e.textContent);
+    expect(labels).toEqual(['图片', '其他（缩略图等）']);
+  });
+
+  it('draws growth day by day while the archive spans a single month', async () => {
+    const today = localToday();
+    const young = {
+      ...stats,
+      monthly: [{ month: today.slice(0, 7), messages: 15, media_bytes: 5 }],
+      daily: [{ day: shiftDay(today, -2), count: 15 }],
+    };
+    const r = await setup(fakeApi({ stats: vi.fn(async () => young) }));
+    await screen.findByText('12,345');
+    const axis = [...r.container.querySelectorAll('.Growth-axis span')].map((e) => e.textContent);
+    expect(axis).toEqual([shiftDay(today, -2), today]);
+    expect(r.container.querySelector('.Growth-line')!.getAttribute('d')!.split('L')).toHaveLength(3);
+    expect(r.container.querySelector('.Growth-area')).toBeNull();
   });
 
   it('links the failed downloads to the downloads panel', async () => {

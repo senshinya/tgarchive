@@ -5,7 +5,7 @@ import { errorMessage } from '../../api/client';
 import type { Stats } from '../../api/types';
 import { chatName, formatSize } from '../../lib/format';
 import { convRoute, navigate } from '../../lib/router';
-import { cumulative, heatmapGrid, localToday, quantileLevels, shiftDay } from '../../lib/stats';
+import { cumulative, dailyCumulative, heatmapGrid, localToday, quantileLevels, shiftDay } from '../../lib/stats';
 import { useStore } from '../../state/store';
 import { IconButton } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
@@ -125,47 +125,63 @@ const W = 640;
 const H = 200;
 const PAD = 8;
 
-function Growth({ monthly }: { monthly: Stats['monthly'] }) {
-  const points = useMemo(() => cumulative(monthly), [monthly]);
+/** Cumulative messages (line) over cumulative media bytes (area), by month; by day (messages
+ * only) while the archive spans a single month, where a monthly curve would be one point. */
+function Growth({ stats }: { stats: Stats }) {
+  const today = localToday();
+  const monthly = useMemo(() => cumulative(stats.monthly), [stats.monthly]);
+  const daily = useMemo(() => dailyCumulative(stats.daily, today, stats.totals.messages), [stats.daily, today, stats.totals.messages]);
+  const byMonth = monthly.length >= 2;
+  const points = byMonth
+    ? monthly.map((m) => ({ label: m.month, messages: m.messages, bytes: m.media_bytes }))
+    : daily.map((d) => ({ label: d.day, messages: d.messages, bytes: 0 }));
   if (points.length === 0) return <p class="StatsEmpty">暂无数据</p>;
-  const maxMsg = Math.max(1, points[points.length - 1].messages);
-  const maxBytes = Math.max(1, points[points.length - 1].media_bytes);
+  const maxMsg = Math.max(1, ...points.map((p) => p.messages));
+  const maxBytes = Math.max(1, ...points.map((p) => p.bytes));
   const x = (i: number) => (points.length === 1 ? W / 2 : PAD + (i * (W - 2 * PAD)) / (points.length - 1));
   const y = (v: number, max: number) => H - PAD - (v / max) * (H - 2 * PAD);
   const line = points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.messages, maxMsg).toFixed(1)}`).join(' ');
   const area =
     `M${x(0).toFixed(1)},${H - PAD} ` +
-    points.map((p, i) => `L${x(i).toFixed(1)},${y(p.media_bytes, maxBytes).toFixed(1)}`).join(' ') +
+    points.map((p, i) => `L${x(i).toFixed(1)},${y(p.bytes, maxBytes).toFixed(1)}`).join(' ') +
     ` L${x(points.length - 1).toFixed(1)},${H - PAD} Z`;
   const last = points[points.length - 1];
   return (
     <>
       <svg class="Growth" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="增长曲线">
-        <path class="Growth-area" d={area} />
+        {byMonth && <path class="Growth-area" d={area} />}
         <path class="Growth-line" d={line} vector-effect="non-scaling-stroke" />
       </svg>
       <div class="Growth-axis">
-        <span>{points[0].month}</span>
-        <span>{last.month}</span>
+        <span>{points[0].label}</span>
+        <span>{last.label}</span>
       </div>
       <div class="Growth-legend">
         <span>
           <i class="Growth-swatch line" />
           累计消息 {num(last.messages)}
         </span>
-        <span>
-          <i class="Growth-swatch area" />
-          累计媒体 {formatSize(last.media_bytes)}
-        </span>
+        {byMonth && (
+          <span>
+            <i class="Growth-swatch area" />
+            累计媒体 {formatSize(last.bytes)}
+          </span>
+        )}
       </div>
     </>
   );
 }
 
-function Bars({ rows }: { rows: { key: string | number; label: string; value: number; note: string; onClick?: () => void }[] }) {
+function Bars({
+  rows,
+  class: cls = '',
+}: {
+  class?: string;
+  rows: { key: string | number; label: string; value: number; note: string; onClick?: () => void }[];
+}) {
   const max = Math.max(1, ...rows.map((r) => r.value));
   return (
-    <div class="StatsBars">
+    <div class={`StatsBars ${cls}`}>
       {rows.map((r) => {
         const body = (
           <>
@@ -283,7 +299,7 @@ export function StatsView() {
                 <Heatmap daily={stats.daily} />
               </Card>
               <Card title="增长">
-                <Growth monthly={stats.monthly} />
+                <Growth stats={stats} />
               </Card>
               <div class="Stats-pair">
                 <Card title="会话排行">
@@ -304,10 +320,14 @@ export function StatsView() {
                 <Card title="媒体构成">
                   {stats.media_kinds.length ? (
                     <Bars
-                      rows={stats.media_kinds.map((k) => ({
+                      class="StatsKinds"
+                      rows={[
+                        ...stats.media_kinds.filter((k) => k.kind !== 'other'),
+                        ...stats.media_kinds.filter((k) => k.kind === 'other'),
+                      ].map((k) => ({
                         key: k.kind,
                         label: KIND_LABELS[k.kind] ?? k.kind,
-                        value: k.count,
+                        value: k.bytes,
                         note: `${num(k.count)} · ${formatSize(k.bytes)}`,
                       }))}
                     />

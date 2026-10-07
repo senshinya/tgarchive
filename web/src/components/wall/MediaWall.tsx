@@ -36,7 +36,9 @@ function Tile({ msg, width, height, onOpen }: { msg: Message; width: number; hei
   const thumb = readyThumb(msg);
   const done = main.state === 'done';
   const spoiler = msg.extra?.spoiler === true;
-  const src = main.kind === 'photo' && done ? mediaUrl(main.id) : thumb ? mediaUrl(thumb.id) : null;
+  // A wall page holds dozens of tiles a couple of hundred pixels tall: the thumbnail (320px) is
+  // enough and a fraction of the original's weight.
+  const src = thumb ? mediaUrl(thumb.id) : main.kind === 'photo' && done ? mediaUrl(main.id) : null;
   return (
     <button
       type="button"

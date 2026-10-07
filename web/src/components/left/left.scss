@@ -353,13 +353,14 @@ html.is-apple .ChatItem-subtitle .sender-name {
   min-width: 0;
 }
 
-// Phones: the header holds up to six buttons and the list-mode switch, so the title gives way
-// and the buttons tighten.
-@media (max-width: 600px) {
-  .left-header {
-    padding-inline: 0.5rem;
-  }
+// The header holds up to six buttons and the list-mode switch; in a narrow left column (phones,
+// and the desktop column too) the title gives way and the buttons tighten. The header itself is
+// the container: nothing in it pops out, so its layout containment is harmless.
+.left-header {
+  container-type: inline-size;
+}
 
+@container (max-width: 520px) {
   .left-header-title {
     display: none;
   }
