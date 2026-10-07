@@ -496,3 +496,129 @@ describe('download progress', () => {
     expect(api.downloads).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('conversation windows', () => {
+  // Messages 1..200 exist; the API serves before / after / around like the server.
+  const all = page(1, 200);
+  const serve = vi.fn(async (_chat: number, before = 0, limit = 50, extra: { after?: number; around?: number } = {}) => {
+    if (extra.after) return all.filter((m) => m.id > extra.after!).slice(0, limit);
+    if (extra.around) {
+      const older = all.filter((m) => m.id <= extra.around!).slice(-(limit - Math.floor(limit / 2)));
+      const newer = all.filter((m) => m.id > extra.around!).slice(0, Math.floor(limit / 2));
+      return [...older, ...newer];
+    }
+    const below = all.filter((m) => before === 0 || m.id < before);
+    return below.slice(-limit);
+  });
+
+  it('loads a window around a message, then newer pages until the latest', async () => {
+    const s = createStore(fakeApi({ messages: serve }));
+    await s.loadAround(10, 60);
+    expect(serve).toHaveBeenLastCalledWith(10, 0, 50, { around: 60 });
+    expect(ids(s.conv(10).items)).toEqual(ids(page(36, 85)));
+    expect(s.conv(10)).toMatchObject({ hasMore: true, hasNewer: true, loaded: true });
+    await s.loadNewer(10);
+    expect(serve).toHaveBeenLastCalledWith(10, 0, 50, { after: 85 });
+    expect(ids(s.conv(10).items)).toEqual(ids(page(36, 135)));
+    await s.loadNewer(10);
+    await s.loadNewer(10);
+    expect(s.conv(10).items.at(-1)?.id).toBe(200);
+    expect(s.conv(10).hasNewer).toBe(false);
+    const calls = serve.mock.calls.length;
+    await s.loadNewer(10);
+    expect(serve.mock.calls.length).toBe(calls);
+  });
+
+  it('marks the start of history when the window reaches it', async () => {
+    const s = createStore(fakeApi({ messages: serve }));
+    await s.loadAround(10, 5);
+    expect(s.conv(10)).toMatchObject({ hasMore: false, hasNewer: true });
+  });
+
+  it('keeps live messages out of a window that does not reach the latest', async () => {
+    const api = fakeApi({ messages: serve, message: vi.fn(async (id: number) => makeMessage({ id, chat_id: 10, text: 'edited' })) });
+    const s = createStore(api, { chatsReloadDelay: 0 });
+    await s.loadAround(10, 60);
+    await s.handleEvent({ type: 'message.created', data: { chat_id: 10, message_id: 201 } });
+    expect(s.conv(10).items.at(-1)?.id).toBe(85);
+    await s.handleEvent({ type: 'message.updated', data: { chat_id: 10, message_id: 60 } });
+    expect(s.conv(10).items.find((m) => m.id === 60)?.text).toBe('edited');
+  });
+
+  it('drops a page that arrives after a jump replaced the conversation', async () => {
+    let releaseOlder: (ms: Message[]) => void = () => {};
+    const messages = vi.fn(async (_c: number, before = 0, limit = 50, extra: { after?: number; around?: number } = {}) => {
+      if (before) return new Promise<Message[]>((r) => (releaseOlder = r));
+      return serve(_c, before, limit, extra);
+    });
+    const s = createStore(fakeApi({ messages }));
+    await s.refreshLatest(10); // 151..200
+    const older = s.loadOlder(10); // in flight
+    await s.loadAround(10, 60); // the user jumps meanwhile
+    releaseOlder(page(101, 150));
+    await older;
+    expect(ids(s.conv(10).items)).toEqual(ids(page(36, 85)));
+    expect(s.conv(10)).toMatchObject({ hasMore: true, hasNewer: true, loading: false });
+  });
+
+  it('keeps only the latest of two jumps', async () => {
+    let releaseFirst: (ms: Message[]) => void = () => {};
+    const messages = vi.fn(async (_c: number, before = 0, limit = 50, extra: { after?: number; around?: number } = {}) =>
+      extra.around === 20 ? new Promise<Message[]>((r) => (releaseFirst = r)) : serve(_c, before, limit, extra),
+    );
+    const s = createStore(fakeApi({ messages }));
+    const first = s.loadAround(10, 20);
+    await s.loadAround(10, 60);
+    releaseFirst(page(1, 45));
+    await first;
+    expect(ids(s.conv(10).items)).toEqual(ids(page(36, 85)));
+  });
+
+  it('replaces a window with the latest page on refresh', async () => {
+    const s = createStore(fakeApi({ messages: serve }));
+    await s.loadAround(10, 60);
+    await s.refreshLatest(10);
+    expect(ids(s.conv(10).items)).toEqual(ids(page(151, 200)));
+    expect(s.conv(10).hasNewer).toBe(false);
+    await s.refreshLatest(10, { reset: true });
+    expect(ids(s.conv(10).items)).toEqual(ids(page(151, 200)));
+  });
+});
+
+describe('read marks', () => {
+  const setup = async () => {
+    const api = fakeApi({ chats: vi.fn(async () => [makeChannelChat({ id: 50, unread: 4, last_read_id: 10 }), makeChat({ id: 10 })]) });
+    const s = createStore(api, { chatsReloadDelay: 0 });
+    await s.loadChats();
+    return { s, api };
+  };
+
+  it('reports a channel read up to a message at most once a second, clearing its badge at once', async () => {
+    vi.useFakeTimers();
+    const { s, api } = await setup();
+    s.markRead(50, 20);
+    expect(api.markRead).toHaveBeenCalledWith(50, 20);
+    expect(s.chats.value.find((c) => c.id === 50)).toMatchObject({ unread: 0, last_read_id: 20 });
+    s.markRead(50, 21);
+    s.markRead(50, 22);
+    expect(api.markRead).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(api.markRead).toHaveBeenCalledTimes(2);
+    expect(api.markRead).toHaveBeenLastCalledWith(50, 22);
+    vi.useRealTimers();
+  });
+
+  it('ignores private chats and messages already read', async () => {
+    const { s, api } = await setup();
+    s.markRead(10, 99);
+    s.markRead(50, 5);
+    expect(api.markRead).not.toHaveBeenCalled();
+  });
+
+  it('reloads the chat list when another device read a chat', async () => {
+    const { s, api } = await setup();
+    await s.handleEvent({ type: 'chat.read', data: { chat_id: 50 } });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(api.chats).toHaveBeenCalledTimes(2);
+  });
+});

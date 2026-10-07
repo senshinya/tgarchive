@@ -8,8 +8,13 @@ import type {
   Chat,
   CondGroup,
   Downloads,
+  FavoriteInfo,
+  FavoritesPage,
   Message,
   RejectedSender,
+  SearchPage,
+  Tag,
+  TagCount,
   SharedMediaType,
   TelegramApp,
   UserbotInfo,
@@ -20,6 +25,12 @@ import type {
 } from './types';
 
 export const PAGE_SIZE = 50;
+
+/** A conversation page other than "older than": newer than a message, or a window around one. */
+export interface PageParams {
+  after?: number;
+  around?: number;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -78,16 +89,30 @@ function qs(params: Record<string, string | number | undefined>): string {
 export interface Api {
   bots(): Promise<Bot[]>;
   chats(): Promise<Chat[]>;
-  messages(chatId: number, before?: number, limit?: number): Promise<Message[]>;
+  /** A chat's messages: older than `before` (the latest with 0), or per `page` newer than a
+   * message or a window around it. */
+  messages(chatId: number, before?: number, limit?: number, page?: PageParams): Promise<Message[]>;
   message(id: number): Promise<Message>;
   article(messageId: number): Promise<Article>;
   chatMedia(chatId: number, type: SharedMediaType, before?: number, limit?: number): Promise<Message[]>;
   /** A bot's merged timeline: every chat of the bot. */
-  botMessages(botId: number, before?: number, limit?: number): Promise<Message[]>;
+  botMessages(botId: number, before?: number, limit?: number, page?: PageParams): Promise<Message[]>;
   botMedia(botId: number, type: SharedMediaType, before?: number, limit?: number): Promise<Message[]>;
   deleteMessage(id: number): Promise<void>;
   retryMedia(id: number): Promise<void>;
   downloads(): Promise<Downloads>;
+  /** Messages containing every word of q; chat limits it to a conversation key (see convMessages). */
+  search(q: string, chat?: number, before?: number): Promise<SearchPage>;
+  /** Adds a message to the favorites; tags, when given, replace its tags. */
+  favorite(id: number, tags?: string[]): Promise<FavoriteInfo>;
+  unfavorite(id: number): Promise<void>;
+  setTags(id: number, tags: string[]): Promise<{ tags: Tag[] }>;
+  /** The favorites, most recently added first; tag 0 means any. */
+  favorites(tag?: number, before?: number): Promise<FavoritesPage>;
+  tags(): Promise<TagCount[]>;
+  deleteTag(id: number): Promise<void>;
+  /** Records that a chat has been read up to a message. */
+  markRead(chatId: number, messageId: number): Promise<void>;
   addBot(token: string): Promise<AddBotResult>;
   setBotEnabled(id: number, enabled: boolean): Promise<Bot>;
   deleteBot(id: number, purge: boolean): Promise<void>;
@@ -122,19 +147,27 @@ export interface Api {
 export const api: Api = {
   bots: () => request('GET', '/api/bots'),
   chats: () => request('GET', '/api/chats'),
-  messages: (chatId, before = 0, limit = PAGE_SIZE) =>
-    request('GET', `/api/chats/${chatId}/messages${qs({ before, limit })}`),
+  messages: (chatId, before = 0, limit = PAGE_SIZE, page = {}) =>
+    request('GET', `/api/chats/${chatId}/messages${qs({ before, limit, ...page })}`),
   message: (id) => request('GET', `/api/messages/${id}`),
   article: (messageId) => request('GET', `/api/messages/${messageId}/article`),
   chatMedia: (chatId, type, before = 0, limit = PAGE_SIZE) =>
     request('GET', `/api/chats/${chatId}/media${qs({ type, before, limit })}`),
-  botMessages: (botId, before = 0, limit = PAGE_SIZE) =>
-    request('GET', `/api/bots/${botId}/messages${qs({ before, limit })}`),
+  botMessages: (botId, before = 0, limit = PAGE_SIZE, page = {}) =>
+    request('GET', `/api/bots/${botId}/messages${qs({ before, limit, ...page })}`),
   botMedia: (botId, type, before = 0, limit = PAGE_SIZE) =>
     request('GET', `/api/bots/${botId}/media${qs({ type, before, limit })}`),
   deleteMessage: (id) => request('DELETE', `/api/messages/${id}`),
   retryMedia: (id) => request('POST', `/api/media/${id}/retry`),
   downloads: () => request('GET', '/api/downloads'),
+  search: (q, chat = 0, before = 0) => request('GET', `/api/search${qs({ q, chat, before })}`),
+  favorite: (id, tags) => request('PUT', `/api/messages/${id}/favorite`, tags ? { tags } : undefined),
+  unfavorite: (id) => request('DELETE', `/api/messages/${id}/favorite`),
+  setTags: (id, tags) => request('PUT', `/api/messages/${id}/tags`, { tags }),
+  favorites: (tag = 0, before = 0) => request('GET', `/api/favorites${qs({ tag, before })}`),
+  tags: () => request('GET', '/api/tags'),
+  deleteTag: (id) => request('DELETE', `/api/tags/${id}`),
+  markRead: (chatId, messageId) => request('POST', `/api/chats/${chatId}/read`, { message_id: messageId }),
   addBot: (token) => request('POST', '/api/admin/bots', { token }),
   setBotEnabled: (id, enabled) => request('PATCH', `/api/admin/bots/${id}`, { enabled }),
   deleteBot: (id, purge) => request('DELETE', `/api/admin/bots/${id}${purge ? '?purge=1' : ''}`),
@@ -165,7 +198,8 @@ export const api: Api = {
 };
 
 /** A conversation's messages: a chat for a positive key, a bot's merged timeline for -botId. */
-export function convMessages(api: Api, key: number, before = 0, limit = PAGE_SIZE): Promise<Message[]> {
+export function convMessages(api: Api, key: number, before = 0, limit = PAGE_SIZE, page?: PageParams): Promise<Message[]> {
+  if (page) return key < 0 ? api.botMessages(-key, before, limit, page) : api.messages(key, before, limit, page);
   return key < 0 ? api.botMessages(-key, before, limit) : api.messages(key, before, limit);
 }
 

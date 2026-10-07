@@ -6,13 +6,15 @@ import type { ArchiveEvent, Bot, Chat, Downloads, Entity, Message } from '../api
 
 export interface Conversation {
   items: Message[]; // ascending by id
-  hasMore: boolean;
+  hasMore: boolean; // older messages exist
+  /** Newer messages exist: the items are a window (opened around a message) short of the latest. */
+  hasNewer: boolean;
   loading: boolean;
   loaded: boolean;
   error: string;
 }
 
-const EMPTY: Conversation = { items: [], hasMore: true, loading: false, loaded: false, error: '' };
+const EMPTY: Conversation = { items: [], hasMore: true, hasNewer: false, loading: false, loaded: false, error: '' };
 
 /** One photo/video/GIF the media viewer can show. */
 export interface ViewerItem {
@@ -114,11 +116,21 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
   /** A message for conversation `key` to scroll to, loading older pages until it shows it (set by
    * the downloads panel). */
   const jumpTo = signal<{ key: number; messageId: number } | null>(null);
+  /** The left column's message search: its text, and the conversation key it is limited to (0: all). */
+  const searchQuery = signal('');
+  const searchScope = signal(0);
+  /** Bumped to ask the search box for focus. */
+  const searchFocus = signal(0);
   let downloadsTimer: ReturnType<typeof setTimeout> | undefined;
   let activeKey = ''; // the set of media ids in the last progress event (only events set it)
   let toastSeq = 0;
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
   const eventListeners = new Set<(ev: ArchiveEvent) => void>();
+  // Bumped when a jump replaces a conversation, so pages requested before it are dropped on arrival.
+  const generations = new Map<number, number>();
+  const generation = (key: number) => generations.get(key) ?? 0;
+  // Read marks in flight, by chat: the newest id waiting to be sent and the throttle timer.
+  const readMarks = new Map<number, { pending: number; timer: ReturnType<typeof setTimeout> }>();
 
   const botsById = computed(() => new Map(bots.value.map((b) => [b.id, b])));
   // Falls back to "全部" when the selected bot was purged from `bots` but the reload that
@@ -214,6 +226,12 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     return chat && chat.kind !== 'channel' ? -chat.bot_id : 0;
   }
 
+  /** Starts a search limited to conversation `scope` (0: everything) and focuses the box. */
+  function openSearch(scope = 0) {
+    searchScope.value = scope;
+    searchFocus.value++;
+  }
+
   function showToast(text: string) {
     toast.value = { id: ++toastSeq, text };
   }
@@ -249,15 +267,18 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     reloadTimer = setTimeout(() => void loadChats(), delay);
   }
 
-  /** Loads the newest page; merges when it overlaps what we have, otherwise starts over. */
-  async function refreshLatest(chatId: number) {
+  /** Loads the newest page; merges when it overlaps what we have, otherwise (or with reset, or
+   * when showing a window short of the latest) starts over. */
+  async function refreshLatest(chatId: number, opts: { reset?: boolean } = {}) {
     if (conv(chatId).loading) return;
     setConv(chatId, { loading: true, error: '' });
+    const gen = generation(chatId);
     try {
       const page = await convMessages(api, chatId, 0, PAGE_SIZE);
+      if (gen !== generation(chatId)) return;
       const c = conv(chatId);
       const newestKnown = c.items.length ? c.items[c.items.length - 1].id : 0;
-      const overlaps = c.loaded && page.length > 0 && page[0].id <= newestKnown;
+      const overlaps = !opts.reset && !c.hasNewer && c.loaded && page.length > 0 && page[0].id <= newestKnown;
       if (overlaps) {
         // Within the refreshed window [page[0].id, newest], the server is authoritative: drop
         // anything we had there that it no longer returns (deleted while disconnected). Items
@@ -266,10 +287,42 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
         const kept = c.items.filter((m) => m.id < page[0].id || pageIds.has(m.id));
         setConv(chatId, { items: mergeById(kept, page), loading: false, loaded: true });
       } else {
-        setConv(chatId, { items: page, hasMore: page.length >= PAGE_SIZE, loading: false, loaded: true });
+        setConv(chatId, { items: page, hasMore: page.length >= PAGE_SIZE, hasNewer: false, loading: false, loaded: true });
       }
     } catch (e) {
-      setConv(chatId, { loading: false, error: errorMessage(e) });
+      if (gen === generation(chatId)) setConv(chatId, { loading: false, error: errorMessage(e) });
+    }
+  }
+
+  /** Replaces a conversation with the window around message `messageId` (for a jump far back). */
+  async function loadAround(chatId: number, messageId: number) {
+    const gen = generation(chatId) + 1;
+    generations.set(chatId, gen);
+    setConv(chatId, { loading: true, error: '' });
+    try {
+      const page = await convMessages(api, chatId, 0, PAGE_SIZE, { around: messageId });
+      if (gen !== generation(chatId)) return;
+      const half = Math.floor(PAGE_SIZE / 2);
+      const older = page.filter((m) => m.id <= messageId).length;
+      const newer = page.length - older;
+      setConv(chatId, { items: page, hasMore: older >= PAGE_SIZE - half, hasNewer: newer >= half, loading: false, loaded: true });
+    } catch (e) {
+      if (gen === generation(chatId)) setConv(chatId, { loading: false, error: errorMessage(e) });
+    }
+  }
+
+  /** Extends a window toward the latest message. */
+  async function loadNewer(chatId: number) {
+    const c = conv(chatId);
+    if (!c.loaded || c.loading || !c.hasNewer) return;
+    setConv(chatId, { loading: true, error: '' });
+    const gen = generation(chatId);
+    try {
+      const page = await convMessages(api, chatId, 0, PAGE_SIZE, { after: c.items[c.items.length - 1]?.id ?? 0 });
+      if (gen !== generation(chatId)) return;
+      setConv(chatId, { items: mergeById(conv(chatId).items, page), hasNewer: page.length >= PAGE_SIZE, loading: false });
+    } catch (e) {
+      if (gen === generation(chatId)) setConv(chatId, { loading: false, error: errorMessage(e) });
     }
   }
 
@@ -277,11 +330,13 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     const c = conv(chatId);
     if (!c.loaded || c.loading || !c.hasMore) return;
     setConv(chatId, { loading: true, error: '' });
+    const gen = generation(chatId);
     try {
       const page = await convMessages(api, chatId, c.items[0]?.id ?? 0, PAGE_SIZE);
+      if (gen !== generation(chatId)) return;
       setConv(chatId, { items: mergeById(page, conv(chatId).items), hasMore: page.length >= PAGE_SIZE, loading: false });
     } catch (e) {
-      setConv(chatId, { loading: false, error: errorMessage(e) });
+      if (gen === generation(chatId)) setConv(chatId, { loading: false, error: errorMessage(e) });
     }
   }
 
@@ -299,8 +354,10 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
       if (!key || !c?.loaded) continue;
       const known = c.items.some((x) => x.id === m.id);
       const oldest = c.items[0]?.id ?? 0;
-      // Never insert a message older than the loaded window: that would leave a hole.
-      if (known || !c.hasMore || m.id > oldest) setConv(key, { items: mergeById(c.items, [m]) });
+      const newest = c.items[c.items.length - 1]?.id ?? 0;
+      // Never insert a message outside the loaded window: that would leave a hole.
+      const inside = (!c.hasMore || m.id > oldest) && (!c.hasNewer || m.id < newest);
+      if (known || inside) setConv(key, { items: mergeById(c.items, [m]) });
     }
   }
 
@@ -387,6 +444,7 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
         return;
       }
       case 'watch.updated':
+      case 'chat.read':
         scheduleChatsReload();
         return;
       case 'bot.status': {
@@ -432,6 +490,47 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     }
   }
 
+  /** Marks a channel conversation read up to messageId: its badge clears at once, and the server
+   * hears about it at most once a second. Private chats have no unread count. */
+  function markRead(chatId: number, messageId: number) {
+    const chat = chats.value.find((c) => c.id === chatId);
+    if (!chat || chat.kind !== 'channel' || messageId <= chat.last_read_id) return;
+    chats.value = chats.value.map((c) => (c.id === chatId ? { ...c, last_read_id: messageId, unread: 0 } : c));
+    const mark = readMarks.get(chatId);
+    if (mark) {
+      mark.pending = messageId;
+      return;
+    }
+    const send = (id: number) => api.markRead(chatId, id).catch(() => undefined);
+    void send(messageId);
+    const entry = {
+      pending: 0,
+      timer: setTimeout(() => {
+        readMarks.delete(chatId);
+        if (entry.pending) void send(entry.pending);
+      }, 1000),
+    };
+    readMarks.set(chatId, entry);
+  }
+
+  /** Adds a message to the favorites or removes it, then shows its new state. */
+  async function toggleFavorite(m: Message) {
+    try {
+      if (m.favorite) await api.unfavorite(m.id);
+      else await api.favorite(m.id);
+      showToast(m.favorite ? '已取消收藏' : '已收藏');
+    } catch (e) {
+      showToast(errorMessage(e));
+    }
+    await refreshMessage(m.id, m.chat_id);
+  }
+
+  /** Replaces a favorite's tags; throws so the tag dialog can show the error. */
+  async function setTags(m: Message, tags: string[]) {
+    await api.setTags(m.id, tags);
+    await refreshMessage(m.id, m.chat_id);
+  }
+
   /** Retries a failed media from the downloads panel, where no message object is at hand. */
   async function retryDownload(mediaId: number) {
     try {
@@ -449,6 +548,10 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     downloads,
     downloadSummary,
     jumpTo,
+    searchQuery,
+    searchScope,
+    searchFocus,
+    openSearch,
     loadDownloads,
     retryDownload,
     bots,
@@ -474,12 +577,17 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     loadChats,
     refreshLatest,
     loadOlder,
+    loadAround,
+    loadNewer,
     refreshMessage,
     handleEvent,
     onEvent,
     resync,
     deleteMessage,
     retryMedia,
+    toggleFavorite,
+    setTags,
+    markRead,
   };
 }
 

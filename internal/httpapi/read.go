@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"mime"
 	"net/http"
@@ -60,18 +61,32 @@ func (s *Server) listChats(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
 	chatID, ok := pathID(r, "id")
-	before, ok2 := queryInt(r, "before", 0, 0, 1<<62)
+	page, ok2 := pageParams(r)
 	limit, ok3 := queryInt(r, "limit", 50, 1, 100)
 	if !ok || !ok2 || !ok3 {
-		writeErr(w, http.StatusBadRequest, "bad chat id, before or limit")
+		writeErr(w, http.StatusBadRequest, "bad chat id, before, after, around or limit")
 		return
 	}
-	msgs, err := s.Store.ListMessages(r.Context(), chatID, before, int(limit))
+	msgs, err := s.Store.ListMessagesPage(r.Context(), chatID, page, int(limit))
 	if err != nil {
 		storeErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, msgs)
+}
+
+// pageParams reads a conversation page: at most one of before, after and around.
+func pageParams(r *http.Request) (store.Page, bool) {
+	before, ok1 := queryInt(r, "before", 0, 0, 1<<62)
+	after, ok2 := queryInt(r, "after", 0, 0, 1<<62)
+	around, ok3 := queryInt(r, "around", 0, 0, 1<<62)
+	set := 0
+	for _, v := range []int64{before, after, around} {
+		if v != 0 {
+			set++
+		}
+	}
+	return store.Page{Before: before, After: after, Around: around}, ok1 && ok2 && ok3 && set <= 1
 }
 
 func (s *Server) listChatMedia(w http.ResponseWriter, r *http.Request) {
@@ -92,13 +107,13 @@ func (s *Server) listChatMedia(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listBotMessages(w http.ResponseWriter, r *http.Request) {
 	botID, ok := pathID(r, "id")
-	before, ok2 := queryInt(r, "before", 0, 0, 1<<62)
+	page, ok2 := pageParams(r)
 	limit, ok3 := queryInt(r, "limit", 50, 1, 100)
 	if !ok || !ok2 || !ok3 {
-		writeErr(w, http.StatusBadRequest, "bad bot id, before or limit")
+		writeErr(w, http.StatusBadRequest, "bad bot id, before, after, around or limit")
 		return
 	}
-	msgs, err := s.Store.ListBotMessages(r.Context(), botID, before, int(limit))
+	msgs, err := s.Store.ListBotMessagesPage(r.Context(), botID, page, int(limit))
 	if err != nil {
 		storeErr(w, err)
 		return
@@ -345,4 +360,21 @@ func within(base, rel string) (string, bool) {
 		return "", false
 	}
 	return p, true
+}
+
+func (s *Server) markRead(w http.ResponseWriter, r *http.Request) {
+	chatID, ok := pathID(r, "id")
+	var req struct {
+		MessageID int64 `json:"message_id"`
+	}
+	if !ok || json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req) != nil || req.MessageID <= 0 {
+		writeErr(w, http.StatusBadRequest, "bad chat id or message_id")
+		return
+	}
+	if err := s.Store.MarkRead(r.Context(), chatID, req.MessageID); err != nil {
+		storeErr(w, err)
+		return
+	}
+	s.Hub.Publish(events.Event{Type: "chat.read", Data: map[string]int64{"chat_id": chatID}})
+	w.WriteHeader(http.StatusNoContent)
 }

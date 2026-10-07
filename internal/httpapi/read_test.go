@@ -473,3 +473,60 @@ func TestDownloadsEndpoint(t *testing.T) {
 		t.Fatal("speed missing")
 	}
 }
+
+func TestMessagesAfterAndAround(t *testing.T) {
+	e := newReadEnv(t)
+	bots, _ := e.st.ListBots(bg)
+	var all []store.MessageView
+	json.Unmarshal(do(e.h, "GET", fmt.Sprintf("/api/chats/%d/messages", e.chat), nil).Body.Bytes(), &all)
+	first, second := all[0].ID, all[1].ID
+	for _, base := range []string{fmt.Sprintf("/api/chats/%d/messages", e.chat), fmt.Sprintf("/api/bots/%d/messages", bots[0].ID)} {
+		var msgs []store.MessageView
+		json.Unmarshal(do(e.h, "GET", fmt.Sprintf("%s?after=%d", base, first), nil).Body.Bytes(), &msgs)
+		if len(msgs) != 1 || msgs[0].ID != second {
+			t.Fatalf("%s after = %+v", base, msgs)
+		}
+		json.Unmarshal(do(e.h, "GET", fmt.Sprintf("%s?around=%d&limit=4", base, second), nil).Body.Bytes(), &msgs)
+		if len(msgs) != 2 || msgs[0].ID != first || msgs[1].ID != second {
+			t.Fatalf("%s around = %+v", base, msgs)
+		}
+		for _, q := range []string{"?after=1&around=2", "?before=1&after=2", "?around=x"} {
+			if w := do(e.h, "GET", base+q, nil); w.Code != 400 {
+				t.Fatalf("%s%s = %d", base, q, w.Code)
+			}
+		}
+	}
+}
+
+func TestMarkRead(t *testing.T) {
+	e := newReadEnv(t)
+	ch, unsub := e.hub.Subscribe()
+	defer unsub()
+	path := fmt.Sprintf("/api/chats/%d/read", e.chat)
+	if w := call(e.h, "POST", path, map[string]any{"message_id": e.photoMsg}); w.Code != 204 {
+		t.Fatalf("read = %d %s", w.Code, w.Body)
+	}
+	if ev := <-ch; ev.Type != "chat.read" {
+		t.Fatalf("event = %+v", ev)
+	}
+	var chats []store.ChatView
+	json.Unmarshal(do(e.h, "GET", "/api/chats", nil).Body.Bytes(), &chats)
+	if chats[0].LastReadID < e.photoMsg {
+		t.Fatalf("last_read_id = %d", chats[0].LastReadID)
+	}
+	for _, c := range []struct {
+		path string
+		body any
+		code int
+	}{
+		{path, map[string]any{}, 400},
+		{path, map[string]any{"message_id": -1}, 400},
+		{path, "x", 400},
+		{"/api/chats/9999/read", map[string]any{"message_id": 1}, 404},
+		{"/api/chats/abc/read", map[string]any{"message_id": 1}, 400},
+	} {
+		if w := call(e.h, "POST", c.path, c.body); w.Code != c.code {
+			t.Fatalf("%s %v = %d, want %d", c.path, c.body, w.Code, c.code)
+		}
+	}
+}

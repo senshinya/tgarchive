@@ -31,6 +31,9 @@ type ChatView struct {
 	LastMessageAt int64        `json:"last_message_at"`
 	LastKind      string       `json:"last_kind"`
 	LastText      string       `json:"last_text"`
+	// LastReadID is the newest message read; Unread counts the newer ones (channels only).
+	LastReadID int64 `json:"last_read_id"`
+	Unread     int64 `json:"unread"`
 }
 
 type ChannelView struct {
@@ -96,6 +99,8 @@ type MessageView struct {
 	Article            *ArticleSummary `json:"article,omitempty"`
 	// Stats is the snapshot taken when a watched channel post was archived (channel_watch only).
 	Stats json.RawMessage `json:"stats,omitempty"`
+	// Favorite is set when the message is a favorite.
+	Favorite *FavoriteInfo `json:"favorite"`
 }
 
 // ListChats lists conversations, most recent first: every bot × sender chat of botID (all bots
@@ -110,7 +115,10 @@ func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) 
 			COALESCE(w.window_minutes, 0), COALESCE(w.hits, 0),
 			(SELECT COUNT(*) FROM watch_pending p WHERE p.watch_id = w.id),
 			COALESCE((SELECT m.kind FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 ORDER BY m.id DESC LIMIT 1), ''),
-			COALESCE((SELECT substr(m.text, 1, 200) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 ORDER BY m.id DESC LIMIT 1), '')
+			COALESCE((SELECT substr(m.text, 1, 200) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 ORDER BY m.id DESC LIMIT 1), ''),
+			c.last_read_id,
+			CASE WHEN c.kind = 'channel' THEN
+				(SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.id > c.last_read_id) ELSE 0 END
 		FROM chats c
 			LEFT JOIN senders s ON s.tg_user_id = c.sender_id
 			LEFT JOIN channels ch ON ch.channel_id = c.channel_id
@@ -129,7 +137,7 @@ func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) 
 		var w WatchBrief
 		if err := rows.Scan(&v.ID, &v.Kind, &v.BotID, &v.LastMessageAt, &v.Sender.TgUserID, &v.Sender.FirstName, &v.Sender.LastName,
 			&v.Sender.Username, &avatar, &ch.ChannelID, &ch.Title, &ch.Username, &chAvatar,
-			&w.ID, &w.Enabled, &w.Status, &w.Error, &w.WindowMinutes, &w.Hits, &w.Pending, &v.LastKind, &v.LastText); err != nil {
+			&w.ID, &w.Enabled, &w.Status, &w.Error, &w.WindowMinutes, &w.Hits, &w.Pending, &v.LastKind, &v.LastText, &v.LastReadID, &v.Unread); err != nil {
 			return nil, err
 		}
 		v.Sender.HasAvatar = avatar != ""
@@ -198,16 +206,56 @@ func botScope(botID int64) scope {
 	return scope{"chat_id IN (SELECT id FROM chats WHERE bot_id = ?)", botID}
 }
 
+// Page picks a conversation page: messages older than Before (the newest page when all are 0),
+// newer than After, or a window around Around (that message and older, plus newer). At most one
+// is set.
+type Page struct{ Before, After, Around int64 }
+
 func (s *Store) ListMessages(ctx context.Context, chatID, beforeID int64, limit int) ([]MessageView, error) {
-	return s.listMessages(ctx, chatScope(chatID), beforeID, limit)
+	return s.listMessages(ctx, chatScope(chatID), Page{Before: beforeID}, limit)
 }
 
 // ListBotMessages pages through every chat of one bot as a single timeline.
 func (s *Store) ListBotMessages(ctx context.Context, botID, beforeID int64, limit int) ([]MessageView, error) {
-	return s.listMessages(ctx, botScope(botID), beforeID, limit)
+	return s.listMessages(ctx, botScope(botID), Page{Before: beforeID}, limit)
 }
 
-func (s *Store) listMessages(ctx context.Context, sc scope, beforeID int64, limit int) ([]MessageView, error) {
+func (s *Store) ListMessagesPage(ctx context.Context, chatID int64, p Page, limit int) ([]MessageView, error) {
+	return s.listMessages(ctx, chatScope(chatID), p, limit)
+}
+
+func (s *Store) ListBotMessagesPage(ctx context.Context, botID int64, p Page, limit int) ([]MessageView, error) {
+	return s.listMessages(ctx, botScope(botID), p, limit)
+}
+
+// listMessages returns one page in ascending id order. Albums are never cut at a page edge.
+func (s *Store) listMessages(ctx context.Context, sc scope, p Page, limit int) ([]MessageView, error) {
+	var views []MessageView
+	var err error
+	switch {
+	case p.After > 0:
+		views, err = s.newer(ctx, sc, p.After, limit)
+	case p.Around > 0:
+		var newer []MessageView
+		// The older half (rounded up) holds the target itself.
+		if views, err = s.older(ctx, sc, p.Around+1, limit-limit/2); err == nil {
+			newer, err = s.newer(ctx, sc, p.Around, limit/2)
+			views = append(views, newer...)
+		}
+	default:
+		views, err = s.older(ctx, sc, p.Before, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := s.hydrate(ctx, views); err != nil {
+		return nil, err
+	}
+	return views, nil
+}
+
+// older returns up to limit messages below beforeID (0: the newest), ascending.
+func (s *Store) older(ctx context.Context, sc scope, beforeID int64, limit int) ([]MessageView, error) {
 	views, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
 		WHERE `+sc.cond+` AND deleted_at = 0 AND (? = 0 OR id < ?) ORDER BY id DESC LIMIT ?`, sc.arg, beforeID, beforeID, limit))
 	if err != nil {
@@ -234,8 +282,32 @@ func (s *Store) listMessages(ctx context.Context, sc scope, beforeID int64, limi
 		}
 	}
 	slices.Reverse(views)
-	if err := s.hydrate(ctx, views); err != nil {
+	return views, nil
+}
+
+// newer returns up to limit messages above afterID, ascending; like older, it completes an album
+// the page edge would cut, along with everything in scope up to the album's last message.
+func (s *Store) newer(ctx context.Context, sc scope, afterID int64, limit int) ([]MessageView, error) {
+	views, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
+		WHERE `+sc.cond+` AND deleted_at = 0 AND id > ? ORDER BY id LIMIT ?`, sc.arg, afterID, limit))
+	if err != nil {
 		return nil, err
+	}
+	if n := len(views); n > 0 && views[n-1].MediaGroupID != "" {
+		newest := views[n-1]
+		var high sql.NullInt64
+		if err := s.db.QueryRowContext(ctx, `SELECT MAX(id) FROM messages
+			WHERE chat_id = ? AND deleted_at = 0 AND media_group_id = ? AND id > ?`, newest.ChatID, newest.MediaGroupID, newest.ID).Scan(&high); err != nil {
+			return nil, err
+		}
+		if high.Valid {
+			more, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
+				WHERE `+sc.cond+` AND deleted_at = 0 AND id > ? AND id <= ? ORDER BY id`, sc.arg, newest.ID, high.Int64))
+			if err != nil {
+				return nil, err
+			}
+			views = append(views, more...)
+		}
 	}
 	return views, nil
 }
@@ -326,6 +398,9 @@ func (s *Store) hydrate(ctx context.Context, views []MessageView) error {
 		return err
 	}
 	if err := s.hydrateArticles(ctx, views, idx, ph, args); err != nil {
+		return err
+	}
+	if err := s.hydrateFavorites(ctx, views, idx, ph, args); err != nil {
 		return err
 	}
 	for i := range views {

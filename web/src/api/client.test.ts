@@ -37,6 +37,13 @@ describe('api client', () => {
     expect(calls[0].init.body).toBeUndefined();
   });
 
+  it('pages conversations after or around a message', async () => {
+    const calls = mockFetch(200, []);
+    await api.messages(7, 0, 50, { around: 90 });
+    await api.botMessages(2, 0, 50, { after: 12 });
+    expect(calls.map((c) => c.url)).toEqual(['/api/chats/7/messages?limit=50&around=90', '/api/bots/2/messages?limit=50&after=12']);
+  });
+
   it('sends JSON bodies with the JSON content type the CSRF guard requires', async () => {
     const calls = mockFetch(204);
     await api.putWhitelist(3, 42, '朋友', true);

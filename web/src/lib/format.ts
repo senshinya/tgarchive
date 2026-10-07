@@ -180,3 +180,12 @@ export function fileColor(ext: string): string {
   if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'ppt', 'pptx', 'odp'].includes(ext)) return 'var(--color-warning)';
   return 'var(--color-primary)';
 }
+
+/** How long ago unix time `at` was, coarsely: 刚刚, N 分钟前, N 小时前, N 天前. */
+export function formatAgo(at: number, now: number = Date.now() / 1000): string {
+  const s = Math.floor(now - at);
+  if (s < 60) return '刚刚';
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+  return `${Math.floor(s / 86400)} 天前`;
+}

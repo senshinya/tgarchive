@@ -215,6 +215,13 @@ func TestConvertMisc(t *testing.T) {
 		{&tg.MessageMediaDice{Value: 4, Emoticon: "🎲"}, "", model.KindDice, `{"emoji":"🎲","value":4}`},
 		{&tg.MessageMediaWebPage{Webpage: &tg.WebPageEmpty{}}, "see link", model.KindText, ``},
 		{&tg.MessageMediaUnsupported{}, "", model.KindOther, ``},
+		{&tg.MessageMediaStory{}, "", model.KindOther, `{"unsupported":"story"}`},
+		{&tg.MessageMediaStory{}, "look", model.KindText, `{"unsupported":"story"}`},
+		{&tg.MessageMediaGiveaway{}, "", model.KindOther, `{"unsupported":"giveaway"}`},
+		{&tg.MessageMediaGiveawayResults{}, "", model.KindOther, `{"unsupported":"giveaway"}`},
+		{&tg.MessageMediaPaidMedia{}, "", model.KindOther, `{"unsupported":"paid_media"}`},
+		{&tg.MessageMediaInvoice{}, "", model.KindOther, `{"unsupported":"invoice"}`},
+		{&tg.MessageMediaGame{}, "", model.KindOther, `{"unsupported":"game"}`},
 		{nil, "", model.KindOther, ``},
 		{&tg.MessageMediaPoll{
 			Poll: tg.Poll{Question: tg.TextWithEntities{Text: "Q?"}, MultipleChoice: true, Answers: []tg.PollAnswerClass{
@@ -233,5 +240,37 @@ func TestConvertMisc(t *testing.T) {
 		if got.Kind != c.kind || string(got.Extra) != c.extra || len(got.Media) != 0 {
 			t.Fatalf("case %d: kind=%s extra=%s media=%v", i, got.Kind, got.Extra, got.Media)
 		}
+	}
+}
+
+func TestConvertLinkPreview(t *testing.T) {
+	page := &tg.WebPage{ID: 1, URL: "https://example.com/a", DisplayURL: "example.com/a", SiteName: "Example", Title: "A title",
+		Description: "Some text", Photo: &tg.Photo{ID: 77, AccessHash: 7, FileReference: []byte{1}, Sizes: []tg.PhotoSizeClass{
+			&tg.PhotoSize{Type: "s", W: 90, H: 60, Size: 100}, &tg.PhotoSize{Type: "x", W: 800, H: 533, Size: 5000}}}}
+	got, err := Convert(&tg.Message{ID: 9, Message: "read https://example.com/a", Media: &tg.MessageMediaWebPage{Webpage: page}}, pub, Names{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"link_preview":{"description":"Some text","display_url":"example.com/a","site_name":"Example","title":"A title","url":"https://example.com/a"}}`
+	if got.Kind != model.KindText || string(got.Extra) != want {
+		t.Fatalf("kind=%s extra=%s", got.Kind, got.Extra)
+	}
+	if len(got.Media) != 1 {
+		t.Fatalf("media = %+v", got.Media)
+	}
+	md := got.Media[0]
+	r := ref(t, md)
+	if md.Role != model.RoleLinkPreview || md.Kind != "photo" || md.DedupeKey != "mt:photo:77" || md.Width != 800 ||
+		!r.Photo || r.ID != 77 || r.ThumbSize != "x" || r.MsgID != 9 {
+		t.Fatalf("preview photo = %+v %+v", md, r)
+	}
+
+	bare, _ := Convert(&tg.Message{ID: 9, Message: "x", Media: &tg.MessageMediaWebPage{Webpage: &tg.WebPage{URL: "https://e.com"}}}, pub, Names{})
+	if string(bare.Extra) != `{"link_preview":{"url":"https://e.com"}}` || len(bare.Media) != 0 {
+		t.Fatalf("bare page: %s %v", bare.Extra, bare.Media)
+	}
+	pending, _ := Convert(&tg.Message{ID: 9, Message: "x", Media: &tg.MessageMediaWebPage{Webpage: &tg.WebPagePending{}}}, pub, Names{})
+	if len(pending.Extra) != 0 {
+		t.Fatalf("pending page: %s", pending.Extra)
 	}
 }

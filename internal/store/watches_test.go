@@ -335,3 +335,43 @@ func TestUpdateWatchMovesPendingDeadlines(t *testing.T) {
 		t.Fatalf("pending = %+v", ps)
 	}
 }
+
+func TestWatchActivity(t *testing.T) {
+	s := newStore(t)
+	id := seedWatch(t, s)
+	const now = 10 * 86400
+	post := func(tgID int64, group string, date int64) {
+		m := channelPost(tgID, group)
+		m.Date = date
+		if _, err := s.Ingest(ctx, IngestInput{ChannelID: chanID, Msg: m, Now: date}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	post(1, "g", now-3600) // one album of three counts once
+	post(2, "g", now-3600)
+	post(3, "g", now-3500)
+	post(4, "", now-2*86400) // within 7d only
+	post(5, "", now-8*86400) // older than both
+	act, err := s.WatchActivity(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := act[id]; a.Hits24h != 1 || a.Hits7d != 2 || a.LastHitAt != now-3500 {
+		t.Fatalf("activity = %+v", a)
+	}
+	if w, _ := s.GetWatch(ctx, id); w.LastPolledAt != 0 {
+		t.Fatalf("never polled: %d", w.LastPolledAt)
+	}
+	if _, err := s.SetWatchStatus(ctx, id, WatchOK, "", 500); err != nil {
+		t.Fatal(err)
+	}
+	if w, _ := s.GetWatch(ctx, id); w.LastPolledAt != 500 {
+		t.Fatalf("a poll with no status change still records its time: %d", w.LastPolledAt)
+	}
+	if changed, _ := s.SetWatchStatus(ctx, id, WatchError, "x", 600); !changed {
+		t.Fatal("status change must be reported")
+	}
+	if w, _ := s.GetWatch(ctx, id); w.LastPolledAt != 600 {
+		t.Fatalf("last_polled_at = %d", w.LastPolledAt)
+	}
+}

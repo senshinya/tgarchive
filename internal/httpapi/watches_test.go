@@ -16,6 +16,7 @@ import (
 
 	"tgarchive/internal/config"
 	"tgarchive/internal/events"
+	"tgarchive/internal/model"
 	"tgarchive/internal/seal"
 	"tgarchive/internal/store"
 	"tgarchive/internal/userbot"
@@ -309,5 +310,33 @@ func TestChannelAvatarFetchedOnDemand(t *testing.T) {
 	}
 	if w := do(e.h, "GET", "/avatars/channels/7", nil); w.Code != 404 {
 		t.Fatalf("missing = %d", w.Code)
+	}
+}
+
+func TestWatchActivityFields(t *testing.T) {
+	e := newWatchEnv(t)
+	call(e.h, "POST", "/api/admin/watches", watchReq(500, 30, condOK))
+	var list []map[string]any
+	json.Unmarshal(call(e.h, "GET", "/api/admin/watches", nil).Body.Bytes(), &list)
+	if len(list) != 1 {
+		t.Fatalf("list = %v", list)
+	}
+	for _, k := range []string{"last_polled_at", "hits_24h", "hits_7d", "last_hit_at"} {
+		if v, ok := list[0][k]; !ok || v != float64(0) {
+			t.Fatalf("%s = %v (%v)", k, v, ok)
+		}
+	}
+	if list[0]["poll_seconds"] != float64(userbot.DefaultPollSeconds) {
+		t.Fatalf("poll_seconds = %v", list[0]["poll_seconds"])
+	}
+	id := int64(list[0]["id"].(float64))
+	e.st.SetWatchStatus(context.Background(), id, store.WatchOK, "", 990)
+	e.st.Ingest(context.Background(), store.IngestInput{ChannelID: 500, Now: 1, Msg: &model.Message{TgMessageID: 1, Source: model.SourceChannelWatch,
+		Date: 900, Kind: model.KindText, Text: "x", RawFormat: model.RawMTProto, Raw: json.RawMessage(`{}`)}})
+	var one map[string]any
+	json.Unmarshal(call(e.h, "GET", "/api/admin/watches/"+strconv.FormatInt(id, 10), nil).Body.Bytes(), &one)
+	if one["last_polled_at"] != float64(990) || one["hits_24h"] != float64(1) || one["hits_7d"] != float64(1) || one["last_hit_at"] != float64(900) ||
+		one["updated_at"] == nil {
+		t.Fatalf("watch = %v", one)
 	}
 }

@@ -7,6 +7,7 @@ import {
   formatDayLabel,
   formatDuration,
   formatFullDate,
+  formatAgo,
   formatListTime,
   formatMonth,
   formatSize,
@@ -109,5 +110,17 @@ describe('names and labels', () => {
     expect(fileColor('zip')).toBe('var(--color-warning)');
     expect(fileColor('xlsx')).toBe('var(--color-text-green)');
     expect(fileColor('txt')).toBe('var(--color-primary)');
+  });
+});
+
+describe('formatAgo', () => {
+  it('says how long ago, coarsely', () => {
+    const now = 1_790_000_000;
+    expect(formatAgo(now - 30, now)).toBe('刚刚');
+    expect(formatAgo(now - 60, now)).toBe('1 分钟前');
+    expect(formatAgo(now - 59 * 60, now)).toBe('59 分钟前');
+    expect(formatAgo(now - 3600, now)).toBe('1 小时前');
+    expect(formatAgo(now - 86400 * 2 - 5, now)).toBe('2 天前');
+    expect(formatAgo(now + 100, now)).toBe('刚刚');
   });
 });

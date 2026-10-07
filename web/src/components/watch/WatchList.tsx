@@ -2,6 +2,7 @@ import { Plus } from 'lucide-preact';
 import { useEffect, useState } from 'preact/hooks';
 import { avatarUrl, errorMessage } from '../../api/client';
 import type { UserbotInfo, Watch } from '../../api/types';
+import { formatAgo } from '../../lib/format';
 import { navigate } from '../../lib/router';
 import { useStore } from '../../state/store';
 import { Avatar } from '../../ui/Avatar';
@@ -19,18 +20,40 @@ export function watchStatusText(w: Pick<Watch, 'enabled' | 'status' | 'error' | 
   return `观察中 ${w.pending} · 已存 ${w.hits} · 窗口 ${w.window_minutes} 分钟`;
 }
 
+/** Polls this many intervals overdue mark a watch as stalled. */
+const STALL_ROUNDS = 3;
+const RELOAD_MS = 30_000;
+
+/** An enabled watch whose poller has not finished a round for a while, counting from its last
+ * change at the earliest (a watch just created or re-enabled has had no chance to poll). */
+export function watchStalled(w: Watch, now: number = Date.now() / 1000): boolean {
+  if (!w.enabled || w.status === 'error') return false;
+  return now - Math.max(w.last_polled_at, w.updated_at, w.created_at) > STALL_ROUNDS * w.poll_seconds;
+}
+
 function WatchRow({ w, onToggle }: { w: Watch; onToggle: (enabled: boolean) => Promise<void> }) {
   const [busy, setBusy] = useState(false);
+  const stalled = watchStalled(w);
+  const polled = w.last_polled_at ? `${formatAgo(w.last_polled_at)}轮询` : '尚未轮询';
+  const hits = w.last_hit_at ? `24h 命中 ${w.hits_24h} · 7d 命中 ${w.hits_7d} · 最近 ${formatAgo(w.last_hit_at)}` : '尚无命中';
   return (
     <div class="ListItem BotRow">
       <button type="button" class="BotRow-main" onClick={() => navigate({ name: 'settings-watch', watchId: w.id })}>
         <Avatar name={w.channel.title} peerId={w.channel.channel_id} src={w.channel.has_avatar ? avatarUrl('channels', w.channel.channel_id) : null} size="tiny" />
         <span class="ListItem-text">
           <span class="ListItem-title">{w.channel.title}</span>
-          <span class={`ListItem-subtitle${w.enabled && w.status === 'error' ? ' error' : ''}`}>
-            <StatusDot status={!w.enabled ? 'stopped' : w.status === 'error' ? 'error' : 'running'} />
-            {watchStatusText(w)}
+          <span class={`ListItem-subtitle${w.enabled && w.status === 'error' ? ' error' : stalled ? ' warning' : ''}`}>
+            <StatusDot status={!w.enabled ? 'stopped' : w.status === 'error' ? 'error' : stalled ? 'warning' : 'running'} />
+            {stalled ? (
+              <span>轮询停滞 · {polled}</span>
+            ) : (
+              <>
+                <span>{watchStatusText(w)}</span>
+                {w.enabled && <span> · {polled}</span>}
+              </>
+            )}
           </span>
+          <span class="ListItem-subtitle WatchRow-hits">{hits}</span>
         </span>
       </button>
       <Switch
@@ -68,9 +91,15 @@ export function WatchList() {
     void reload();
     store.api.watchSettings().then((s) => setPoll(String(s.poll_seconds)), (e) => store.showToast(errorMessage(e)));
     store.api.userbot().then(setUserbot, () => setUserbot(null));
-    return store.onEvent((ev) => {
+    // Keeps "N 分钟前轮询" and the stalled check current; the poller does not announce rounds.
+    const timer = setInterval(() => void reload(), RELOAD_MS);
+    const off = store.onEvent((ev) => {
       if (ev.type === 'watch.updated' || ev.type === 'resync') void reload();
     });
+    return () => {
+      clearInterval(timer);
+      off();
+    };
   }, []);
 
   const toggle = async (w: Watch, enabled: boolean) => {

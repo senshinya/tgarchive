@@ -12,6 +12,7 @@ import { PostReactions } from '../watch/PostFooter';
 import { ArrowUpRight } from 'lucide-preact';
 import { safeHref } from '../../lib/entities';
 import { Appendix, ForwardHeader, MessageMeta, OriginHeader, ReplyQuote } from './MessageParts';
+import { LinkPreview } from './LinkPreview';
 import { RichText } from './RichText';
 import './message.scss';
 
@@ -43,6 +44,30 @@ function visualWidth(msgs: Message[], album: boolean): number {
   return fitMedia({ width: main?.width ?? 0, height: main?.height ?? 0 }).width;
 }
 
+/** What a post the archive cannot hold is called (extra.unsupported, from the converter). */
+const UNSUPPORTED_LABELS: Record<string, string> = {
+  story: '动态',
+  giveaway: '抽奖',
+  paid_media: '付费媒体',
+  invoice: '账单',
+  game: '游戏',
+};
+
+function UnsupportedNote({ label, href, below }: { label: string; href: string | null; below: boolean }) {
+  return (
+    <span class={`unsupported${below ? ' below' : ''}`}>
+      {href ? (
+        <a href={href} target="_blank" rel="noopener noreferrer">
+          {label}
+        </a>
+      ) : (
+        label
+      )}
+      {' · 请在 Telegram 中查看'}
+    </span>
+  );
+}
+
 export function MessageBubble({ bubble, sender, convKey, showName = false, onMenu }: Props) {
   const store = useStore();
   const press = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -66,6 +91,7 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
   const mediaOnly = visual && !caption && !hasHeader && !hasReply;
   const originHref = post ? safeHref(head.origin_link) : null;
   const unsupported = !album && head.kind === 'other';
+  const unsupportedLabel = UNSUPPORTED_LABELS[extraString(head, 'unsupported')];
   const solid = !noBubble && !mediaOnly;
   const editDate = Math.max(...msgs.map((m) => m.edit_date));
   const accent = peerColor(sender.peerId);
@@ -101,7 +127,13 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
     .filter(Boolean)
     .join(' ');
 
-  const metaProps = { date: last.date, editDate, views: post?.views, author: post ? extraString(head, 'post_author') : undefined };
+  const metaProps = {
+    date: last.date,
+    editDate,
+    views: post?.views,
+    author: post ? extraString(head, 'post_author') : undefined,
+    favorite: msgs.some((m) => m.favorite),
+  };
   let meta;
   if (reactionsInside) meta = null;
   else if (caption || unsupported) meta = null;
@@ -145,7 +177,13 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
           {album ? <Album msgs={msgs} onOpen={open} /> : <MessageMedia msg={head} onOpen={open} />}
           {(caption || unsupported) && (
             <div class="text-content" dir="auto">
-              {caption ? <RichText text={caption.text} entities={caption.entities} /> : <span class="unsupported">不支持的消息类型</span>}
+              {caption && <RichText text={caption.text} entities={caption.entities} />}
+              {!album && caption && <LinkPreview msg={head} />}
+              {unsupportedLabel ? (
+                <UnsupportedNote label={unsupportedLabel} href={safeHref(head.origin_link)} below={Boolean(caption)} />
+              ) : (
+                !caption && <span class="unsupported">不支持的消息类型</span>
+              )}
               {!album && head.article && <ArticleCard msg={head} />}
               {!reactionsInside && <MessageMeta {...metaProps} variant="inline" />}
             </div>

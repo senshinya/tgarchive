@@ -50,13 +50,17 @@ export interface Chat {
   last_message_at: number;
   last_kind: string;
   last_text: string;
+  /** The newest message read (channels; see markRead). */
+  last_read_id: number;
+  /** Messages newer than last_read_id; always 0 for private chats. */
+  unread: number;
 }
 
 export type MediaState = 'pending' | 'done' | 'failed' | 'too_large';
 
 export interface Media {
   id: number;
-  role: 'main' | 'thumb';
+  role: 'main' | 'thumb' | 'link_preview';
   kind: string; // photo / video / animation / voice / audio / document / sticker / video_note
   mime: string;
   file_name: string;
@@ -138,6 +142,30 @@ export interface Message {
   article?: ArticleSummary;
   /** Counters when a watched channel post was archived (channel_watch only). */
   stats?: PostStats;
+  /** Set when the message is a favorite. */
+  favorite?: FavoriteInfo | null;
+}
+
+export interface Tag {
+  id: number;
+  name: string;
+}
+
+export interface TagCount extends Tag {
+  /** How many favorites carry it. */
+  count: number;
+}
+
+export interface FavoriteInfo {
+  /** When it was added to the favorites. */
+  at: number;
+  tags: Tag[];
+}
+
+export interface FavoritesPage {
+  items: { fav_id: number; message: Message }[];
+  /** The `before` cursor of the next page; 0 when this was the last. */
+  next: number;
 }
 
 /** One reaction counter; key is the emoji, "custom:<id>" or "paid". */
@@ -205,6 +233,17 @@ export interface Watch {
   pending: number;
   hits: number;
   created_at: number;
+  /** Last change of settings or status (enabling it included). */
+  updated_at: number;
+  /** When a poll last finished; 0 when none has. */
+  last_polled_at: number;
+  /** Archived posts (an album counts once) published in the last 24 hours / 7 days. */
+  hits_24h: number;
+  hits_7d: number;
+  /** The newest archived post's date; 0 when none. */
+  last_hit_at: number;
+  /** The poll interval now in force, against which a stalled watch is judged. */
+  poll_seconds: number;
   /** The latest manual backfill; null when none ran since the server started. */
   backfill: BackfillState | null;
 }
@@ -385,6 +424,8 @@ export type ArchiveEvent =
   | { type: 'bot.status'; data: { bot_id: number; status: string; error: string } }
   | { type: 'download.progress'; data: { items: DownloadProgress[]; speed: number } }
   | { type: 'watch.updated'; data: { watch_id: number } }
+  | { type: 'favorites.updated'; data: null }
+  | { type: 'chat.read'; data: { chat_id: number } }
   /** Synthetic, never sent by the server: the store broadcasts it to `onEvent` listeners after it
    * resynced following a reconnect, so views holding their own fetched data refetch it. */
   | { type: 'resync'; data: null };
@@ -397,4 +438,22 @@ export const EVENT_TYPES = [
   'bot.status',
   'download.progress',
   'watch.updated',
+  'favorites.updated',
+  'chat.read',
 ] as const;
+
+/** One search result: a message and the text around its first match. */
+export interface SearchHit {
+  message: Message;
+  /** Where the snippet comes from: the text or caption, a file name, or the archived article. */
+  field: 'body' | 'files' | 'article';
+  snippet: string;
+  /** Matches within the snippet as [start, length] in UTF-16 units. */
+  ranges: [number, number][];
+}
+
+export interface SearchPage {
+  items: SearchHit[];
+  /** The `before` cursor of the next page; 0 when this was the last. */
+  next: number;
+}

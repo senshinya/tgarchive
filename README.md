@@ -4,6 +4,8 @@
 
 消息整条就是一个 Telegraph 文章链接（`telegra.ph` / `graph.org`）时，文章正文与其中的图片、视频会离线存档，WebUI 在该消息下显示文章卡片，点开为仿 Instant View 的阅读页。设计见 [`docs/superpowers/specs/2026-10-05-telegraph-archive-design.md`](docs/superpowers/specs/2026-10-05-telegraph-archive-design.md)。文章图片从原站直接下载，容器需要能访问外网。
 
+存档可全文搜索（正文、说明文字、文件名与 Telegraph 正文，中文按子串匹配，可限定单个会话，结果可跳到任意早的消息）；消息可收藏并打标签，在「收藏」视图按标签筛选；监听频道的会话在左栏显示未读数。设计见 [`docs/superpowers/specs/2026-10-07-search-favorites-unread-design.md`](docs/superpowers/specs/2026-10-07-search-favorites-unread-design.md)。
+
 单个 Go 二进制内嵌 Preact 前端，并以子进程托管官方 [telegram-bot-api](https://github.com/tdlib/telegram-bot-api) 本地服务器（`--local`，只监听 127.0.0.1:8081）。
 
 ## 开发
