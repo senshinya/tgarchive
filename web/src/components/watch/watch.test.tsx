@@ -419,7 +419,11 @@ describe('manual backfill', () => {
 
 describe('WatchList and settings entry', () => {
   it('lists watches with status, toggles one and saves the poll interval', async () => {
-    const list: Watch[] = [makeWatch(), makeWatch({ id: 4, channel: { channel_id: 501, title: 'Broken', username: '', has_avatar: false }, status: 'error', error: '无法访问' })];
+    const polled = Math.floor(Date.now() / 1000);
+    const list: Watch[] = [
+      makeWatch({ last_polled_at: polled }),
+      makeWatch({ id: 4, channel: { channel_id: 501, title: 'Broken', username: '', has_avatar: false }, status: 'error', error: '无法访问' }),
+    ];
     const api = fakeApi({ watches: vi.fn(async () => list), userbot: vi.fn(async () => ({ state: 'ready' as const, phone: '', name: 'Me', tg_user_id: 1, error: '' })) });
     renderWithStore(<WatchList />, api);
     expect(await screen.findByText('观察中 2 · 已存 5 · 窗口 30 分钟')).toBeTruthy();
@@ -438,6 +442,33 @@ describe('WatchList and settings entry', () => {
       fireEvent.click(screen.getByRole('button', { name: '保存' }));
     });
     expect(api.saveWatchSettings).toHaveBeenCalledWith(120);
+  });
+
+  it('shows when each watch last polled and what it caught lately, flagging a stalled one', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    const now = 1_790_100_000;
+    vi.setSystemTime(now * 1000);
+    const list: Watch[] = [
+      makeWatch({ last_polled_at: now - 70, hits_24h: 2, hits_7d: 9, last_hit_at: now - 3 * 3600 }),
+      makeWatch({ id: 4, channel: { channel_id: 501, title: 'Slow', username: '', has_avatar: false }, last_polled_at: now - 600 }),
+      makeWatch({ id: 5, channel: { channel_id: 502, title: 'New', username: '', has_avatar: false }, created_at: now - 10 }),
+      makeWatch({ id: 6, channel: { channel_id: 503, title: 'Off', username: '', has_avatar: false }, enabled: false, last_polled_at: now - 9999 }),
+    ];
+    const api = fakeApi({ watches: vi.fn(async () => list) });
+    const r = renderWithStore(<WatchList />, api);
+    await screen.findByText('· 1 分钟前轮询');
+    expect(screen.getByText('24h 命中 2 · 7d 命中 9 · 最近 3 小时前')).toBeTruthy();
+    const stalled = screen.getByText('轮询停滞 · 10 分钟前轮询');
+    expect(stalled.closest('.ListItem-subtitle')?.classList.contains('warning')).toBe(true);
+    expect(screen.getByText('· 尚未轮询')).toBeTruthy();
+    expect(screen.getAllByText('尚无命中').length).toBe(3);
+    expect(r.container.textContent).not.toContain('已停用 · 已存 5轮询停滞');
+    expect(screen.getAllByText(/轮询停滞/).length).toBe(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(api.watches).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 
   it('warns that watching is paused while the user account is logged out', async () => {

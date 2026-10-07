@@ -233,6 +233,15 @@ export interface Watch {
   pending: number;
   hits: number;
   created_at: number;
+  /** When a poll last finished; 0 when none has. */
+  last_polled_at: number;
+  /** Archived posts (an album counts once) published in the last 24 hours / 7 days. */
+  hits_24h: number;
+  hits_7d: number;
+  /** The newest archived post's date; 0 when none. */
+  last_hit_at: number;
+  /** The poll interval now in force, against which a stalled watch is judged. */
+  poll_seconds: number;
   /** The latest manual backfill; null when none ran since the server started. */
   backfill: BackfillState | null;
 }

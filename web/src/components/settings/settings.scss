@@ -86,10 +86,18 @@
   &.status-error {
     background: var(--color-error);
   }
+
+  &.status-warning {
+    background: var(--color-warning);
+  }
 }
 
 .ListItem-subtitle.error {
   color: var(--color-error);
+}
+
+.ListItem-subtitle.warning {
+  color: var(--color-warning);
 }
 
 .BotRow {
