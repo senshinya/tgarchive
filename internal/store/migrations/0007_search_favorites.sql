@@ -30,10 +30,13 @@ CREATE VIEW search_files AS
   WHERE mm.role = 'main' AND md.kind IN ('document', 'audio') AND md.file_name != ''
   GROUP BY mm.message_id;
 
--- Searchable article text: title, description and the text nodes of the Telegraph content.
+-- Searchable article text: title, description and the text nodes of the Telegraph content (none
+-- when the content is not valid JSON, which json_tree would fail on).
 CREATE VIEW search_articles AS
   SELECT a.message_id, a.title || ' ' || a.description || ' ' ||
-    COALESCE((SELECT group_concat(value, ' ') FROM json_tree(a.content) WHERE type = 'text' AND typeof(key) = 'integer'), '') AS text
+    CASE WHEN json_valid(a.content) THEN
+      COALESCE((SELECT group_concat(value, ' ') FROM json_tree(a.content) WHERE type = 'text' AND typeof(key) = 'integer'), '')
+    ELSE '' END AS text
   FROM articles a;
 
 CREATE TRIGGER search_msg_ai AFTER INSERT ON messages WHEN NEW.deleted_at = 0 BEGIN

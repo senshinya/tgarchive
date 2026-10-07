@@ -312,3 +312,16 @@ func TestSearchFoldsNonASCIICase(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchIndexSurvivesInvalidArticleJSON(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	id := ingest(t, s, bot, textMsg(1, "link")).MessageID
+	if _, err := s.db.Exec(`INSERT INTO articles (message_id, path, url, title, description, content, fetched_at)
+		VALUES (?, 'p', 'u', '标题', '', 'not json', 1)`, id); err != nil {
+		t.Fatalf("an article with invalid content must still save: %v", err)
+	}
+	if _, _, article, _ := indexed(t, s, id); !strings.Contains(article, "标题") {
+		t.Fatalf("article = %q", article)
+	}
+}
