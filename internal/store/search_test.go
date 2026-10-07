@@ -259,3 +259,56 @@ func utf16Slice(s string, r [2]int) string {
 	u := utf16.Encode([]rune(s))
 	return string(utf16.Decode(u[r[0] : r[0]+r[1]]))
 }
+
+func TestSearchUsesTheIndex(t *testing.T) {
+	s := newStore(t)
+	s.db.Exec("ANALYZE")
+	for _, q := range []string{"天气很", "hello world", "天气很 a"} {
+		query, args := searchQuery(SearchTerms(q), 0, 0, 30)
+		rows, err := s.db.Query("EXPLAIN QUERY PLAN "+query, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var plan []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			rows.Scan(&id, &parent, &unused, &detail)
+			plan = append(plan, detail)
+		}
+		rows.Close()
+		// Driven by the full-text index, then each hit's message looked up by id.
+		if p := strings.Join(plan, " | "); !strings.Contains(p, "VIRTUAL TABLE INDEX") || strings.Contains(p, "SCAN m") || !strings.Contains(p, "SEARCH m") {
+			t.Errorf("%q must be answered from the trigram index, plan: %s", q, p)
+		}
+	}
+}
+
+func TestSearchQuotesAreLiteral(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	id := ingest(t, s, bot, textMsg(1, `he said "quote" here`)).MessageID
+	for _, q := range []string{`"quote"`, `"quo`, `said "`, `AND`, `NEAR(`, `a*b`} {
+		hs, err := s.Search(ctx, q, 0, 0, 30)
+		if err != nil {
+			t.Fatalf("%q: %v", q, err)
+		}
+		if strings.Contains(`he said "quote" here`, strings.Fields(q)[0]) != (len(hs) == 1 && hs[0].Message.ID == id) {
+			t.Errorf("Search(%q) = %v", q, hitIDs(hs))
+		}
+	}
+}
+
+func TestSearchFoldsNonASCIICase(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	a := ingest(t, s, bot, textMsg(1, "ПРИВЕТ мир")).MessageID
+	b := ingest(t, s, bot, textMsg(2, "Ärger")).MessageID
+	ingest(t, s, bot, textMsg(3, `he said "quote" here`))
+	for q, want := range map[string]int64{"привет": a, "ärger": b, "ПРИВЕТ МИР": a} {
+		hs, err := s.Search(ctx, q, 0, 0, 30)
+		if err != nil || len(hs) != 1 || hs[0].Message.ID != want {
+			t.Errorf("Search(%q) = %v, %v", q, hitIDs(hs), err)
+		}
+	}
+}

@@ -6,7 +6,7 @@
 
 | # | 功能 | 成功标准 |
 |---|---|---|
-| A | 全文搜索 | 左栏输入任意 1 个及以上字符即可搜到正文、说明文字、文件名、Telegraph 标题与正文中含该子串的消息（中文按子串匹配，大小写不敏感）；点结果打开其会话并定位、闪烁该消息，不论它有多早 |
+| A | 全文搜索 | 左栏输入任意 1 个及以上字符即可搜到正文、说明文字、文件名、Telegraph 标题与正文中含该子串的消息（中文按子串匹配，大小写不敏感；1–2 个字符的词只对 ASCII 字母不区分大小写）；点结果打开其会话并定位、闪烁该消息，不论它有多早 |
 | B | 收藏与标签 | 任意消息可收藏/取消收藏并打标签；收藏视图按收藏时间倒序列出，可按标签筛选，点「定位」跳回原会话 |
 | C | 频道未读 | 频道会话在左栏显示未读数角标；打开并看到最新处后清零；换设备一致 |
 | D | 监听列表信息 | 监听列表每行可见最后轮询时间、24h/7d 命中数、最近命中时间；轮询停滞标黄 |
@@ -70,7 +70,7 @@ ALTER TABLE channel_watches ADD COLUMN last_polled_at INTEGER NOT NULL DEFAULT 0
 ### 3.2 查询（`store.Search`）
 `GET /api/search?q=&chat=&before=&limit=`
 - `q`：去首尾空白后按空白切词，最多 5 个词，每词 ≥1 字符；空查询 400
-- 每个词条件：`(body LIKE ? OR files LIKE ? OR article LIKE ?)`（`%词%`，转义 `%_\`，`ESCAPE '\'`），词间 AND。trigram 表上 ≥3 字符的 LIKE 走索引，1–2 字符退化为全表扫描（数据量小时可接受）
+- 每个词条件：≥3 个字符的词作为带引号的短语交给 `search_fts MATCH`（多个以 AND 连接，`"` 写成 `""`），由 trigram 索引驱动查询并折叠 Unicode 大小写；1–2 个字符的词只能用 `(body LIKE ? OR files LIKE ? OR article LIKE ?)`（`%词%`，转义 `%_\`，`ESCAPE '\'`）在结果上过滤，只折叠 ASCII 大小写；全为短词时为全表扫描（数据量小时可接受）
 - `chat`：会话键（正数 = chat id，负数 = `-botId` 合并时间线），省略为全部
 - 只返回 `messages.deleted_at = 0`；按 `messages.id` DESC，`before` 为游标，`limit` 默认 30、最大 100
 - 每条结果：

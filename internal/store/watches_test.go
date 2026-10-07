@@ -350,8 +350,8 @@ func TestWatchActivity(t *testing.T) {
 	post(1, "g", now-3600) // one album of three counts once
 	post(2, "g", now-3600)
 	post(3, "g", now-3500)
-	post(4, "", now-2*86400)  // within 7d only
-	post(5, "", now-8*86400)  // older than both
+	post(4, "", now-2*86400) // within 7d only
+	post(5, "", now-8*86400) // older than both
 	act, err := s.WatchActivity(ctx, now)
 	if err != nil {
 		t.Fatal(err)

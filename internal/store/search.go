@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // ErrBadQuery is returned for a search query with no terms.
@@ -52,26 +53,8 @@ func (s *Store) Search(ctx context.Context, q string, convKey, beforeID int64, l
 	if terms == nil {
 		return nil, ErrBadQuery
 	}
-	// The trigram index answers LIKE with three or more characters; shorter terms scan, which
-	// is fine at an archive's size.
-	where := []string{"m.deleted_at = 0", "(? = 0 OR m.id < ?)"}
-	args := []any{beforeID, beforeID}
-	switch {
-	case convKey > 0:
-		where = append(where, "m.chat_id = ?")
-		args = append(args, convKey)
-	case convKey < 0:
-		where = append(where, "m.chat_id IN (SELECT id FROM chats WHERE bot_id = ?)")
-		args = append(args, -convKey)
-	}
-	for _, t := range terms {
-		where = append(where, `(f.body LIKE ? ESCAPE '\' OR f.files LIKE ? ESCAPE '\' OR f.article LIKE ? ESCAPE '\')`)
-		p := "%" + likeEscaper.Replace(t) + "%"
-		args = append(args, p, p, p)
-	}
-	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, `SELECT f.rowid, f.body, f.files, f.article FROM search_fts f JOIN messages m ON m.id = f.rowid
-		WHERE `+strings.Join(where, " AND ")+` ORDER BY m.id DESC LIMIT ?`, args...)
+	query, args := searchQuery(terms, convKey, beforeID, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -128,6 +111,47 @@ func (s *Store) Search(ctx context.Context, q string, convKey, beforeID int64, l
 		out = append(out, SearchHit{Message: v, Field: field, Snippet: snip, Ranges: ranges})
 	}
 	return out, nil
+}
+
+// minIndexedTerm is the shortest term the trigram index can answer.
+const minIndexedTerm = 3
+
+// searchQuery builds the search: every term in one of the three columns, in scope, newest first.
+// Terms of three or more characters go to the full-text index as quoted phrases (which also folds
+// non-ASCII case); shorter ones can only be LIKE-scanned, which folds ASCII case only.
+func searchQuery(terms []string, convKey, beforeID int64, limit int) (string, []any) {
+	var phrases []string
+	where := []string{"m.deleted_at = 0", "(? = 0 OR m.id < ?)"}
+	args := []any{beforeID, beforeID}
+	for _, t := range terms {
+		if utf8.RuneCountInString(t) >= minIndexedTerm {
+			phrases = append(phrases, `"`+strings.ReplaceAll(t, `"`, `""`)+`"`)
+		}
+	}
+	from := "search_fts f JOIN messages m ON m.id = f.rowid"
+	if len(phrases) > 0 {
+		where = append(where, "search_fts MATCH ?")
+		args = append(args, strings.Join(phrases, " AND "))
+	}
+	switch {
+	case convKey > 0:
+		where = append(where, "m.chat_id = ?")
+		args = append(args, convKey)
+	case convKey < 0:
+		where = append(where, "m.chat_id IN (SELECT id FROM chats WHERE bot_id = ?)")
+		args = append(args, -convKey)
+	}
+	for _, t := range terms {
+		if utf8.RuneCountInString(t) >= minIndexedTerm {
+			continue
+		}
+		where = append(where, `(f.body LIKE ? ESCAPE '\' OR f.files LIKE ? ESCAPE '\' OR f.article LIKE ? ESCAPE '\')`)
+		p := "%" + likeEscaper.Replace(t) + "%"
+		args = append(args, p, p, p)
+	}
+	args = append(args, limit)
+	return `SELECT f.rowid, f.body, f.files, f.article FROM ` + from + `
+		WHERE ` + strings.Join(where, " AND ") + ` ORDER BY m.id DESC LIMIT ?`, args
 }
 
 func containsAny(text string, terms []string) bool {
