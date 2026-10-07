@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"errors"
 	"testing"
 
@@ -297,5 +298,70 @@ func TestListBotMessagesNoGapBelowACompletedAlbum(t *testing.T) {
 		if page[i].ID <= page[i-1].ID {
 			t.Fatal("page not ascending")
 		}
+	}
+}
+
+// pagedChat holds messages 1..20 of one chat, with 9, 10 and 11 one album; it returns the chat
+// and the stored ids by Telegram id.
+func pagedChat(t *testing.T, s *Store, bot int64) (int64, map[int64]int64) {
+	t.Helper()
+	byTg := map[int64]int64{}
+	var chat int64
+	for i := int64(1); i <= 20; i++ {
+		var m = textMsg(i, "m")
+		if i >= 9 && i <= 11 {
+			m = photoMsg(i, fmt.Sprintf("bot:%d", i))
+			m.MediaGroupID = "g"
+		}
+		res := ingest(t, s, bot, m)
+		chat, byTg[i] = res.ChatID, res.MessageID
+	}
+	return chat, byTg
+}
+
+func TestListMessagesAfterAndAround(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	chat, id := pagedChat(t, s, bot)
+	tg := func(vs []MessageView) []int64 {
+		rev := map[int64]int64{}
+		for k, v := range id {
+			rev[v] = k
+		}
+		out := make([]int64, len(vs))
+		for i, v := range vs {
+			out[i] = rev[v.ID]
+		}
+		return out
+	}
+	cases := []struct {
+		name  string
+		p     Page
+		limit int
+		want  []int64
+	}{
+		{"after", Page{After: id[5]}, 3, []int64{6, 7, 8}},
+		{"after completes the album", Page{After: id[7]}, 3, []int64{8, 9, 10, 11}},
+		{"after the end", Page{After: id[20]}, 3, []int64{}},
+		{"around an album", Page{Around: id[10]}, 4, []int64{9, 10, 11, 12}},
+		{"around", Page{Around: id[15]}, 6, []int64{13, 14, 15, 16, 17, 18}},
+		{"around the newest", Page{Around: id[20]}, 6, []int64{18, 19, 20}},
+		{"before", Page{Before: id[3]}, 5, []int64{1, 2}},
+	}
+	for _, c := range cases {
+		got, err := s.ListMessagesPage(ctx, chat, c.p, c.limit)
+		if err != nil || !eq(tg(got), c.want) {
+			t.Errorf("%s: %v, %v; want %v", c.name, tg(got), err, c.want)
+		}
+	}
+	if _, _, err := s.DeleteMessage(ctx, id[15], 9000); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ListMessagesPage(ctx, chat, Page{Around: id[15]}, 4); !eq(tg(got), []int64{13, 14, 16, 17}) {
+		t.Errorf("around a deleted message: %v", tg(got))
+	}
+	merged, err := s.ListBotMessagesPage(ctx, bot, Page{Around: id[10]}, 4)
+	if err != nil || !eq(tg(merged), []int64{9, 10, 11, 12}) {
+		t.Errorf("bot timeline around: %v, %v", tg(merged), err)
 	}
 }

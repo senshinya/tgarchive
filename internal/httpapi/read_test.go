@@ -473,3 +473,27 @@ func TestDownloadsEndpoint(t *testing.T) {
 		t.Fatal("speed missing")
 	}
 }
+
+func TestMessagesAfterAndAround(t *testing.T) {
+	e := newReadEnv(t)
+	bots, _ := e.st.ListBots(bg)
+	var all []store.MessageView
+	json.Unmarshal(do(e.h, "GET", fmt.Sprintf("/api/chats/%d/messages", e.chat), nil).Body.Bytes(), &all)
+	first, second := all[0].ID, all[1].ID
+	for _, base := range []string{fmt.Sprintf("/api/chats/%d/messages", e.chat), fmt.Sprintf("/api/bots/%d/messages", bots[0].ID)} {
+		var msgs []store.MessageView
+		json.Unmarshal(do(e.h, "GET", fmt.Sprintf("%s?after=%d", base, first), nil).Body.Bytes(), &msgs)
+		if len(msgs) != 1 || msgs[0].ID != second {
+			t.Fatalf("%s after = %+v", base, msgs)
+		}
+		json.Unmarshal(do(e.h, "GET", fmt.Sprintf("%s?around=%d&limit=4", base, second), nil).Body.Bytes(), &msgs)
+		if len(msgs) != 2 || msgs[0].ID != first || msgs[1].ID != second {
+			t.Fatalf("%s around = %+v", base, msgs)
+		}
+		for _, q := range []string{"?after=1&around=2", "?before=1&after=2", "?around=x"} {
+			if w := do(e.h, "GET", base+q, nil); w.Code != 400 {
+				t.Fatalf("%s%s = %d", base, q, w.Code)
+			}
+		}
+	}
+}

@@ -198,16 +198,56 @@ func botScope(botID int64) scope {
 	return scope{"chat_id IN (SELECT id FROM chats WHERE bot_id = ?)", botID}
 }
 
+// Page picks a conversation page: messages older than Before (the newest page when all are 0),
+// newer than After, or a window around Around (that message and older, plus newer). At most one
+// is set.
+type Page struct{ Before, After, Around int64 }
+
 func (s *Store) ListMessages(ctx context.Context, chatID, beforeID int64, limit int) ([]MessageView, error) {
-	return s.listMessages(ctx, chatScope(chatID), beforeID, limit)
+	return s.listMessages(ctx, chatScope(chatID), Page{Before: beforeID}, limit)
 }
 
 // ListBotMessages pages through every chat of one bot as a single timeline.
 func (s *Store) ListBotMessages(ctx context.Context, botID, beforeID int64, limit int) ([]MessageView, error) {
-	return s.listMessages(ctx, botScope(botID), beforeID, limit)
+	return s.listMessages(ctx, botScope(botID), Page{Before: beforeID}, limit)
 }
 
-func (s *Store) listMessages(ctx context.Context, sc scope, beforeID int64, limit int) ([]MessageView, error) {
+func (s *Store) ListMessagesPage(ctx context.Context, chatID int64, p Page, limit int) ([]MessageView, error) {
+	return s.listMessages(ctx, chatScope(chatID), p, limit)
+}
+
+func (s *Store) ListBotMessagesPage(ctx context.Context, botID int64, p Page, limit int) ([]MessageView, error) {
+	return s.listMessages(ctx, botScope(botID), p, limit)
+}
+
+// listMessages returns one page in ascending id order. Albums are never cut at a page edge.
+func (s *Store) listMessages(ctx context.Context, sc scope, p Page, limit int) ([]MessageView, error) {
+	var views []MessageView
+	var err error
+	switch {
+	case p.After > 0:
+		views, err = s.newer(ctx, sc, p.After, limit)
+	case p.Around > 0:
+		var newer []MessageView
+		// The older half (rounded up) holds the target itself.
+		if views, err = s.older(ctx, sc, p.Around+1, limit-limit/2); err == nil {
+			newer, err = s.newer(ctx, sc, p.Around, limit/2)
+			views = append(views, newer...)
+		}
+	default:
+		views, err = s.older(ctx, sc, p.Before, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := s.hydrate(ctx, views); err != nil {
+		return nil, err
+	}
+	return views, nil
+}
+
+// older returns up to limit messages below beforeID (0: the newest), ascending.
+func (s *Store) older(ctx context.Context, sc scope, beforeID int64, limit int) ([]MessageView, error) {
 	views, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
 		WHERE `+sc.cond+` AND deleted_at = 0 AND (? = 0 OR id < ?) ORDER BY id DESC LIMIT ?`, sc.arg, beforeID, beforeID, limit))
 	if err != nil {
@@ -234,8 +274,32 @@ func (s *Store) listMessages(ctx context.Context, sc scope, beforeID int64, limi
 		}
 	}
 	slices.Reverse(views)
-	if err := s.hydrate(ctx, views); err != nil {
+	return views, nil
+}
+
+// newer returns up to limit messages above afterID, ascending; like older, it completes an album
+// the page edge would cut, along with everything in scope up to the album's last message.
+func (s *Store) newer(ctx context.Context, sc scope, afterID int64, limit int) ([]MessageView, error) {
+	views, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
+		WHERE `+sc.cond+` AND deleted_at = 0 AND id > ? ORDER BY id LIMIT ?`, sc.arg, afterID, limit))
+	if err != nil {
 		return nil, err
+	}
+	if n := len(views); n > 0 && views[n-1].MediaGroupID != "" {
+		newest := views[n-1]
+		var high sql.NullInt64
+		if err := s.db.QueryRowContext(ctx, `SELECT MAX(id) FROM messages
+			WHERE chat_id = ? AND deleted_at = 0 AND media_group_id = ? AND id > ?`, newest.ChatID, newest.MediaGroupID, newest.ID).Scan(&high); err != nil {
+			return nil, err
+		}
+		if high.Valid {
+			more, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
+				WHERE `+sc.cond+` AND deleted_at = 0 AND id > ? AND id <= ? ORDER BY id`, sc.arg, newest.ID, high.Int64))
+			if err != nil {
+				return nil, err
+			}
+			views = append(views, more...)
+		}
 	}
 	return views, nil
 }
