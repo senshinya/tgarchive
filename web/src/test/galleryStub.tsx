@@ -4,7 +4,11 @@ import { useState } from 'preact/hooks';
 import type { GalleryProps } from '../components/viewer/Gallery';
 
 export function Gallery({ items, mediaId, titleOf, onClosed }: GalleryProps) {
-  const [i, setI] = useState(Math.max(0, items.findIndex((it) => it.mediaId === mediaId)));
+  // Tracks the shown item by media id, like the real gallery, so a longer list arriving later
+  // keeps it in place.
+  const [shown, setShown] = useState(mediaId);
+  const i = Math.max(0, items.findIndex((it) => it.mediaId === shown));
+  const setI = (n: number) => setShown(items[n].mediaId);
   const it = items[i];
   return (
     <div class="StubGallery">

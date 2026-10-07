@@ -42,6 +42,8 @@ type Watch struct {
 	CreatedAt     int64
 	UpdatedAt     int64
 	LastPolledAt  int64 // when a poll last finished (0: never)
+	Scanned       int64 // posts looked at since v8 (an album counts once)
+	ScanHits      int64 // of those, the archived ones
 }
 
 // WatchView is a watch with its channel and live counters, for listings.
@@ -193,12 +195,12 @@ const WatchStartEmpty = -1
 
 const watchCols = `w.id, w.channel_id, w.window_minutes, w.cond_json, w.enabled, w.status, w.last_error, w.last_seen_id, w.hits,
 	w.created_at, w.updated_at, c.title, c.username, c.avatar_path, COALESCE((SELECT id FROM chats WHERE channel_id = w.channel_id), 0),
-	(SELECT COUNT(*) FROM watch_pending p WHERE p.watch_id = w.id), w.last_polled_at`
+	(SELECT COUNT(*) FROM watch_pending p WHERE p.watch_id = w.id), w.last_polled_at, w.scanned, w.scan_hits`
 
 func scanWatch(r scanner) (WatchView, error) {
 	var v WatchView
 	err := r.Scan(&v.ID, &v.ChannelID, &v.WindowMinutes, &v.Cond, &v.Enabled, &v.Status, &v.LastError, &v.LastSeenID, &v.Hits,
-		&v.CreatedAt, &v.UpdatedAt, &v.Channel.Title, &v.Channel.Username, &v.Channel.AvatarPath, &v.ChatID, &v.Pending, &v.LastPolledAt)
+		&v.CreatedAt, &v.UpdatedAt, &v.Channel.Title, &v.Channel.Username, &v.Channel.AvatarPath, &v.ChatID, &v.Pending, &v.LastPolledAt, &v.Scanned, &v.ScanHits)
 	v.Channel.ChannelID = v.ChannelID
 	return v, err
 }
@@ -331,13 +333,31 @@ func (s *Store) AddPending(ctx context.Context, watchID int64, posts []Pending, 
 		if cur == 0 {
 			return nil
 		}
+		// A new post counts once; an album counts once, when its first part shows up.
+		var scanned int64
+		seenGroups := map[int64]bool{}
 		for _, p := range posts {
-			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO watch_pending (watch_id, tg_message_id, grouped_id, date, deadline)
-				VALUES (?, ?, ?, ?, ?)`, watchID, p.TgMessageID, p.GroupedID, p.Date, p.Deadline); err != nil {
+			newGroup := false
+			if p.GroupedID != 0 && !seenGroups[p.GroupedID] {
+				seenGroups[p.GroupedID] = true
+				var one int
+				err := tx.QueryRowContext(ctx, "SELECT 1 FROM watch_pending WHERE watch_id = ? AND grouped_id = ? LIMIT 1", watchID, p.GroupedID).Scan(&one)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+				newGroup = errors.Is(err, sql.ErrNoRows)
+			}
+			res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO watch_pending (watch_id, tg_message_id, grouped_id, date, deadline)
+				VALUES (?, ?, ?, ?, ?)`, watchID, p.TgMessageID, p.GroupedID, p.Date, p.Deadline)
+			if err != nil {
 				return err
 			}
+			if n, _ := res.RowsAffected(); n == 1 && (p.GroupedID == 0 || newGroup) {
+				scanned++
+			}
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE channel_watches SET last_seen_id = ? WHERE id = ? AND last_seen_id < ?", lastSeen, watchID, lastSeen)
+		_, err := tx.ExecContext(ctx, "UPDATE channel_watches SET last_seen_id = MAX(last_seen_id, ?), scanned = scanned + ? WHERE id = ?",
+			lastSeen, scanned, watchID)
 		return err
 	})
 }
@@ -373,9 +393,10 @@ func (s *Store) DeletePending(ctx context.Context, watchID int64, ids []int64) e
 	return err
 }
 
-// AddWatchHit counts one archived post (an album counts once).
-func (s *Store) AddWatchHit(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE channel_watches SET hits = hits + 1 WHERE id = ?", id)
+// AddWatchHit counts one archived post (an album counts once). scanned says whether polling saw
+// it (and so counted it in scanned); a backfill hit counts only towards hits, not the hit rate.
+func (s *Store) AddWatchHit(ctx context.Context, id int64, scanned bool) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE channel_watches SET hits = hits + 1, scan_hits = scan_hits + ? WHERE id = ?", scanned, id)
 	return err
 }
 

@@ -67,6 +67,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/messages/{id}", s.getMessage)
 	mux.HandleFunc("GET /api/messages/{id}/article", s.getArticle)
 	mux.HandleFunc("DELETE /api/messages/{id}", s.deleteMessage)
+	mux.HandleFunc("GET /api/media", s.listAllMedia)
+	mux.HandleFunc("GET /api/stats", s.getStats)
 	mux.HandleFunc("POST /api/media/{id}/retry", s.retryMedia)
 	mux.HandleFunc("GET /api/downloads", s.downloads)
 	mux.HandleFunc("GET /api/search", s.search)

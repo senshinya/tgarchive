@@ -8,6 +8,8 @@ export type Route =
   | { name: 'bot-article'; botId: number; messageId: number }
   | { name: 'downloads' }
   | { name: 'favorites' }
+  | { name: 'media' }
+  | { name: 'stats' }
   | { name: 'settings' }
   | { name: 'settings-add-bot' }
   | { name: 'settings-bot'; botId: number }
@@ -30,6 +32,8 @@ export function parseRoute(pathname: string): Route {
   }
   if (parts[0] === 'downloads' && parts.length === 1) return { name: 'downloads' };
   if (parts[0] === 'favorites' && parts.length === 1) return { name: 'favorites' };
+  if (parts[0] === 'media' && parts.length === 1) return { name: 'media' };
+  if (parts[0] === 'stats' && parts.length === 1) return { name: 'stats' };
   if (parts[0] === 'settings') {
     if (parts.length === 1) return { name: 'settings' };
     if (parts[1] === 'bots' && parts[2] === 'new' && parts.length === 3) return { name: 'settings-add-bot' };
@@ -59,6 +63,10 @@ export function routePath(r: Route): string {
       return '/downloads';
     case 'favorites':
       return '/favorites';
+    case 'media':
+      return '/media';
+    case 'stats':
+      return '/stats';
     case 'settings':
       return '/settings';
     case 'settings-add-bot':

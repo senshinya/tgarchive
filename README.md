@@ -6,6 +6,8 @@
 
 存档可全文搜索（正文、说明文字、文件名与 Telegraph 正文，中文按子串匹配，可限定单个会话，结果可跳到任意早的消息）；消息可收藏并打标签，在「收藏」视图按标签筛选；监听频道的会话在左栏显示未读数。设计见 [`docs/superpowers/specs/2026-10-07-search-favorites-unread-design.md`](docs/superpowers/specs/2026-10-07-search-favorites-unread-design.md)。
 
+「媒体墙」把所有会话的图片、视频与 GIF 按月份排成等高行，可按类型和来源（私聊 / 频道）筛选，点开即在大图浏览器里翻遍整面墙；「统计」汇总消息、媒体与磁盘占用，并给出一年活跃热力图、累计增长、会话排行、媒体构成与各频道监听的命中趋势和命中率（命中率自 v0.8.0 起统计）。设计见 [`docs/superpowers/specs/2026-10-07-media-wall-stats-design.md`](docs/superpowers/specs/2026-10-07-media-wall-stats-design.md)。
+
 单个 Go 二进制内嵌 Preact 前端，并以子进程托管官方 [telegram-bot-api](https://github.com/tdlib/telegram-bot-api) 本地服务器（`--local`，只监听 127.0.0.1:8081）。
 
 ## 开发

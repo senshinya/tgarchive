@@ -375,3 +375,71 @@ func TestWatchActivity(t *testing.T) {
 		t.Fatalf("last_polled_at = %d", w.LastPolledAt)
 	}
 }
+
+func TestWatchScanCounters(t *testing.T) {
+	s := newStore(t)
+	id := seedWatch(t, s)
+	scanned := func() (int64, int64) {
+		t.Helper()
+		w, err := s.GetWatch(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w.Scanned, w.ScanHits
+	}
+	// Two single posts and a three-post album: three posts as people see them.
+	if err := s.AddPending(ctx, id, []Pending{{TgMessageID: 10}, {TgMessageID: 11}, {TgMessageID: 12, GroupedID: 7},
+		{TgMessageID: 13, GroupedID: 7}, {TgMessageID: 14, GroupedID: 7}}, 14); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := scanned(); n != 3 {
+		t.Fatalf("scanned = %d, want 3", n)
+	}
+	// The album's last part arrives in the next poll, and a post already pending is seen again.
+	if err := s.AddPending(ctx, id, []Pending{{TgMessageID: 15, GroupedID: 7}, {TgMessageID: 10}}, 15); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := scanned(); n != 3 {
+		t.Fatalf("scanned after album tail = %d, want 3", n)
+	}
+	if err := s.AddPending(ctx, id, []Pending{{TgMessageID: 16, GroupedID: 8}, {TgMessageID: 17, GroupedID: 8}}, 17); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := scanned(); n != 4 {
+		t.Fatalf("scanned after a new album = %d, want 4", n)
+	}
+	if err := s.AddWatchHit(ctx, id, true); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := s.GetWatch(ctx, id)
+	if w.Hits != 1 || w.ScanHits != 1 {
+		t.Fatalf("hits = %d, scan hits = %d", w.Hits, w.ScanHits)
+	}
+	// A backfill hit was never scanned by polling: it counts as a hit, not towards the rate.
+	if err := s.AddWatchHit(ctx, id, false); err != nil {
+		t.Fatal(err)
+	}
+	if w, _ = s.GetWatch(ctx, id); w.Hits != 2 || w.ScanHits != 1 {
+		t.Fatalf("after a backfill hit: hits = %d, scan hits = %d", w.Hits, w.ScanHits)
+	}
+}
+
+func TestMigrationCountsPendingAsScanned(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v7.db")
+	s := openAt(t, path, 7)
+	if _, err := s.db.Exec(`INSERT INTO channels (channel_id, title, updated_at) VALUES (1500, 'News', 1);
+		INSERT INTO channel_watches (id, channel_id, window_minutes, cond_json, created_at, updated_at) VALUES (4, 1500, 30, '{}', 1, 1);
+		INSERT INTO watch_pending (watch_id, tg_message_id, grouped_id, date, deadline) VALUES (4, 10, 0, 1, 2), (4, 11, 7, 1, 2), (4, 12, 7, 1, 2)`); err != nil {
+		t.Fatal(err)
+	}
+	const id = 4
+	s.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if w, _ := s.GetWatch(ctx, id); w.Scanned != 2 || w.ScanHits != 0 {
+		t.Fatalf("migrated watch = %+v", w)
+	}
+}

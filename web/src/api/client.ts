@@ -16,15 +16,20 @@ import type {
   Tag,
   TagCount,
   SharedMediaType,
+  Stats,
   TelegramApp,
   UserbotInfo,
   Watch,
   WatchInput,
   WatchTestResult,
+  WallSource,
+  WallType,
   WhitelistEntry,
 } from './types';
 
 export const PAGE_SIZE = 50;
+/** Media wall page size. */
+export const WALL_PAGE = 60;
 
 /** A conversation page other than "older than": newer than a message, or a window around one. */
 export interface PageParams {
@@ -140,6 +145,10 @@ export interface Api {
   deleteWatch(id: number, purge: boolean): Promise<void>;
   /** Judges the channel's posts of the last `hours` by their current counts, in the background. */
   backfillWatch(id: number, hours: number): Promise<BackfillState>;
+  /** The media wall: every chat's photos, videos and GIFs, newest first. */
+  allMedia(type: WallType, source: WallSource, before?: number, limit?: number): Promise<Message[]>;
+  /** Archive statistics, days cut in the time zone tz minutes east of UTC. */
+  stats(tz: number): Promise<Stats>;
   watchSettings(): Promise<{ poll_seconds: number }>;
   saveWatchSettings(pollSeconds: number): Promise<{ poll_seconds: number }>;
 }
@@ -167,6 +176,8 @@ export const api: Api = {
   favorites: (tag = 0, before = 0) => request('GET', `/api/favorites${qs({ tag, before })}`),
   tags: () => request('GET', '/api/tags'),
   deleteTag: (id) => request('DELETE', `/api/tags/${id}`),
+  allMedia: (type, source, before = 0, limit = WALL_PAGE) => request('GET', `/api/media${qs({ type, source, before, limit })}`),
+  stats: (tz) => request('GET', `/api/stats${qs({ tz })}`),
   markRead: (chatId, messageId) => request('POST', `/api/chats/${chatId}/read`, { message_id: messageId }),
   addBot: (token) => request('POST', '/api/admin/bots', { token }),
   setBotEnabled: (id, enabled) => request('PATCH', `/api/admin/bots/${id}`, { enabled }),

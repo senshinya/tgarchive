@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'preact/hooks';
 import { NETWORK_ERROR } from './api/client';
 import { DownloadsPanel } from './components/downloads/DownloadsPanel';
 import { FavoritesView } from './components/favorites/FavoritesView';
+import { StatsView } from './components/stats/StatsView';
+import { MediaWall } from './components/wall/MediaWall';
 import { ChatsPanel } from './components/left/ChatsPanel';
 import { MiddleColumn } from './components/middle/MiddleColumn';
 import { SharedMedia } from './components/right/SharedMedia';
@@ -42,7 +44,8 @@ export function App({ store, eventSource }: Props) {
   const chatId = routeConvKey(r);
   const articleId = routeArticleId(r);
   const rightOpen = chatId !== 0 && store.sharedMediaOpen.value;
-  const favorites = r.name === 'favorites';
+  // Views that take the middle column instead of a conversation (full screen on phones).
+  const favorites = r.name === 'favorites' || r.name === 'media' || r.name === 'stats';
   const cls = [!chatId && !favorites && 'left-column-open', rightOpen && 'right-column-open'].filter(Boolean).join(' ');
 
   // Remembers the chat that was open before navigating away (e.g. into settings), so the
@@ -79,7 +82,15 @@ export function App({ store, eventSource }: Props) {
             onClick={() => navigate(convRoute(lastChatId.current))}
           />
         )}
-        {favorites ? <FavoritesView /> : <MiddleColumn chatId={chatId} articleId={articleId} />}
+        {r.name === 'favorites' ? (
+          <FavoritesView />
+        ) : r.name === 'media' ? (
+          <MediaWall />
+        ) : r.name === 'stats' ? (
+          <StatsView />
+        ) : (
+          <MiddleColumn chatId={chatId} articleId={articleId} />
+        )}
         <div id="RightColumn" aria-hidden={!rightOpen}>
           {rightOpen && <SharedMedia key={chatId} chatId={chatId} />}
         </div>

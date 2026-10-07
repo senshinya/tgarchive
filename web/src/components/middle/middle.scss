@@ -150,3 +150,19 @@
 .MiddleHeader-status.error {
   color: var(--color-error);
 }
+
+.ViewHeader {
+  cursor: default;
+}
+
+.ViewHeader-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: #fff;
+}
