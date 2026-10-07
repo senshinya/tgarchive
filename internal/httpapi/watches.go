@@ -215,14 +215,47 @@ type watchJSON struct {
 	Pending       int64             `json:"pending"`
 	Hits          int64             `json:"hits"`
 	CreatedAt     int64             `json:"created_at"`
+	LastPolledAt  int64             `json:"last_polled_at"`
+	Hits24h       int64             `json:"hits_24h"`
+	Hits7d        int64             `json:"hits_7d"`
+	LastHitAt     int64             `json:"last_hit_at"`
+	// PollSeconds is the current poll interval, against which the WebUI judges a stalled watch.
+	PollSeconds int `json:"poll_seconds"`
 	// Backfill is the latest manual backfill; null when none ran since the server started.
 	Backfill *userbot.BackfillState `json:"backfill"`
 }
 
-func (s *Server) watchJSON(v *store.WatchView) watchJSON {
+// watchInfo is what every watch's JSON shares: recent hits by watch and the poll interval.
+type watchInfo struct {
+	activity map[int64]store.WatchActivity
+	poll     int
+}
+
+func (s *Server) loadWatchInfo(ctx context.Context) (watchInfo, error) {
+	act, err := s.Store.WatchActivity(ctx, s.Now().Unix())
+	if err != nil {
+		return watchInfo{}, err
+	}
+	poll, err := s.pollSeconds(ctx)
+	return watchInfo{act, poll}, err
+}
+
+func (s *Server) watchJSON(v *store.WatchView, info watchInfo) watchJSON {
 	j := toWatchJSON(v)
+	a := info.activity[v.ID]
+	j.LastPolledAt, j.Hits24h, j.Hits7d, j.LastHitAt, j.PollSeconds = v.LastPolledAt, a.Hits24h, a.Hits7d, a.LastHitAt, info.poll
 	j.Backfill = s.Watcher.BackfillState(v.ID)
 	return j
+}
+
+// writeWatch answers with one watch.
+func (s *Server) writeWatch(w http.ResponseWriter, r *http.Request, code int, v *store.WatchView) {
+	info, err := s.loadWatchInfo(r.Context())
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, code, s.watchJSON(v, info))
 }
 
 func toWatchJSON(v *store.WatchView) watchJSON {
@@ -243,9 +276,14 @@ func (s *Server) listWatches(w http.ResponseWriter, r *http.Request) {
 		storeErr(w, err)
 		return
 	}
+	info, err := s.loadWatchInfo(r.Context())
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
 	out := make([]watchJSON, 0, len(list))
 	for i := range list {
-		out = append(out, s.watchJSON(&list[i]))
+		out = append(out, s.watchJSON(&list[i], info))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -261,7 +299,7 @@ func (s *Server) getWatch(w http.ResponseWriter, r *http.Request) {
 		storeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.watchJSON(v))
+	s.writeWatch(w, r, http.StatusOK, v)
 }
 
 func (s *Server) backfillWatch(w http.ResponseWriter, r *http.Request) {
@@ -364,7 +402,7 @@ func (s *Server) createWatch(w http.ResponseWriter, r *http.Request) {
 		storeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, s.watchJSON(v))
+	s.writeWatch(w, r, http.StatusCreated, v)
 }
 
 func (s *Server) updateWatch(w http.ResponseWriter, r *http.Request) {
@@ -388,7 +426,7 @@ func (s *Server) updateWatch(w http.ResponseWriter, r *http.Request) {
 		storeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.watchJSON(v))
+	s.writeWatch(w, r, http.StatusOK, v)
 }
 
 func (s *Server) deleteWatch(w http.ResponseWriter, r *http.Request) {
@@ -407,13 +445,24 @@ func (s *Server) deleteWatch(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// pollSeconds is the stored poll interval, or the default.
+func (s *Server) pollSeconds(ctx context.Context) (int, error) {
+	v, err := s.Store.GetSetting(ctx, userbot.PollSettingKey)
+	if errors.Is(err, store.ErrNotFound) {
+		return userbot.DefaultPollSeconds, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if n, err := strconv.Atoi(string(v)); err == nil {
+		return n, nil
+	}
+	return userbot.DefaultPollSeconds, nil
+}
+
 func (s *Server) getWatchSettings(w http.ResponseWriter, r *http.Request) {
-	secs := userbot.DefaultPollSeconds
-	if v, err := s.Store.GetSetting(r.Context(), userbot.PollSettingKey); err == nil {
-		if n, err := strconv.Atoi(string(v)); err == nil {
-			secs = n
-		}
-	} else if !errors.Is(err, store.ErrNotFound) {
+	secs, err := s.pollSeconds(r.Context())
+	if err != nil {
 		storeErr(w, err)
 		return
 	}

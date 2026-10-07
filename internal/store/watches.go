@@ -41,6 +41,7 @@ type Watch struct {
 	Hits          int64
 	CreatedAt     int64
 	UpdatedAt     int64
+	LastPolledAt  int64 // when a poll last finished (0: never)
 }
 
 // WatchView is a watch with its channel and live counters, for listings.
@@ -192,12 +193,12 @@ const WatchStartEmpty = -1
 
 const watchCols = `w.id, w.channel_id, w.window_minutes, w.cond_json, w.enabled, w.status, w.last_error, w.last_seen_id, w.hits,
 	w.created_at, w.updated_at, c.title, c.username, c.avatar_path, COALESCE((SELECT id FROM chats WHERE channel_id = w.channel_id), 0),
-	(SELECT COUNT(*) FROM watch_pending p WHERE p.watch_id = w.id)`
+	(SELECT COUNT(*) FROM watch_pending p WHERE p.watch_id = w.id), w.last_polled_at`
 
 func scanWatch(r scanner) (WatchView, error) {
 	var v WatchView
 	err := r.Scan(&v.ID, &v.ChannelID, &v.WindowMinutes, &v.Cond, &v.Enabled, &v.Status, &v.LastError, &v.LastSeenID, &v.Hits,
-		&v.CreatedAt, &v.UpdatedAt, &v.Channel.Title, &v.Channel.Username, &v.Channel.AvatarPath, &v.ChatID, &v.Pending)
+		&v.CreatedAt, &v.UpdatedAt, &v.Channel.Title, &v.Channel.Username, &v.Channel.AvatarPath, &v.ChatID, &v.Pending, &v.LastPolledAt)
 	v.Channel.ChannelID = v.ChannelID
 	return v, err
 }
@@ -262,7 +263,8 @@ func (s *Store) DeleteWatch(ctx context.Context, id int64, purge bool) (chatID i
 	return chatID, orphans, err
 }
 
-// SetWatchStatus records the outcome of a poll; changed reports whether status or error moved.
+// SetWatchStatus records the outcome of a poll and its time; changed reports whether status or
+// error moved.
 func (s *Store) SetWatchStatus(ctx context.Context, id int64, status, lastErr string, now int64) (changed bool, err error) {
 	res, err := s.db.ExecContext(ctx, `UPDATE channel_watches SET status = ?, last_error = ?, updated_at = ?
 		WHERE id = ? AND (status != ? OR last_error != ?)`, status, lastErr, now, id, status, lastErr)
@@ -270,7 +272,47 @@ func (s *Store) SetWatchStatus(ctx context.Context, id int64, status, lastErr st
 		return false, err
 	}
 	n, err := res.RowsAffected()
-	return n > 0, err
+	if err != nil {
+		return false, err
+	}
+	if _, err := s.db.ExecContext(ctx, "UPDATE channel_watches SET last_polled_at = ? WHERE id = ?", now, id); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// WatchActivity is how much a watch archived lately, by post date.
+type WatchActivity struct {
+	Hits24h   int64
+	Hits7d    int64
+	LastHitAt int64 // the newest archived post's date; 0 when none
+}
+
+// WatchActivity returns every watch's recent hits as of now, by watch id. An album counts once.
+func (s *Store) WatchActivity(ctx context.Context, now int64) (map[int64]WatchActivity, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT w.id,
+			COUNT(DISTINCT CASE WHEN m.date > ? THEN (CASE WHEN m.media_group_id = '' THEN 'm' || m.id ELSE 'g' || m.media_group_id END) END),
+			COUNT(DISTINCT CASE WHEN m.date > ? THEN (CASE WHEN m.media_group_id = '' THEN 'm' || m.id ELSE 'g' || m.media_group_id END) END),
+			COALESCE(MAX(m.date), 0)
+		FROM channel_watches w
+			JOIN chats c ON c.channel_id = w.channel_id
+			LEFT JOIN messages m ON m.chat_id = c.id AND m.source = 'channel_watch' AND m.deleted_at = 0
+		GROUP BY w.id`, now-86400, now-7*86400)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]WatchActivity{}
+	for rows.Next() {
+		var id int64
+		var a WatchActivity
+		if err := rows.Scan(&id, &a.Hits24h, &a.Hits7d, &a.LastHitAt); err != nil {
+			return nil, err
+		}
+		out[id] = a
+	}
+	return out, rows.Err()
 }
 
 // AddPending records newly seen posts and advances the watch's high-water mark in one step, so
