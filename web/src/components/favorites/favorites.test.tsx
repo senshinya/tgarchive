@@ -1,6 +1,6 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Api } from '../../api/client';
+import { ApiError, type Api } from '../../api/client';
 import { route } from '../../lib/router';
 import { fakeApi, makeChat, makeMessage } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
@@ -67,6 +67,42 @@ describe('FavoritesView', () => {
       await r.store.handleEvent({ type: 'favorites.updated', data: null });
     });
     await waitFor(() => expect(r.api.favorites).toHaveBeenCalledTimes(2));
+  });
+
+  it('drops a favorite deleted elsewhere and recounts the tags', async () => {
+    const r = setup();
+    await screen.findByText('第一条');
+    await act(async () => {
+      await r.store.handleEvent({ type: 'message.deleted', data: { chat_id: 10, message_id: 1 } });
+    });
+    expect(screen.queryByText('第一条')).toBeNull();
+    expect(screen.getByText('第二条')).toBeTruthy();
+    await waitFor(() => expect(r.api.tags).toHaveBeenCalledTimes(2));
+  });
+
+  it('refreshes a card whose message or media changed', async () => {
+    const r = setup({
+      message: vi.fn(async (id: number) => makeMessage({ id, chat_id: 10, text: `新的${id}`, favorite: { at: 1, tags: [] } })),
+    });
+    await screen.findByText('第一条');
+    await act(async () => {
+      await r.store.handleEvent({ type: 'media.updated', data: { media_id: 9, message_ids: [1, 99] } });
+    });
+    expect(await screen.findByText('新的1')).toBeTruthy();
+    expect(r.api.message).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await r.store.handleEvent({ type: 'message.updated', data: { chat_id: 10, message_id: 2 } });
+    });
+    expect(await screen.findByText('新的2')).toBeTruthy();
+  });
+
+  it('drops a card whose message is gone when refreshed', async () => {
+    const r = setup({ message: vi.fn(async () => Promise.reject(new ApiError(404, 'not found', null))) });
+    await screen.findByText('第一条');
+    await act(async () => {
+      await r.store.handleEvent({ type: 'message.updated', data: { chat_id: 10, message_id: 1 } });
+    });
+    await waitFor(() => expect(screen.queryByText('第一条')).toBeNull());
   });
 
   it('explains how to add favorites when there are none', async () => {

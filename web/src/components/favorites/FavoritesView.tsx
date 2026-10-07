@@ -1,6 +1,6 @@
 import { ArrowLeft, Bookmark, Copy, Download, Locate } from 'lucide-preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { avatarUrl, errorMessage, mediaUrl } from '../../api/client';
+import { ApiError, avatarUrl, errorMessage, mediaUrl } from '../../api/client';
 import type { Message, TagCount } from '../../api/types';
 import { chatName, formatFullDate } from '../../lib/format';
 import { navigate } from '../../lib/router';
@@ -123,12 +123,39 @@ export function FavoritesView() {
   useEffect(() => {
     void load(0, tag);
   }, [tag]);
+  // The cards are this view's own copies: keep them in step with the archive.
+  const shown = useRef<Message[]>([]);
+  shown.current = items;
+  const drop = (id: number) => setItems((prev) => prev.filter((m) => m.id !== id));
+  const refresh = async (id: number) => {
+    try {
+      const m = await store.api.message(id);
+      if (m.favorite) setItems((prev) => prev.map((x) => (x.id === id ? m : x)));
+      else drop(id);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) drop(id);
+    }
+  };
   useEffect(() => {
     void loadTags();
     return store.onEvent((ev) => {
-      if (ev.type === 'favorites.updated' || ev.type === 'resync') {
-        void load(0);
-        void loadTags();
+      const has = (id: number) => shown.current.some((m) => m.id === id);
+      switch (ev.type) {
+        case 'favorites.updated':
+        case 'resync':
+          void load(0);
+          void loadTags();
+          return;
+        case 'message.deleted':
+          if (!has(ev.data.message_id)) return;
+          drop(ev.data.message_id);
+          void loadTags();
+          return;
+        case 'message.updated':
+          if (has(ev.data.message_id)) void refresh(ev.data.message_id);
+          return;
+        case 'media.updated':
+          for (const id of ev.data.message_ids ?? []) if (has(id)) void refresh(id);
       }
     });
   }, [tag]);
