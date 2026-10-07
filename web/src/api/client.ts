@@ -8,9 +8,13 @@ import type {
   Chat,
   CondGroup,
   Downloads,
+  FavoriteInfo,
+  FavoritesPage,
   Message,
   RejectedSender,
   SearchPage,
+  Tag,
+  TagCount,
   SharedMediaType,
   TelegramApp,
   UserbotInfo,
@@ -99,6 +103,14 @@ export interface Api {
   downloads(): Promise<Downloads>;
   /** Messages containing every word of q; chat limits it to a conversation key (see convMessages). */
   search(q: string, chat?: number, before?: number): Promise<SearchPage>;
+  /** Adds a message to the favorites; tags, when given, replace its tags. */
+  favorite(id: number, tags?: string[]): Promise<FavoriteInfo>;
+  unfavorite(id: number): Promise<void>;
+  setTags(id: number, tags: string[]): Promise<{ tags: Tag[] }>;
+  /** The favorites, most recently added first; tag 0 means any. */
+  favorites(tag?: number, before?: number): Promise<FavoritesPage>;
+  tags(): Promise<TagCount[]>;
+  deleteTag(id: number): Promise<void>;
   addBot(token: string): Promise<AddBotResult>;
   setBotEnabled(id: number, enabled: boolean): Promise<Bot>;
   deleteBot(id: number, purge: boolean): Promise<void>;
@@ -147,6 +159,12 @@ export const api: Api = {
   retryMedia: (id) => request('POST', `/api/media/${id}/retry`),
   downloads: () => request('GET', '/api/downloads'),
   search: (q, chat = 0, before = 0) => request('GET', `/api/search${qs({ q, chat, before })}`),
+  favorite: (id, tags) => request('PUT', `/api/messages/${id}/favorite`, tags ? { tags } : undefined),
+  unfavorite: (id) => request('DELETE', `/api/messages/${id}/favorite`),
+  setTags: (id, tags) => request('PUT', `/api/messages/${id}/tags`, { tags }),
+  favorites: (tag = 0, before = 0) => request('GET', `/api/favorites${qs({ tag, before })}`),
+  tags: () => request('GET', '/api/tags'),
+  deleteTag: (id) => request('DELETE', `/api/tags/${id}`),
   addBot: (token) => request('POST', '/api/admin/bots', { token }),
   setBotEnabled: (id, enabled) => request('PATCH', `/api/admin/bots/${id}`, { enabled }),
   deleteBot: (id, purge) => request('DELETE', `/api/admin/bots/${id}${purge ? '?purge=1' : ''}`),

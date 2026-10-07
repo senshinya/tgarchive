@@ -10,6 +10,8 @@ import { ContextMenu, type MenuItem } from '../../ui/ContextMenu';
 import { ConfirmDialog } from '../../ui/Modal';
 import { Spinner } from '../../ui/Spinner';
 import { mainMedia } from '../media/util';
+import { favoriteMenuItems } from '../favorites/menu';
+import { TagDialog } from '../favorites/TagDialog';
 import { MessageBubble, type SenderInfo } from './MessageBubble';
 import './message.scss';
 
@@ -27,7 +29,7 @@ function download(href: string) {
   a.remove();
 }
 
-function senderInfo(chat: Chat | undefined, fallbackPeer: number): SenderInfo {
+export function senderInfo(chat: Chat | undefined, fallbackPeer: number): SenderInfo {
   if (chat?.kind === 'channel') return { name: chat.channel?.title ?? '', peerId: chat.channel?.channel_id ?? fallbackPeer };
   return chat ? { name: senderName(chat.sender), peerId: chat.sender.tg_user_id } : { name: '', peerId: fallbackPeer };
 }
@@ -57,6 +59,7 @@ export function MessageList({ chatId }: { chatId: number }) {
   const [showDown, setShowDown] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; msg: Message } | null>(null);
   const [confirm, setConfirm] = useState<Message | null>(null);
+  const [tagging, setTagging] = useState<Message | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
@@ -173,6 +176,7 @@ export function MessageList({ chatId }: { chatId: number }) {
     if (md && md.state === 'done') {
       items.push({ label: '下载', icon: <Download size={20} />, onSelect: () => download(mediaUrl(md.id, true)) });
     }
+    items.push(...favoriteMenuItems(store, msg, setTagging));
     items.push({ label: '删除存档', icon: <Trash2 size={20} />, danger: true, onSelect: () => setConfirm(msg) });
     return items;
   };
@@ -262,6 +266,13 @@ export function MessageList({ chatId }: { chatId: number }) {
         </button>
       )}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.msg)} onClose={() => setMenu(null)} />}
+      {tagging && (
+        <TagDialog
+          initial={tagging.favorite?.tags.map((t) => t.name) ?? []}
+          onSave={(tags) => store.setTags(tagging, tags)}
+          onClose={() => setTagging(null)}
+        />
+      )}
       {confirm && (
         <ConfirmDialog
           title="删除存档"

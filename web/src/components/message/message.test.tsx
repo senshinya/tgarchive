@@ -209,6 +209,26 @@ describe('MiddleColumn', () => {
     await waitFor(() => expect(screen.queryByText('bye')).toBeNull());
   });
 
+  it('favorites a message from the menu, and offers tags and removal once it is one', async () => {
+    const api = setup([makeMessage({ id: 1, text: 'keep me' })]);
+    api.favorite = vi.fn(async () => ({ at: 5, tags: [] }));
+    api.message = vi.fn(async (id: number) => makeMessage({ id, text: 'keep me', favorite: { at: 5, tags: [] } }));
+    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    await screen.findByText('keep me');
+    fireEvent.contextMenu(r.container.querySelector('.message-content')!);
+    expect(screen.queryByRole('menuitem', { name: '标签…' })).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: '收藏' }));
+    });
+    expect(api.favorite).toHaveBeenCalledWith(1);
+    expect(r.store.toast.value?.text).toBe('已收藏');
+    await waitFor(() => expect(r.container.querySelector('.message-favorite')).not.toBeNull());
+    fireEvent.contextMenu(r.container.querySelector('.message-content')!);
+    expect(screen.getByRole('menuitem', { name: '取消收藏' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: '标签…' }));
+    expect(screen.getByRole('dialog', { name: '标签' })).toBeTruthy();
+  });
+
   it('offers download only for archived media', async () => {
     const api = setup([makeMessage({ id: 1, kind: 'document', text: '', media: [makeMedia({ id: 9, kind: 'document', mime: 'application/octet-stream', file_name: 'a.txt' })] })]);
     const { container } = renderWithStore(<MiddleColumn chatId={10} />, api);

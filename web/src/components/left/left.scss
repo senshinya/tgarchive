@@ -192,10 +192,12 @@ html.is-apple .ChatItem-subtitle .sender-name {
   color: var(--color-text-secondary);
 }
 
-.left-header .DownloadsButton + .watch-button {
+.left-header .DownloadsButton + .favorites-button,
+.left-header .favorites-button + .watch-button {
   margin-left: 0;
 }
 
+.left-header .favorites-button,
 .left-header .silent-button {
   flex-shrink: 0;
   color: var(--color-text-secondary);

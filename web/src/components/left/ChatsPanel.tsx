@@ -1,4 +1,4 @@
-import { CircleAlert, Megaphone, Radio, Settings, Volume2, VolumeX } from 'lucide-preact';
+import { Bookmark, CircleAlert, Megaphone, Radio, Settings, Volume2, VolumeX } from 'lucide-preact';
 import { avatarUrl } from '../../api/client';
 import type { Chat } from '../../api/types';
 import { botName, formatListTime, previewText, senderName } from '../../lib/format';
@@ -194,6 +194,14 @@ export function ChatsPanel() {
       <div class="left-header">
         <h3 class="left-header-title">tgarchive</h3>
         <DownloadsButton />
+        <IconButton
+          label="收藏"
+          class={`favorites-button${r.name === 'favorites' ? ' active' : ''}`}
+          pressed={r.name === 'favorites'}
+          onClick={() => navigate({ name: 'favorites' }, { fromList: true })}
+        >
+          <Bookmark size={22} />
+        </IconButton>
         <IconButton label="监听频道" class="watch-button" onClick={() => navigate({ name: 'settings-watch-new' })}>
           <Radio size={22} />
         </IconButton>

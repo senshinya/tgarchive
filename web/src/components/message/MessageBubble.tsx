@@ -101,7 +101,13 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
     .filter(Boolean)
     .join(' ');
 
-  const metaProps = { date: last.date, editDate, views: post?.views, author: post ? extraString(head, 'post_author') : undefined };
+  const metaProps = {
+    date: last.date,
+    editDate,
+    views: post?.views,
+    author: post ? extraString(head, 'post_author') : undefined,
+    favorite: msgs.some((m) => m.favorite),
+  };
   let meta;
   if (reactionsInside) meta = null;
   else if (caption || unsupported) meta = null;

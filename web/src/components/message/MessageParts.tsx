@@ -1,4 +1,4 @@
-import { Eye, Lock } from 'lucide-preact';
+import { Eye, Lock, Star } from 'lucide-preact';
 import type { ForwardOrigin, Message } from '../../api/types';
 import { safeHref } from '../../lib/entities';
 import { formatFullDate, formatTime, hashString, peerColor, previewText } from '../../lib/format';
@@ -15,12 +15,14 @@ export function MessageMeta({
   variant,
   views,
   author,
+  favorite,
 }: {
   date: number;
   editDate: number;
   variant: MetaVariant;
   views?: number;
   author?: string;
+  favorite?: boolean;
 }) {
   const title = editDate > 0 ? `${formatFullDate(date)}\n已编辑：${formatFullDate(editDate)}` : formatFullDate(date);
   return (
@@ -33,6 +35,7 @@ export function MessageMeta({
       )}
       {author && <span class="message-signature">{author}</span>}
       {editDate > 0 && <span class="message-edited">已编辑</span>}
+      {favorite && <Star size={12} class="message-favorite" aria-label="已收藏" />}
       <span class="message-time">{formatTime(date)}</span>
     </span>
   );

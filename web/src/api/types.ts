@@ -138,6 +138,30 @@ export interface Message {
   article?: ArticleSummary;
   /** Counters when a watched channel post was archived (channel_watch only). */
   stats?: PostStats;
+  /** Set when the message is a favorite. */
+  favorite?: FavoriteInfo | null;
+}
+
+export interface Tag {
+  id: number;
+  name: string;
+}
+
+export interface TagCount extends Tag {
+  /** How many favorites carry it. */
+  count: number;
+}
+
+export interface FavoriteInfo {
+  /** When it was added to the favorites. */
+  at: number;
+  tags: Tag[];
+}
+
+export interface FavoritesPage {
+  items: { fav_id: number; message: Message }[];
+  /** The `before` cursor of the next page; 0 when this was the last. */
+  next: number;
 }
 
 /** One reaction counter; key is the emoji, "custom:<id>" or "paid". */
@@ -385,6 +409,8 @@ export type ArchiveEvent =
   | { type: 'bot.status'; data: { bot_id: number; status: string; error: string } }
   | { type: 'download.progress'; data: { items: DownloadProgress[]; speed: number } }
   | { type: 'watch.updated'; data: { watch_id: number } }
+  | { type: 'favorites.updated'; data: null }
+  | { type: 'chat.read'; data: { chat_id: number } }
   /** Synthetic, never sent by the server: the store broadcasts it to `onEvent` listeners after it
    * resynced following a reconnect, so views holding their own fetched data refetch it. */
   | { type: 'resync'; data: null };
@@ -397,6 +423,8 @@ export const EVENT_TYPES = [
   'bot.status',
   'download.progress',
   'watch.updated',
+  'favorites.updated',
+  'chat.read',
 ] as const;
 
 /** One search result: a message and the text around its first match. */

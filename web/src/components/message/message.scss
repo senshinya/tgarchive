@@ -427,3 +427,8 @@
     opacity: 1;
   }
 }
+
+.message-favorite {
+  flex-shrink: 0;
+  fill: currentColor;
+}

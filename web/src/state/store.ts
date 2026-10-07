@@ -475,6 +475,24 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     }
   }
 
+  /** Adds a message to the favorites or removes it, then shows its new state. */
+  async function toggleFavorite(m: Message) {
+    try {
+      if (m.favorite) await api.unfavorite(m.id);
+      else await api.favorite(m.id);
+      showToast(m.favorite ? '已取消收藏' : '已收藏');
+    } catch (e) {
+      showToast(errorMessage(e));
+    }
+    await refreshMessage(m.id, m.chat_id);
+  }
+
+  /** Replaces a favorite's tags; throws so the tag dialog can show the error. */
+  async function setTags(m: Message, tags: string[]) {
+    await api.setTags(m.id, tags);
+    await refreshMessage(m.id, m.chat_id);
+  }
+
   /** Retries a failed media from the downloads panel, where no message object is at hand. */
   async function retryDownload(mediaId: number) {
     try {
@@ -529,6 +547,8 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     resync,
     deleteMessage,
     retryMedia,
+    toggleFavorite,
+    setTags,
   };
 }
 

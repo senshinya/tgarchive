@@ -24,6 +24,7 @@ describe('router', () => {
       { name: 'bot', botId: 3 },
       { name: 'bot-article', botId: 3, messageId: 345 },
       { name: 'downloads' },
+      { name: 'favorites' },
       { name: 'settings' },
       { name: 'settings-add-bot' },
       { name: 'settings-bot', botId: 3 },
@@ -56,6 +57,7 @@ describe('router', () => {
       '/bot/1/article',
       '/bot/1/article/0',
       '/downloads/1',
+      '/favorites/1',
     ]) {
       expect(parseRoute(p)).toEqual({ name: 'home' });
     }
