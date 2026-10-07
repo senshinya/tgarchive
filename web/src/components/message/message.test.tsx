@@ -67,6 +67,57 @@ describe('MessageBubble', () => {
     expect(screen.getByText('原消息未存档')).toBeTruthy();
   });
 
+  it('shows a link preview card with its picture', () => {
+    const { container } = bubble(
+      single(
+        makeMessage({
+          source: 'channel_watch',
+          text: 'read https://example.com/a',
+          extra: { link_preview: { url: 'https://example.com/a', site_name: 'Example', title: 'A title', description: 'Some text' } },
+          media: [makeMedia({ id: 31, role: 'link_preview', kind: 'photo', width: 800, height: 400 })],
+        }),
+      ),
+    );
+    const card = container.querySelector('a.WebPage') as HTMLAnchorElement;
+    expect(card.href).toBe('https://example.com/a');
+    expect(card.target).toBe('_blank');
+    expect(card.textContent).toContain('Example');
+    expect(card.textContent).toContain('A title');
+    expect(card.textContent).toContain('Some text');
+    expect(card.querySelector('img')?.getAttribute('src')).toBe('/media/31');
+    expect(container.querySelector('.Photo')).toBeNull(); // not the message's own photo
+  });
+
+  it('keeps a link preview without a picture, and a pending one as a placeholder', () => {
+    const { container, unmount } = bubble(single(makeMessage({ text: 'x', extra: { link_preview: { url: 'https://e.com', title: 'T' } } })));
+    expect(container.querySelector('.WebPage img')).toBeNull();
+    expect(container.querySelector('.WebPage')?.textContent).toContain('T');
+    unmount();
+    const pending = bubble(
+      single(makeMessage({ text: 'x', extra: { link_preview: { url: 'https://e.com', title: 'T' } }, media: [makeMedia({ id: 31, role: 'link_preview', state: 'pending' })] })),
+    );
+    expect(pending.container.querySelector('.WebPage .MediaStatus')).not.toBeNull();
+  });
+
+  it('refuses a link preview pointing at an unsafe URL', () => {
+    const { container } = bubble(single(makeMessage({ text: 'x', extra: { link_preview: { url: 'javascript:alert(1)', title: 'T' } } })));
+    expect(container.querySelector('a.WebPage')).toBeNull();
+  });
+
+  it('names posts the archive cannot hold and links to the original', () => {
+    const { container, unmount } = bubble(
+      single(makeMessage({ kind: 'other', text: '', extra: { unsupported: 'story' }, origin_link: 'https://t.me/news/5' })),
+    );
+    const link = container.querySelector('.unsupported a') as HTMLAnchorElement;
+    expect(link.textContent).toBe('动态');
+    expect(link.href).toBe('https://t.me/news/5');
+    expect(container.querySelector('.unsupported')?.textContent).toBe('动态 · 请在 Telegram 中查看');
+    unmount();
+    const withText = bubble(single(makeMessage({ kind: 'text', text: '看这个', extra: { unsupported: 'giveaway' } })));
+    expect(withText.container.querySelector('.text-content')?.textContent).toContain('看这个');
+    expect(withText.container.querySelector('.unsupported')?.textContent).toBe('抽奖 · 请在 Telegram 中查看');
+  });
+
   it('renders unsupported messages as an italic note', () => {
     bubble(single(makeMessage({ kind: 'other', text: '' })));
     expect(screen.getByText('不支持的消息类型')).toBeTruthy();

@@ -60,7 +60,7 @@ export type MediaState = 'pending' | 'done' | 'failed' | 'too_large';
 
 export interface Media {
   id: number;
-  role: 'main' | 'thumb';
+  role: 'main' | 'thumb' | 'link_preview';
   kind: string; // photo / video / animation / voice / audio / document / sticker / video_note
   mime: string;
   file_name: string;
