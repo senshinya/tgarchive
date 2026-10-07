@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { sourceType } from '../media/util';
 // Ambient types for the two Node builtins above: see test/node-fs.d.ts.
 
 // Vitest mocks `?raw` CSS imports to an empty string, so this reads the file directly instead
@@ -44,5 +45,15 @@ describe('viewer.scss', () => {
   it('lets the sender/title block take the remaining space and shrink, while actions never shrink', () => {
     expect(bodyOf('.MediaViewer-sender {')).toMatch(/flex:\s*1 1 auto;[\s\S]*min-width:\s*0;/);
     expect(bodyOf('.MediaViewer-actions {')).toMatch(/flex-shrink:\s*0;/);
+  });
+});
+
+describe('sourceType', () => {
+  it('passes the player a type the browser recognises: QuickTime files play as MP4', () => {
+    expect(sourceType('video/quicktime')).toBe('video/mp4');
+    expect(sourceType('video/mp4')).toBe('video/mp4');
+    expect(sourceType('video/webm')).toBe('video/webm');
+    expect(sourceType('')).toBe('video/mp4');
+    expect(sourceType('application/octet-stream')).toBe('video/mp4');
   });
 });

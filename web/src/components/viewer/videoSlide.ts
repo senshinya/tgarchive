@@ -7,6 +7,7 @@ import 'vidstack/player/ui';
 import 'vidstack/player/styles/default/theme.css';
 import 'vidstack/player/styles/default/layouts/video.css';
 import type { MediaPlayerElement, MediaVideoLayoutElement } from 'vidstack/elements';
+import { sourceType } from '../media/util';
 import { bindLongPressRate } from './longPress';
 import { PlayerStorage } from './playerStorage';
 
@@ -101,7 +102,7 @@ export function createVideoSlide(o: VideoSlideOptions): VideoSlide {
 
   const player = document.createElement('media-player') as MediaPlayerElement;
   const storage = new PlayerStorage(o.mediaId, () => player.state?.duration ?? 0);
-  player.src = { src: o.src, type: (o.mime.startsWith('video/') ? o.mime : 'video/mp4') as 'video/mp4' };
+  player.src = { src: o.src, type: sourceType(o.mime) as 'video/mp4' };
   player.title = o.title;
   player.playsInline = true;
   // Storage answers "muted" when the media loads; the attribute also covers the moment before
