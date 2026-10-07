@@ -408,11 +408,38 @@ func TestWatchScanCounters(t *testing.T) {
 	if n, _ := scanned(); n != 4 {
 		t.Fatalf("scanned after a new album = %d, want 4", n)
 	}
-	if err := s.AddWatchHit(ctx, id); err != nil {
+	if err := s.AddWatchHit(ctx, id, true); err != nil {
 		t.Fatal(err)
 	}
 	w, _ := s.GetWatch(ctx, id)
 	if w.Hits != 1 || w.ScanHits != 1 {
 		t.Fatalf("hits = %d, scan hits = %d", w.Hits, w.ScanHits)
+	}
+	// A backfill hit was never scanned by polling: it counts as a hit, not towards the rate.
+	if err := s.AddWatchHit(ctx, id, false); err != nil {
+		t.Fatal(err)
+	}
+	if w, _ = s.GetWatch(ctx, id); w.Hits != 2 || w.ScanHits != 1 {
+		t.Fatalf("after a backfill hit: hits = %d, scan hits = %d", w.Hits, w.ScanHits)
+	}
+}
+
+func TestMigrationCountsPendingAsScanned(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v7.db")
+	s := openAt(t, path, 7)
+	if _, err := s.db.Exec(`INSERT INTO channels (channel_id, title, updated_at) VALUES (1500, 'News', 1);
+		INSERT INTO channel_watches (id, channel_id, window_minutes, cond_json, created_at, updated_at) VALUES (4, 1500, 30, '{}', 1, 1);
+		INSERT INTO watch_pending (watch_id, tg_message_id, grouped_id, date, deadline) VALUES (4, 10, 0, 1, 2), (4, 11, 7, 1, 2), (4, 12, 7, 1, 2)`); err != nil {
+		t.Fatal(err)
+	}
+	const id = 4
+	s.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if w, _ := s.GetWatch(ctx, id); w.Scanned != 2 || w.ScanHits != 0 {
+		t.Fatalf("migrated watch = %+v", w)
 	}
 }

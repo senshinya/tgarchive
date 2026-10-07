@@ -258,7 +258,7 @@ func TestWatchArchivesHitsWithinWindow(t *testing.T) {
 	if got[0].Source != "channel_watch" || got[0].OriginLink != "https://t.me/chan/6" {
 		t.Fatalf("message = %+v", got[0])
 	}
-	if w := e.get(t); w.Pending != 1 || w.Hits != 1 || w.LastSeenID != 7 {
+	if w := e.get(t); w.Pending != 1 || w.Hits != 1 || w.ScanHits != 1 || w.LastSeenID != 7 {
 		t.Fatalf("watch = %+v", w)
 	}
 	// Post 7 catches up later in its window.

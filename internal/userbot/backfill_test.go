@@ -37,8 +37,8 @@ func TestBackfillArchivesMatchingPostsInRange(t *testing.T) {
 	if got := e.archived(t); !equalIDs(tgIDs(got), []int64{2, 4, 5}) {
 		t.Fatalf("archived = %v", tgIDs(got))
 	}
-	if w := e.get(t); w.Hits != 2 {
-		t.Fatalf("hits = %d", w.Hits)
+	if w := e.get(t); w.Hits != 2 || w.ScanHits != 0 {
+		t.Fatalf("hits = %d, scan hits = %d (backfill hits are not polled ones)", w.Hits, w.ScanHits)
 	}
 	// Running it again archives nothing new.
 	if _, err := e.w.Backfill(ctx, e.watch, 24); err != nil {

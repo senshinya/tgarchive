@@ -50,7 +50,7 @@ func TestStats(t *testing.T) {
 	s.MarkMediaFailed(ctx, mediaOf(chanMsgs[0])[0], 3, "x")
 	s.MarkMediaTooLarge(ctx, mediaOf(chanMsgs[2])[0])
 	s.AddPending(ctx, watch, []Pending{{TgMessageID: 50, GroupedID: 1}, {TgMessageID: 51, GroupedID: 1}, {TgMessageID: 53}}, 53)
-	s.AddWatchHit(ctx, watch)
+	s.AddWatchHit(ctx, watch, true)
 
 	st, err := s.Stats(ctx, 480, now)
 	if err != nil {

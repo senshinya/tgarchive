@@ -393,9 +393,10 @@ func (s *Store) DeletePending(ctx context.Context, watchID int64, ids []int64) e
 	return err
 }
 
-// AddWatchHit counts one archived post (an album counts once).
-func (s *Store) AddWatchHit(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE channel_watches SET hits = hits + 1, scan_hits = scan_hits + 1 WHERE id = ?", id)
+// AddWatchHit counts one archived post (an album counts once). scanned says whether polling saw
+// it (and so counted it in scanned); a backfill hit counts only towards hits, not the hit rate.
+func (s *Store) AddWatchHit(ctx context.Context, id int64, scanned bool) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE channel_watches SET hits = hits + 1, scan_hits = scan_hits + ? WHERE id = ?", scanned, id)
 	return err
 }
 

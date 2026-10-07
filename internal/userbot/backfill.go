@@ -190,7 +190,7 @@ func (w *Watcher) backfill(ctx context.Context, wv store.WatchView, cond *watchc
 		var created bool
 		if err := w.withFlood(ctx, func(api *tg.Client) error {
 			var err error
-			created, err = w.archive(ctx, api, wv, ch, g, convs, cond.Explain(st), w.Now().Unix())
+			created, err = w.archive(ctx, api, wv, ch, g, convs, cond.Explain(st), w.Now().Unix(), false)
 			return err
 		}); err != nil {
 			return err

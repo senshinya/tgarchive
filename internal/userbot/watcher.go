@@ -493,7 +493,7 @@ func (w *Watcher) judge(ctx context.Context, api *tg.Client, wv store.WatchView,
 			}
 			st := statsOf(g.msgs, convs)
 			if cond.Eval(st) {
-				_, err := w.archive(ctx, api, wv, ch, g.msgs, convs, cond.Explain(st), now)
+				_, err := w.archive(ctx, api, wv, ch, g.msgs, convs, cond.Explain(st), now, true)
 				if errors.Is(err, store.ErrNoWatch) {
 					return changed, nil // deleted while this poll ran
 				}
@@ -661,9 +661,10 @@ func (w *Watcher) customEmoji(ctx context.Context, api *tg.Client, ids []int64) 
 }
 
 // archive stores an album (or single post) that met the condition; created reports whether it
-// was new (a post archived before is only refreshed).
+// was new (a post archived before is only refreshed). polled says polling found it, which counted
+// it as scanned; a backfill hit does not count towards the hit rate.
 func (w *Watcher) archive(ctx context.Context, api *tg.Client, wv store.WatchView, ch *tg.Channel, msgs []*tg.Message,
-	convs []*model.Message, reasons []string, now int64) (created bool, err error) {
+	convs []*model.Message, reasons []string, now int64, polled bool) (created bool, err error) {
 	ps := w.postStats(ctx, api, msgs, statsOf(msgs, convs))
 	ps.Hit = &HitInfo{At: now, Reasons: reasons}
 	b, err := json.Marshal(ps)
@@ -684,7 +685,7 @@ func (w *Watcher) archive(ctx context.Context, api *tg.Client, wv store.WatchVie
 	}
 	// A retry after a partial failure re-archives the same post: count it once.
 	if created {
-		if err := w.st.AddWatchHit(ctx, wv.ID); err != nil {
+		if err := w.st.AddWatchHit(ctx, wv.ID, polled); err != nil {
 			return created, err
 		}
 	}
