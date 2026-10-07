@@ -116,6 +116,11 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
   /** A message for conversation `key` to scroll to, loading older pages until it shows it (set by
    * the downloads panel). */
   const jumpTo = signal<{ key: number; messageId: number } | null>(null);
+  /** The left column's message search: its text, and the conversation key it is limited to (0: all). */
+  const searchQuery = signal('');
+  const searchScope = signal(0);
+  /** Bumped to ask the search box for focus. */
+  const searchFocus = signal(0);
   let downloadsTimer: ReturnType<typeof setTimeout> | undefined;
   let activeKey = ''; // the set of media ids in the last progress event (only events set it)
   let toastSeq = 0;
@@ -214,6 +219,12 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
   function botKeyOf(chatId: number): number {
     const chat = chats.value.find((c) => c.id === chatId);
     return chat && chat.kind !== 'channel' ? -chat.bot_id : 0;
+  }
+
+  /** Starts a search limited to conversation `scope` (0: everything) and focuses the box. */
+  function openSearch(scope = 0) {
+    searchScope.value = scope;
+    searchFocus.value++;
   }
 
   function showToast(text: string) {
@@ -481,6 +492,10 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     downloads,
     downloadSummary,
     jumpTo,
+    searchQuery,
+    searchScope,
+    searchFocus,
+    openSearch,
     loadDownloads,
     retryDownload,
     bots,

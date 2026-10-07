@@ -136,6 +136,7 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     deleteMessage: vi.fn(async () => undefined),
     retryMedia: vi.fn(async () => undefined),
     downloads: vi.fn(async () => ({ active: [], queued: { count: 0, bytes: 0 }, failed: [], speed: 0 })),
+    search: vi.fn(async () => ({ items: [], next: 0 })),
     addBot: vi.fn(async () => ({ bot_id: 1, steps: [] })),
     setBotEnabled: vi.fn(async (id: number, enabled: boolean) => makeBot({ id, enabled })),
     deleteBot: vi.fn(async () => undefined),

@@ -1,4 +1,4 @@
-import { ArrowLeft, Images, SlidersHorizontal } from 'lucide-preact';
+import { ArrowLeft, Images, Search, SlidersHorizontal } from 'lucide-preact';
 import type { Chat } from '../../api/types';
 import { avatarUrl } from '../../api/client';
 import { botName, senderName } from '../../lib/format';
@@ -10,6 +10,9 @@ import { ArticleReader } from '../article/ArticleReader';
 import { MessageList } from '../message/MessageList';
 import { Wallpaper } from './Wallpaper';
 import './middle.scss';
+
+/** Where the left column overlays the chat (layout.scss). */
+const NARROW = '(max-width: 925px)';
 
 /** Avatar, title and subtitle of the conversation: a sender's chat, or a bot's merged timeline. */
 function HeaderPeer({ chatId }: { chatId: number }) {
@@ -91,6 +94,11 @@ function MiddleHeader({ chatId }: { chatId: number }) {
     if (state?.fromList) history.back();
     else navigate({ name: 'home' });
   };
+  // The left column holds the search; on narrow screens it sits behind the chat, so go back to it.
+  const search = () => {
+    store.openSearch(chatId);
+    if (typeof matchMedia === 'function' && matchMedia(NARROW).matches) goBack();
+  };
   return (
     <div class="MiddleHeader">
       <IconButton label="返回" class="back-button" onClick={goBack}>
@@ -99,6 +107,9 @@ function MiddleHeader({ chatId }: { chatId: number }) {
       <button type="button" class="MiddleHeader-info" onClick={toggleShared}>
         <HeaderPeer chatId={chatId} />
       </button>
+      <IconButton label="搜索此会话" onClick={search}>
+        <Search size={22} />
+      </IconButton>
       {watchId > 0 && (
         <IconButton label="监听设置" onClick={() => navigate({ name: 'settings-watch', watchId })}>
           <SlidersHorizontal size={22} />

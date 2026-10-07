@@ -171,3 +171,21 @@ describe('jump from the downloads panel', () => {
     expect(r.store.jumpTo.value).toEqual({ key: -1, messageId: 2 });
   });
 });
+
+describe('MiddleColumn search button', () => {
+  it('starts a search limited to this conversation', async () => {
+    const r = await setup();
+    fireEvent.click(screen.getByRole('button', { name: '搜索此会话' }));
+    expect(r.store.searchScope.value).toBe(10);
+    expect(r.store.searchFocus.value).toBe(1);
+  });
+
+  it('goes back to the chat list on narrow screens, where the list is hidden behind the chat', async () => {
+    window.matchMedia = vi.fn(() => ({ matches: true }) as MediaQueryList); // jsdom has none
+    await setup();
+    navigate({ name: 'chat', chatId: 10 });
+    fireEvent.click(screen.getByRole('button', { name: '搜索此会话' }));
+    expect(route.value).toEqual({ name: 'home' });
+    delete (window as { matchMedia?: unknown }).matchMedia;
+  });
+});

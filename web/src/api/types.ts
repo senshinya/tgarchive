@@ -398,3 +398,19 @@ export const EVENT_TYPES = [
   'download.progress',
   'watch.updated',
 ] as const;
+
+/** One search result: a message and the text around its first match. */
+export interface SearchHit {
+  message: Message;
+  /** Where the snippet comes from: the text or caption, a file name, or the archived article. */
+  field: 'body' | 'files' | 'article';
+  snippet: string;
+  /** Matches within the snippet as [start, length] in UTF-16 units. */
+  ranges: [number, number][];
+}
+
+export interface SearchPage {
+  items: SearchHit[];
+  /** The `before` cursor of the next page; 0 when this was the last. */
+  next: number;
+}

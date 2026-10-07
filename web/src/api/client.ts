@@ -10,6 +10,7 @@ import type {
   Downloads,
   Message,
   RejectedSender,
+  SearchPage,
   SharedMediaType,
   TelegramApp,
   UserbotInfo,
@@ -96,6 +97,8 @@ export interface Api {
   deleteMessage(id: number): Promise<void>;
   retryMedia(id: number): Promise<void>;
   downloads(): Promise<Downloads>;
+  /** Messages containing every word of q; chat limits it to a conversation key (see convMessages). */
+  search(q: string, chat?: number, before?: number): Promise<SearchPage>;
   addBot(token: string): Promise<AddBotResult>;
   setBotEnabled(id: number, enabled: boolean): Promise<Bot>;
   deleteBot(id: number, purge: boolean): Promise<void>;
@@ -143,6 +146,7 @@ export const api: Api = {
   deleteMessage: (id) => request('DELETE', `/api/messages/${id}`),
   retryMedia: (id) => request('POST', `/api/media/${id}/retry`),
   downloads: () => request('GET', '/api/downloads'),
+  search: (q, chat = 0, before = 0) => request('GET', `/api/search${qs({ q, chat, before })}`),
   addBot: (token) => request('POST', '/api/admin/bots', { token }),
   setBotEnabled: (id, enabled) => request('PATCH', `/api/admin/bots/${id}`, { enabled }),
   deleteBot: (id, purge) => request('DELETE', `/api/admin/bots/${id}${purge ? '?purge=1' : ''}`),
