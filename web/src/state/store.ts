@@ -6,13 +6,15 @@ import type { ArchiveEvent, Bot, Chat, Downloads, Entity, Message } from '../api
 
 export interface Conversation {
   items: Message[]; // ascending by id
-  hasMore: boolean;
+  hasMore: boolean; // older messages exist
+  /** Newer messages exist: the items are a window (opened around a message) short of the latest. */
+  hasNewer: boolean;
   loading: boolean;
   loaded: boolean;
   error: string;
 }
 
-const EMPTY: Conversation = { items: [], hasMore: true, loading: false, loaded: false, error: '' };
+const EMPTY: Conversation = { items: [], hasMore: true, hasNewer: false, loading: false, loaded: false, error: '' };
 
 /** One photo/video/GIF the media viewer can show. */
 export interface ViewerItem {
@@ -249,15 +251,16 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     reloadTimer = setTimeout(() => void loadChats(), delay);
   }
 
-  /** Loads the newest page; merges when it overlaps what we have, otherwise starts over. */
-  async function refreshLatest(chatId: number) {
+  /** Loads the newest page; merges when it overlaps what we have, otherwise (or with reset, or
+   * when showing a window short of the latest) starts over. */
+  async function refreshLatest(chatId: number, opts: { reset?: boolean } = {}) {
     if (conv(chatId).loading) return;
     setConv(chatId, { loading: true, error: '' });
     try {
       const page = await convMessages(api, chatId, 0, PAGE_SIZE);
       const c = conv(chatId);
       const newestKnown = c.items.length ? c.items[c.items.length - 1].id : 0;
-      const overlaps = c.loaded && page.length > 0 && page[0].id <= newestKnown;
+      const overlaps = !opts.reset && !c.hasNewer && c.loaded && page.length > 0 && page[0].id <= newestKnown;
       if (overlaps) {
         // Within the refreshed window [page[0].id, newest], the server is authoritative: drop
         // anything we had there that it no longer returns (deleted while disconnected). Items
@@ -266,8 +269,35 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
         const kept = c.items.filter((m) => m.id < page[0].id || pageIds.has(m.id));
         setConv(chatId, { items: mergeById(kept, page), loading: false, loaded: true });
       } else {
-        setConv(chatId, { items: page, hasMore: page.length >= PAGE_SIZE, loading: false, loaded: true });
+        setConv(chatId, { items: page, hasMore: page.length >= PAGE_SIZE, hasNewer: false, loading: false, loaded: true });
       }
+    } catch (e) {
+      setConv(chatId, { loading: false, error: errorMessage(e) });
+    }
+  }
+
+  /** Replaces a conversation with the window around message `messageId` (for a jump far back). */
+  async function loadAround(chatId: number, messageId: number) {
+    setConv(chatId, { loading: true, error: '' });
+    try {
+      const page = await convMessages(api, chatId, 0, PAGE_SIZE, { around: messageId });
+      const half = Math.floor(PAGE_SIZE / 2);
+      const older = page.filter((m) => m.id <= messageId).length;
+      const newer = page.length - older;
+      setConv(chatId, { items: page, hasMore: older >= PAGE_SIZE - half, hasNewer: newer >= half, loading: false, loaded: true });
+    } catch (e) {
+      setConv(chatId, { loading: false, error: errorMessage(e) });
+    }
+  }
+
+  /** Extends a window toward the latest message. */
+  async function loadNewer(chatId: number) {
+    const c = conv(chatId);
+    if (!c.loaded || c.loading || !c.hasNewer) return;
+    setConv(chatId, { loading: true, error: '' });
+    try {
+      const page = await convMessages(api, chatId, 0, PAGE_SIZE, { after: c.items[c.items.length - 1]?.id ?? 0 });
+      setConv(chatId, { items: mergeById(conv(chatId).items, page), hasNewer: page.length >= PAGE_SIZE, loading: false });
     } catch (e) {
       setConv(chatId, { loading: false, error: errorMessage(e) });
     }
@@ -299,8 +329,10 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
       if (!key || !c?.loaded) continue;
       const known = c.items.some((x) => x.id === m.id);
       const oldest = c.items[0]?.id ?? 0;
-      // Never insert a message older than the loaded window: that would leave a hole.
-      if (known || !c.hasMore || m.id > oldest) setConv(key, { items: mergeById(c.items, [m]) });
+      const newest = c.items[c.items.length - 1]?.id ?? 0;
+      // Never insert a message outside the loaded window: that would leave a hole.
+      const inside = (!c.hasMore || m.id > oldest) && (!c.hasNewer || m.id < newest);
+      if (known || inside) setConv(key, { items: mergeById(c.items, [m]) });
     }
   }
 
@@ -474,6 +506,8 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     loadChats,
     refreshLatest,
     loadOlder,
+    loadAround,
+    loadNewer,
     refreshMessage,
     handleEvent,
     onEvent,

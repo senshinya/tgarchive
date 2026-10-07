@@ -1,8 +1,9 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/preact';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/preact';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { navigate, route } from '../../lib/router';
 import { fakeApi, makeBot, makeChat, makeMessage } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
+import { createStore, StoreContext } from '../../state/store';
 import { MiddleColumn } from './MiddleColumn';
 
 afterEach(() => {
@@ -92,20 +93,63 @@ describe('MiddleColumn bot timeline', () => {
 });
 
 describe('jump from the downloads panel', () => {
+  // jsdom lays nothing out: give the list a tall body so it stops filling itself with history.
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(5000);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(500);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
   const pageOf = (from: number, to: number) =>
     Array.from({ length: to - from + 1 }, (_, i) => makeMessage({ id: from + i, chat_id: 10, text: `m${from + i}` }));
 
-  it('loads older pages until the message shows, then clears the request', async () => {
-    const api = fakeApi({
-      chats: vi.fn(async () => [makeChat({ id: 10 })]),
-      messages: vi.fn(async (_chat: number, before = 0) => (before ? pageOf(1, 50) : pageOf(51, 100))),
-    });
+  // Messages 1..100, served like the API does.
+  const serve = vi.fn(async (_chat: number, before = 0, limit = 50, page: { around?: number; after?: number } = {}) => {
+    const all = pageOf(1, 100);
+    if (page.around) {
+      const half = Math.floor(limit / 2);
+      return [...all.filter((m) => m.id <= page.around!).slice(-(limit - half)), ...all.filter((m) => m.id > page.around!).slice(0, half)];
+    }
+    if (page.after) return all.filter((m) => m.id > page.after!).slice(0, limit);
+    return all.filter((m) => !before || m.id < before).slice(-limit);
+  });
+
+  it('loads a window around a message that is not loaded, then clears the request', async () => {
+    const api = fakeApi({ chats: vi.fn(async () => [makeChat({ id: 10 })]), messages: serve });
     const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    await screen.findByText('m100');
     r.store.jumpTo.value = { key: 10, messageId: 5 };
     await screen.findByText('m5');
-    expect(api.messages).toHaveBeenCalledWith(10, 51, 50);
+    expect(api.messages).toHaveBeenCalledWith(10, 0, 50, { around: 5 });
     await waitFor(() => expect(r.store.jumpTo.value).toBeNull());
     expect(r.container.querySelector('.Message.highlight')?.textContent).toContain('m5');
+    expect(screen.queryByText('m100')).toBeNull();
+  });
+
+  it('opens straight on the window when the jump is asked before the conversation loads', async () => {
+    serve.mockClear();
+    const api = fakeApi({ chats: vi.fn(async () => [makeChat({ id: 10 })]), messages: serve });
+    const store = createStore(api, { chatsReloadDelay: 0 });
+    store.jumpTo.value = { key: 10, messageId: 5 };
+    render(
+      <StoreContext.Provider value={store}>
+        <MiddleColumn chatId={10} />
+      </StoreContext.Provider>,
+    );
+    await screen.findByText('m5');
+    expect(serve.mock.calls[0]).toEqual([10, 0, 50, { around: 5 }]);
+  });
+
+  it('goes back to the latest messages from a window', async () => {
+    const api = fakeApi({ chats: vi.fn(async () => [makeChat({ id: 10 })]), messages: serve });
+    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    await screen.findByText('m100');
+    r.store.jumpTo.value = { key: 10, messageId: 5 };
+    await screen.findByText('m5');
+    await waitFor(() => expect(r.store.conv(10).hasNewer).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: '回到底部' }));
+    await screen.findByText('m100');
+    expect(r.store.conv(10).hasNewer).toBe(false);
   });
 
   it('gives up on a message the conversation does not have', async () => {

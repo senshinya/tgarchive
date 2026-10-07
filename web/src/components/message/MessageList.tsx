@@ -17,8 +17,6 @@ import './message.scss';
 export const LOAD_OLDER_THRESHOLD = 400;
 const AT_BOTTOM_PX = 100;
 const SHOW_DOWN_PX = 300;
-/** How many older pages a jump from the downloads panel may load looking for its message. */
-const JUMP_MAX_PAGES = 20;
 
 function download(href: string) {
   const a = document.createElement('a');
@@ -55,14 +53,18 @@ export function MessageList({ chatId }: { chatId: number }) {
     return out;
   }, [entries]);
   const ref = useRef<HTMLDivElement>(null);
-  const snap = useRef({ firstId: 0, lastId: 0, height: 0, top: 0, atBottom: true });
+  const snap = useRef({ firstId: 0, lastId: 0, height: 0, top: 0, atBottom: true, hasNewer: false });
   const [showDown, setShowDown] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; msg: Message } | null>(null);
   const [confirm, setConfirm] = useState<Message | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
-    void store.refreshLatest(chatId);
+    // A jump asked before the conversation opened (search, favorites, downloads) loads the window
+    // around its message instead of the latest page, unless that message is already loaded.
+    const j = store.jumpTo.value;
+    if (j && j.key === chatId && !store.conv(chatId).items.some((m) => m.id === j.messageId)) void store.loadAround(chatId, j.messageId);
+    else void store.refreshLatest(chatId);
   }, [chatId]);
 
   const record = () => {
@@ -75,6 +77,7 @@ export function MessageList({ chatId }: { chatId: number }) {
       height: el.scrollHeight,
       top: el.scrollTop,
       atBottom: el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX,
+      hasNewer: store.conv(chatId).hasNewer,
     };
   };
 
@@ -88,21 +91,21 @@ export function MessageList({ chatId }: { chatId: number }) {
     const s = snap.current;
     if (s.lastId === 0) el.scrollTop = el.scrollHeight;
     else if (first < s.firstId && last === s.lastId) el.scrollTop = el.scrollHeight - s.height + s.top;
-    else if (last > s.lastId && s.atBottom) el.scrollTop = el.scrollHeight;
+    // Following the bottom only while it is the latest: a window being extended stays put.
+    else if (last > s.lastId && s.atBottom && !s.hasNewer) el.scrollTop = el.scrollHeight;
     record();
     // A first page shorter than the viewport never fires scroll events: keep filling.
     if (conv.loaded && conv.hasMore && el.scrollHeight - el.clientHeight < LOAD_OLDER_THRESHOLD) void store.loadOlder(chatId);
   }, [conv.items]);
 
-  // The downloads panel asks for a message: load older pages until it shows up (up to
-  // JUMP_MAX_PAGES), then scroll to it and flash it. A request for another conversation, or one
-  // left over when this list goes away, is dropped.
-  const jumpPages = useRef({ for: null as unknown, pages: 0 }); // pages loaded for the current jump
+  // A message to show (from search, favorites or the downloads panel): scroll to it and flash it,
+  // first loading the window around it when it is not loaded. A request for another conversation,
+  // or one left over when this list goes away, is dropped.
+  const jumpLoaded = useRef<unknown>(null); // the request a window was loaded for
   const jump = store.jumpTo.value;
   useEffect(() => {
     if (!jump) return;
     if (jump.key !== chatId) return;
-    if (jumpPages.current.for !== jump) jumpPages.current = { for: jump, pages: 0 };
     const el = ref.current?.querySelector(`[data-message-id="${jump.messageId}"]`)?.closest('.Message') as HTMLElement | null | undefined;
     if (conv.items.some((m) => m.id === jump.messageId) && el) {
       store.jumpTo.value = null;
@@ -113,12 +116,11 @@ export function MessageList({ chatId }: { chatId: number }) {
       return;
     }
     if (!conv.loaded || conv.loading) return;
-    const oldest = conv.items[0]?.id ?? 0;
-    if (conv.hasMore && jump.messageId < oldest && jumpPages.current.pages < JUMP_MAX_PAGES) {
-      jumpPages.current.pages++;
-      void store.loadOlder(chatId);
+    if (jumpLoaded.current !== jump && !conv.items.some((m) => m.id === jump.messageId)) {
+      jumpLoaded.current = jump;
+      void store.loadAround(chatId, jump.messageId);
     } else if (!conv.items.some((m) => m.id === jump.messageId)) {
-      store.jumpTo.value = null; // not in this conversation, deleted, or too far back
+      store.jumpTo.value = null; // not in this conversation, or deleted
     }
   }, [conv.items, conv.loaded, conv.loading, jump]);
   useEffect(
@@ -132,8 +134,20 @@ export function MessageList({ chatId }: { chatId: number }) {
     const el = ref.current;
     if (!el) return;
     record();
-    setShowDown(el.scrollHeight - el.scrollTop - el.clientHeight > SHOW_DOWN_PX);
+    const below = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowDown(below > SHOW_DOWN_PX);
     if (el.scrollTop < LOAD_OLDER_THRESHOLD) void store.loadOlder(chatId);
+    if (below < LOAD_OLDER_THRESHOLD) void store.loadNewer(chatId);
+  };
+
+  // Back to the latest message: a window short of it is replaced by the latest page first.
+  const toBottom = async () => {
+    if (store.conv(chatId).hasNewer) {
+      snap.current.lastId = 0; // lands at the bottom like a first load
+      await store.refreshLatest(chatId, { reset: true });
+      return;
+    }
+    ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: 'smooth' });
   };
 
   const menuItems = (msg: Message): MenuItem[] => {
@@ -242,13 +256,8 @@ export function MessageList({ chatId }: { chatId: number }) {
           ))}
         </div>
       </div>
-      {showDown && (
-        <button
-          type="button"
-          class="ScrollDown"
-          aria-label="回到底部"
-          onClick={() => ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: 'smooth' })}
-        >
+      {(showDown || conv.hasNewer) && (
+        <button type="button" class="ScrollDown" aria-label="回到底部" onClick={() => void toBottom()}>
           <ArrowDown size={24} />
         </button>
       )}
