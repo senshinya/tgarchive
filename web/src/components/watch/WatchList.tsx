@@ -24,18 +24,18 @@ export function watchStatusText(w: Pick<Watch, 'enabled' | 'status' | 'error' | 
 const STALL_ROUNDS = 3;
 const RELOAD_MS = 30_000;
 
-/** An enabled watch whose poller has not finished a round for a while (counting from its
- * creation when it never has). */
+/** An enabled watch whose poller has not finished a round for a while, counting from its last
+ * change at the earliest (a watch just created or re-enabled has had no chance to poll). */
 export function watchStalled(w: Watch, now: number = Date.now() / 1000): boolean {
   if (!w.enabled || w.status === 'error') return false;
-  return now - (w.last_polled_at || w.created_at) > STALL_ROUNDS * w.poll_seconds;
+  return now - Math.max(w.last_polled_at, w.updated_at, w.created_at) > STALL_ROUNDS * w.poll_seconds;
 }
 
 function WatchRow({ w, onToggle }: { w: Watch; onToggle: (enabled: boolean) => Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const stalled = watchStalled(w);
   const polled = w.last_polled_at ? `${formatAgo(w.last_polled_at)}轮询` : '尚未轮询';
-  const hits = w.hits_7d ? `24h 命中 ${w.hits_24h} · 7d 命中 ${w.hits_7d} · 最近 ${formatAgo(w.last_hit_at)}` : '尚无命中';
+  const hits = w.last_hit_at ? `24h 命中 ${w.hits_24h} · 7d 命中 ${w.hits_7d} · 最近 ${formatAgo(w.last_hit_at)}` : '尚无命中';
   return (
     <div class="ListItem BotRow">
       <button type="button" class="BotRow-main" onClick={() => navigate({ name: 'settings-watch', watchId: w.id })}>

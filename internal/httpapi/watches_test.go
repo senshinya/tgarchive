@@ -335,7 +335,8 @@ func TestWatchActivityFields(t *testing.T) {
 		Date: 900, Kind: model.KindText, Text: "x", RawFormat: model.RawMTProto, Raw: json.RawMessage(`{}`)}})
 	var one map[string]any
 	json.Unmarshal(call(e.h, "GET", "/api/admin/watches/"+strconv.FormatInt(id, 10), nil).Body.Bytes(), &one)
-	if one["last_polled_at"] != float64(990) || one["hits_24h"] != float64(1) || one["hits_7d"] != float64(1) || one["last_hit_at"] != float64(900) {
+	if one["last_polled_at"] != float64(990) || one["hits_24h"] != float64(1) || one["hits_7d"] != float64(1) || one["last_hit_at"] != float64(900) ||
+		one["updated_at"] == nil {
 		t.Fatalf("watch = %v", one)
 	}
 }

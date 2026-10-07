@@ -63,6 +63,7 @@ export function makeWatch(over: Partial<Watch> = {}): Watch {
     pending: 2,
     hits: 5,
     created_at: 1_790_000_000,
+    updated_at: 1_790_000_000,
     last_polled_at: 0,
     hits_24h: 0,
     hits_7d: 0,

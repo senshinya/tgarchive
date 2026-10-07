@@ -233,6 +233,8 @@ export interface Watch {
   pending: number;
   hits: number;
   created_at: number;
+  /** Last change of settings or status (enabling it included). */
+  updated_at: number;
   /** When a poll last finished; 0 when none has. */
   last_polled_at: number;
   /** Archived posts (an album counts once) published in the last 24 hours / 7 days. */

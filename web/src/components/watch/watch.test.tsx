@@ -453,6 +453,10 @@ describe('WatchList and settings entry', () => {
       makeWatch({ id: 4, channel: { channel_id: 501, title: 'Slow', username: '', has_avatar: false }, last_polled_at: now - 600 }),
       makeWatch({ id: 5, channel: { channel_id: 502, title: 'New', username: '', has_avatar: false }, created_at: now - 10 }),
       makeWatch({ id: 6, channel: { channel_id: 503, title: 'Off', username: '', has_avatar: false }, enabled: false, last_polled_at: now - 9999 }),
+      // Just re-enabled after a long pause: not stalled before its first round.
+      makeWatch({ id: 7, channel: { channel_id: 504, title: 'Back', username: '', has_avatar: false }, last_polled_at: now - 9999, updated_at: now - 20 }),
+      // Its last hit was over a week ago: hits are zero, but it has caught something.
+      makeWatch({ id: 8, channel: { channel_id: 505, title: 'Quiet', username: '', has_avatar: false }, last_polled_at: now - 5, last_hit_at: now - 9 * 86400 }),
     ];
     const api = fakeApi({ watches: vi.fn(async () => list) });
     const r = renderWithStore(<WatchList />, api);
@@ -461,7 +465,8 @@ describe('WatchList and settings entry', () => {
     const stalled = screen.getByText('轮询停滞 · 10 分钟前轮询');
     expect(stalled.closest('.ListItem-subtitle')?.classList.contains('warning')).toBe(true);
     expect(screen.getByText('· 尚未轮询')).toBeTruthy();
-    expect(screen.getAllByText('尚无命中').length).toBe(3);
+    expect(screen.getAllByText('尚无命中').length).toBe(4);
+    expect(screen.getByText('24h 命中 0 · 7d 命中 0 · 最近 9 天前')).toBeTruthy();
     expect(r.container.textContent).not.toContain('已停用 · 已存 5轮询停滞');
     expect(screen.getAllByText(/轮询停滞/).length).toBe(1);
     await act(async () => {

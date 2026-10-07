@@ -215,6 +215,7 @@ type watchJSON struct {
 	Pending       int64             `json:"pending"`
 	Hits          int64             `json:"hits"`
 	CreatedAt     int64             `json:"created_at"`
+	UpdatedAt     int64             `json:"updated_at"`
 	LastPolledAt  int64             `json:"last_polled_at"`
 	Hits24h       int64             `json:"hits_24h"`
 	Hits7d        int64             `json:"hits_7d"`
@@ -265,7 +266,7 @@ func toWatchJSON(v *store.WatchView) watchJSON {
 	}
 	return watchJSON{
 		ID: v.ID, ChatID: v.ChatID, WindowMinutes: v.WindowMinutes, Cond: cond, Enabled: v.Enabled, Status: v.Status,
-		Error: v.LastError, Pending: v.Pending, Hits: v.Hits, CreatedAt: v.CreatedAt,
+		Error: v.LastError, Pending: v.Pending, Hits: v.Hits, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt,
 		Channel: store.ChannelView{ChannelID: v.ChannelID, Title: v.Channel.Title, Username: v.Channel.Username, HasAvatar: v.Channel.AvatarPath != ""},
 	}
 }
