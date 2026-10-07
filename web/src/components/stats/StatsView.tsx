@@ -200,7 +200,7 @@ function WatchRow({ w }: { w: Stats['watches'][number] }) {
     });
   }, [w.daily, today]);
   const max = Math.max(1, ...days.map((d) => d.count));
-  const rate = w.scanned > 0 ? `${((w.scan_hits / w.scanned) * 100).toFixed(1).replace(/\.0$/, '')}%` : '—';
+  const rate = w.scanned > 0 ? `${(Math.min(1, w.scan_hits / w.scanned) * 100).toFixed(1).replace(/\.0$/, '')}%` : '—';
   return (
     <button type="button" class="WatchStat" disabled={!w.chat_id} onClick={() => navigate(convRoute(w.chat_id))}>
       <span class="WatchStat-head">

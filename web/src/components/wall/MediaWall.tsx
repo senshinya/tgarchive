@@ -142,6 +142,13 @@ export function MediaWall() {
     [type, source],
   );
 
+  // A page that does not fill the column (a tall screen) leaves nothing to scroll: keep loading.
+  const scroller = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = scroller.current;
+    if (el && loaded && !loading && !error && hasMore && el.scrollHeight - el.clientHeight < LOAD_MORE_PX) void load(false);
+  }, [items, loaded, loading, error, hasMore]);
+
   useLayoutEffect(() => {
     const el = container.current;
     if (!el) return;
@@ -155,11 +162,13 @@ export function MediaWall() {
 
   const layoutWidth = width || FALLBACK_WIDTH;
   const groups = useMemo(() => {
-    const out: { key: string; label: string; items: Message[] }[] = [];
+    const out: { month: string; key: string; label: string; items: Message[] }[] = [];
     for (const m of items) {
       if (!mainMedia(m)) continue;
       const key = monthKey(m.date);
-      if (out[out.length - 1]?.key !== key) out.push({ key, label: formatMonth(m.date), items: [] });
+      // Ordered by archive, not by date: a post archived late can bring its month back, as a
+      // section of its own with a key of its own.
+      if (out[out.length - 1]?.month !== key) out.push({ month: key, key: `${key}:${out.length}`, label: formatMonth(m.date), items: [] });
       out[out.length - 1].items.push(m);
     }
     const h = targetHeight(layoutWidth);
@@ -183,6 +192,7 @@ export function MediaWall() {
       <ViewHeader icon={<Images size={22} />} title="媒体墙" status={loaded ? `${items.length}${hasMore ? '+' : ''} 项` : '加载中…'} />
       <div
         class="MediaWall custom-scroll"
+        ref={scroller}
         onScroll={(e) => {
           const el = e.currentTarget as HTMLElement;
           if (el.scrollHeight - el.scrollTop - el.clientHeight < LOAD_MORE_PX) void load(false);

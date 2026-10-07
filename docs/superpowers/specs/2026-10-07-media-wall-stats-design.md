@@ -60,13 +60,13 @@
 - 计数口径：消息只算未删除；媒体文件按 `media` 行去重（被多条消息引用只算一次），只算被未删除消息引用的；`media_bytes` 只算 `state='done'`；`media_states` 按 `media.state` 的四个取值（done / pending / failed / too_large）计数。
 - 日期分桶：`date(m.date + tz*60, 'unixepoch')`。
 - 监听 daily：最近 30 天，`source='channel_watch'`，相册算一次（同 WatchActivity）。
-- `db_bytes`：数据库文件 + `-wal` 大小；`disk_free/disk_total`：数据目录所在文件系统（`syscall.Statfs`），取不到时为 0。
+- `db_bytes`：数据库页数 × 页大小（不含尚未检查点的 WAL）；`disk_free/disk_total`：数据目录所在文件系统（`syscall.Statfs`），取不到时为 0。
 - 实时计算，无缓存。
 
 ### 监听扫描计数
 - 迁移 0008：`channel_watches` 加 `scanned INTEGER NOT NULL DEFAULT 0`、`scan_hits INTEGER NOT NULL DEFAULT 0`。
 - `AddPending` 在同一事务里按新插入的帖子累加 `scanned`：单帖各算 1，相册（grouped_id≠0）在本批内去重后、且该 grouped_id 此前不在 pending 中时算 1。
-- `AddWatchHit` 同时 `scan_hits + 1`。命中率 = scan_hits / scanned（scanned=0 时显示「—」），界面注明「自 v0.8.0 起统计」。
+- `AddWatchHit(id, polled)`：轮询命中 `scan_hits + 1`，回填命中只加 `hits`（回填的帖子没有计入 scanned）。迁移时 scanned 以当时 pending 中的帖子数（相册算一次）起算。界面命中率封顶 100%。命中率 = scan_hits / scanned（scanned=0 时显示「—」），界面注明「自 v0.8.0 起统计」。
 
 ### 前端
 - 路由 `/stats`，左栏头部按钮（图表图标）。中间栏显示，手机全屏。

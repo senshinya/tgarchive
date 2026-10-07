@@ -39,6 +39,7 @@ const stats = makeStats({
   watches: [
     { watch_id: 3, chat_id: 50, title: 'News', daily: [{ day: localToday(), count: 2 }], hits: 40, scanned: 200, scan_hits: 5 },
     { watch_id: 4, chat_id: 51, title: 'Quiet', daily: [], hits: 0, scanned: 0, scan_hits: 0 },
+    { watch_id: 5, chat_id: 52, title: 'Odd', daily: [], hits: 9, scanned: 2, scan_hits: 3 },
   ],
 });
 
@@ -85,6 +86,7 @@ describe('StatsView', () => {
     await screen.findByText('News');
     expect(screen.getByText('命中率 2.5%')).toBeTruthy();
     expect(screen.getByText('命中率 —')).toBeTruthy();
+    expect(screen.getByText('命中率 100%')).toBeTruthy();
   });
 
   it('links the failed downloads to the downloads panel', async () => {

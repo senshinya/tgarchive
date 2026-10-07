@@ -102,3 +102,17 @@ func TestStatsEmpty(t *testing.T) {
 		t.Fatalf("empty stats = %+v, %v", st, err)
 	}
 }
+
+func TestStatsDailyCoversTheHeatmap(t *testing.T) {
+	// The heatmap starts on the Monday 52 weeks before this week: up to 52×7+6 = 370 days back.
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	now := int64(1704067200 + 10*86400) // 2024-01-11, a Thursday
+	m := textMsg(1, "old")
+	m.Date = now - 370*86400
+	ingest(t, s, bot, m)
+	st, err := s.Stats(ctx, 0, now)
+	if err != nil || len(st.Daily) != 1 || st.Daily[0].Day != "2023-01-06" {
+		t.Fatalf("daily = %+v, %v", st.Daily, err)
+	}
+}

@@ -55,6 +55,21 @@ describe('MediaWall', () => {
     expect(r.allMedia).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps loading while the tiles do not fill the column', async () => {
+    const full = Array.from({ length: WALL_PAGE }, (_, i) => photo(1000 - i));
+    const r = setup(vi.fn(async (_t: unknown, _s: unknown, before: unknown) => (before ? [photo(5)] : full)));
+    // jsdom has no layout: an unscrollable column, as on a tall screen.
+    await waitFor(() => expect(tiles(r.container)).toHaveLength(WALL_PAGE + 1));
+    expect(r.allMedia).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives a month that shows up twice (a post archived late) its own section', async () => {
+    const oct = 1_790_000_000;
+    const r = setup(vi.fn(async () => [photo(3, { date: oct }), photo(2, { date: oct - 400 * 86400 }), photo(1, { date: oct - 3600 })]));
+    await waitFor(() => expect(tiles(r.container)).toHaveLength(3));
+    expect(r.container.querySelectorAll('.MediaWall-month')).toHaveLength(3);
+  });
+
   it('opens the viewer on the wall with its filters, seeded with what is loaded', async () => {
     const r = setup();
     await waitFor(() => expect(tiles(r.container)).toHaveLength(3));

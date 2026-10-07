@@ -352,3 +352,34 @@ html.is-apple .ChatItem-subtitle .sender-name {
   flex: 1;
   min-width: 0;
 }
+
+// Phones: the header holds up to six buttons and the list-mode switch, so the title gives way
+// and the buttons tighten.
+@media (max-width: 600px) {
+  .left-header {
+    padding-inline: 0.5rem;
+  }
+
+  .left-header-title {
+    display: none;
+  }
+
+  .left-header .IconButton,
+  .left-header .DownloadsButton {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .left-header .favorites-button,
+  .left-header .DownloadsButton {
+    margin-left: 0;
+  }
+
+  .left-header .ListModeSwitch {
+    margin-left: auto;
+
+    button {
+      padding: 0.25rem 0.625rem;
+    }
+  }
+}
