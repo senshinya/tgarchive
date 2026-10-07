@@ -497,3 +497,36 @@ func TestMessagesAfterAndAround(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkRead(t *testing.T) {
+	e := newReadEnv(t)
+	ch, unsub := e.hub.Subscribe()
+	defer unsub()
+	path := fmt.Sprintf("/api/chats/%d/read", e.chat)
+	if w := call(e.h, "POST", path, map[string]any{"message_id": e.photoMsg}); w.Code != 204 {
+		t.Fatalf("read = %d %s", w.Code, w.Body)
+	}
+	if ev := <-ch; ev.Type != "chat.read" {
+		t.Fatalf("event = %+v", ev)
+	}
+	var chats []store.ChatView
+	json.Unmarshal(do(e.h, "GET", "/api/chats", nil).Body.Bytes(), &chats)
+	if chats[0].LastReadID < e.photoMsg {
+		t.Fatalf("last_read_id = %d", chats[0].LastReadID)
+	}
+	for _, c := range []struct {
+		path string
+		body any
+		code int
+	}{
+		{path, map[string]any{}, 400},
+		{path, map[string]any{"message_id": -1}, 400},
+		{path, "x", 400},
+		{"/api/chats/9999/read", map[string]any{"message_id": 1}, 404},
+		{"/api/chats/abc/read", map[string]any{"message_id": 1}, 400},
+	} {
+		if w := call(e.h, "POST", c.path, c.body); w.Code != c.code {
+			t.Fatalf("%s %v = %d, want %d", c.path, c.body, w.Code, c.code)
+		}
+	}
+}

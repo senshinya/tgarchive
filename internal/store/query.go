@@ -31,6 +31,9 @@ type ChatView struct {
 	LastMessageAt int64        `json:"last_message_at"`
 	LastKind      string       `json:"last_kind"`
 	LastText      string       `json:"last_text"`
+	// LastReadID is the newest message read; Unread counts the newer ones (channels only).
+	LastReadID int64 `json:"last_read_id"`
+	Unread     int64 `json:"unread"`
 }
 
 type ChannelView struct {
@@ -112,7 +115,10 @@ func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) 
 			COALESCE(w.window_minutes, 0), COALESCE(w.hits, 0),
 			(SELECT COUNT(*) FROM watch_pending p WHERE p.watch_id = w.id),
 			COALESCE((SELECT m.kind FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 ORDER BY m.id DESC LIMIT 1), ''),
-			COALESCE((SELECT substr(m.text, 1, 200) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 ORDER BY m.id DESC LIMIT 1), '')
+			COALESCE((SELECT substr(m.text, 1, 200) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 ORDER BY m.id DESC LIMIT 1), ''),
+			c.last_read_id,
+			CASE WHEN c.kind = 'channel' THEN
+				(SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.id > c.last_read_id) ELSE 0 END
 		FROM chats c
 			LEFT JOIN senders s ON s.tg_user_id = c.sender_id
 			LEFT JOIN channels ch ON ch.channel_id = c.channel_id
@@ -131,7 +137,7 @@ func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) 
 		var w WatchBrief
 		if err := rows.Scan(&v.ID, &v.Kind, &v.BotID, &v.LastMessageAt, &v.Sender.TgUserID, &v.Sender.FirstName, &v.Sender.LastName,
 			&v.Sender.Username, &avatar, &ch.ChannelID, &ch.Title, &ch.Username, &chAvatar,
-			&w.ID, &w.Enabled, &w.Status, &w.Error, &w.WindowMinutes, &w.Hits, &w.Pending, &v.LastKind, &v.LastText); err != nil {
+			&w.ID, &w.Enabled, &w.Status, &w.Error, &w.WindowMinutes, &w.Hits, &w.Pending, &v.LastKind, &v.LastText, &v.LastReadID, &v.Unread); err != nil {
 			return nil, err
 		}
 		v.Sender.HasAvatar = avatar != ""

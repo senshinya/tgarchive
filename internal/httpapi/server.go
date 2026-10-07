@@ -61,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/chats", s.listChats)
 	mux.HandleFunc("GET /api/chats/{id}/messages", s.listMessages)
 	mux.HandleFunc("GET /api/chats/{id}/media", s.listChatMedia)
+	mux.HandleFunc("POST /api/chats/{id}/read", s.markRead)
 	mux.HandleFunc("GET /api/bots/{id}/messages", s.listBotMessages)
 	mux.HandleFunc("GET /api/bots/{id}/media", s.listBotMedia)
 	mux.HandleFunc("GET /api/messages/{id}", s.getMessage)

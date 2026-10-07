@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"mime"
 	"net/http"
@@ -359,4 +360,21 @@ func within(base, rel string) (string, bool) {
 		return "", false
 	}
 	return p, true
+}
+
+func (s *Server) markRead(w http.ResponseWriter, r *http.Request) {
+	chatID, ok := pathID(r, "id")
+	var req struct {
+		MessageID int64 `json:"message_id"`
+	}
+	if !ok || json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req) != nil || req.MessageID <= 0 {
+		writeErr(w, http.StatusBadRequest, "bad chat id or message_id")
+		return
+	}
+	if err := s.Store.MarkRead(r.Context(), chatID, req.MessageID); err != nil {
+		storeErr(w, err)
+		return
+	}
+	s.Hub.Publish(events.Event{Type: "chat.read", Data: map[string]int64{"chat_id": chatID}})
+	w.WriteHeader(http.StatusNoContent)
 }
