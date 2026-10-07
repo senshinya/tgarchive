@@ -375,3 +375,44 @@ func TestWatchActivity(t *testing.T) {
 		t.Fatalf("last_polled_at = %d", w.LastPolledAt)
 	}
 }
+
+func TestWatchScanCounters(t *testing.T) {
+	s := newStore(t)
+	id := seedWatch(t, s)
+	scanned := func() (int64, int64) {
+		t.Helper()
+		w, err := s.GetWatch(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w.Scanned, w.ScanHits
+	}
+	// Two single posts and a three-post album: three posts as people see them.
+	if err := s.AddPending(ctx, id, []Pending{{TgMessageID: 10}, {TgMessageID: 11}, {TgMessageID: 12, GroupedID: 7},
+		{TgMessageID: 13, GroupedID: 7}, {TgMessageID: 14, GroupedID: 7}}, 14); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := scanned(); n != 3 {
+		t.Fatalf("scanned = %d, want 3", n)
+	}
+	// The album's last part arrives in the next poll, and a post already pending is seen again.
+	if err := s.AddPending(ctx, id, []Pending{{TgMessageID: 15, GroupedID: 7}, {TgMessageID: 10}}, 15); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := scanned(); n != 3 {
+		t.Fatalf("scanned after album tail = %d, want 3", n)
+	}
+	if err := s.AddPending(ctx, id, []Pending{{TgMessageID: 16, GroupedID: 8}, {TgMessageID: 17, GroupedID: 8}}, 17); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := scanned(); n != 4 {
+		t.Fatalf("scanned after a new album = %d, want 4", n)
+	}
+	if err := s.AddWatchHit(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := s.GetWatch(ctx, id)
+	if w.Hits != 1 || w.ScanHits != 1 {
+		t.Fatalf("hits = %d, scan hits = %d", w.Hits, w.ScanHits)
+	}
+}
