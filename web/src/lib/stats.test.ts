@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cumulative, heatmapGrid, quantileLevels, shiftDay } from './stats';
+import { cumulative, dailyCumulative, heatmapGrid, quantileLevels, shiftDay } from './stats';
 
 describe('shiftDay', () => {
   it('moves across month and year ends', () => {
@@ -59,5 +59,26 @@ describe('cumulative', () => {
       { month: '2024-02', messages: 5, media_bytes: 10 },
     ]);
     expect(cumulative([])).toEqual([]);
+  });
+});
+
+describe('dailyCumulative', () => {
+  it('runs totals day by day up to today on top of what came before the first day', () => {
+    expect(
+      dailyCumulative(
+        [
+          { day: '2026-10-05', count: 2 },
+          { day: '2026-10-07', count: 3 },
+        ],
+        '2026-10-08',
+        10,
+      ),
+    ).toEqual([
+      { day: '2026-10-05', messages: 7 },
+      { day: '2026-10-06', messages: 7 },
+      { day: '2026-10-07', messages: 10 },
+      { day: '2026-10-08', messages: 10 },
+    ]);
+    expect(dailyCumulative([], '2026-10-08', 0)).toEqual([]);
   });
 });

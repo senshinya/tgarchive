@@ -63,3 +63,18 @@ export function cumulative(monthly: Month[]): Month[] {
   }
   return out;
 }
+
+/** Running message totals per day from the first day with any to today, ending at total (what
+ * came before the first day is the base it starts from). For a young archive, where a monthly
+ * curve would have a single point. */
+export function dailyCumulative(daily: DayCount[], today: string, total: number): { day: string; messages: number }[] {
+  if (daily.length === 0) return [];
+  const by = new Map(daily.map((d) => [d.day, d.count]));
+  let messages = total - daily.reduce((n, d) => n + d.count, 0);
+  const out: { day: string; messages: number }[] = [];
+  for (let day = daily[0].day; day <= today; day = shiftDay(day, 1)) {
+    messages += by.get(day) ?? 0;
+    out.push({ day, messages });
+  }
+  return out;
+}

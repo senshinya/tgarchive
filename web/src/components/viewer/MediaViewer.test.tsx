@@ -218,7 +218,11 @@ describe('MediaViewer on the media wall', () => {
     await act(async () => release());
     await screen.findByText('2 / 3', { exact: false });
     expect(api.chatMedia).not.toHaveBeenCalled();
+    // Newest first, like the wall: next is the older one, previous the newer one.
     fireEvent.click(screen.getByRole('button', { name: '下一个' }));
+    expect(current(r.container).dataset.media).toBe('101');
+    fireEvent.click(screen.getByRole('button', { name: '上一个' }));
+    fireEvent.click(screen.getByRole('button', { name: '上一个' }));
     expect(current(r.container).dataset.media).toBe('103');
     expect(r.container.querySelector('.MediaViewer-name')!.textContent).toBe('Bob');
   });

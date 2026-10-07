@@ -98,6 +98,15 @@ describe('MediaWall', () => {
     await waitFor(() => expect(tiles(r.container)).toHaveLength(1));
   });
 
+  it('shows thumbnails rather than full photos when there are some', async () => {
+    const withThumb = photo(2);
+    withThumb.media.push(makeMedia({ id: 902, role: 'thumb', kind: 'photo', state: 'done' }));
+    const r = setup(vi.fn(async () => [withThumb, photo(1)]));
+    await waitFor(() => expect(tiles(r.container)).toHaveLength(2));
+    const srcs = [...r.container.querySelectorAll('.MediaWall-tile img')].map((i) => i.getAttribute('src'));
+    expect(srcs).toEqual(['/media/902', '/media/101']);
+  });
+
   it('says so when there is nothing to show', async () => {
     setup(vi.fn(async () => []));
     expect(await screen.findByText('暂无媒体')).toBeTruthy();

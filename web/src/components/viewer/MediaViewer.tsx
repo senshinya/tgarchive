@@ -109,7 +109,7 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
   const seed = listed
     ? listed.list
     : wall
-      ? wall.seed
+      ? [...wall.seed].reverse() // newest first, like the wall
       : toViewerItems(store.conv(chatId).items.filter((m) => m.id === inChat?.messageId));
   const [items, setItems] = useState<ViewerItem[]>(seed);
 
@@ -130,7 +130,7 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
         before = page[page.length - 1].id;
       }
       if (cancelled) return;
-      const list = toViewerItems(all);
+      const list = wall ? toViewerItems(all).reverse() : toViewerItems(all);
       if (list.some((it) => it.mediaId === target.mediaId)) setItems(list);
       else if (seed.length === 0) close();
     })().catch((err) => {
