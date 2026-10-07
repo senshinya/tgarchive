@@ -224,12 +224,21 @@ func fill(msg *model.Message, m *tg.Message, ch Channel, extra map[string]any) e
 	case *tg.MessageMediaDice:
 		msg.Kind = model.KindDice
 		extra["emoji"], extra["value"] = md.Emoticon, md.Value
-	case nil, *tg.MessageMediaEmpty, *tg.MessageMediaWebPage:
-		if msg.Text != "" {
-			msg.Kind = model.KindText
-		} else {
-			msg.Kind = model.KindOther
-		}
+	case *tg.MessageMediaWebPage:
+		textOrOther(msg)
+		return linkPreview(msg, md.Webpage, base, extra)
+	case *tg.MessageMediaStory:
+		unsupported(msg, extra, "story")
+	case *tg.MessageMediaGiveaway, *tg.MessageMediaGiveawayResults:
+		unsupported(msg, extra, "giveaway")
+	case *tg.MessageMediaPaidMedia:
+		unsupported(msg, extra, "paid_media")
+	case *tg.MessageMediaInvoice:
+		unsupported(msg, extra, "invoice")
+	case *tg.MessageMediaGame:
+		unsupported(msg, extra, "game")
+	case nil, *tg.MessageMediaEmpty:
+		textOrOther(msg)
 	default:
 		msg.Kind = model.KindOther
 	}
@@ -327,6 +336,53 @@ type size struct {
 }
 
 // pickSizes returns the largest and smallest downloadable photo sizes.
+func textOrOther(msg *model.Message) {
+	if msg.Text != "" {
+		msg.Kind = model.KindText
+	} else {
+		msg.Kind = model.KindOther
+	}
+}
+
+// unsupported marks a post whose content the archive cannot hold (a story, a giveaway, ...); the
+// WebUI names it and links to the original.
+func unsupported(msg *model.Message, extra map[string]any, what string) {
+	textOrOther(msg)
+	extra["unsupported"] = what
+}
+
+// linkPreview keeps a loaded web page preview as extra.link_preview, and its photo (the largest
+// size) as a link_preview media.
+func linkPreview(msg *model.Message, wp tg.WebPageClass, base MediaRef, extra map[string]any) error {
+	page, ok := wp.(*tg.WebPage)
+	if !ok {
+		return nil // empty, pending or not modified: nothing to show
+	}
+	lp := map[string]any{}
+	setIf(lp, "url", page.URL)
+	setIf(lp, "display_url", page.DisplayURL)
+	setIf(lp, "site_name", page.SiteName)
+	setIf(lp, "title", page.Title)
+	setIf(lp, "description", page.Description)
+	extra["link_preview"] = lp
+	p, ok := page.Photo.(*tg.Photo)
+	if !ok {
+		return nil
+	}
+	big, _, has := pickSizes(p.Sizes)
+	if !has {
+		return nil
+	}
+	r := base
+	r.Photo, r.ID, r.FileHash, r.FileRef, r.ThumbSize = true, p.ID, p.AccessHash, p.FileReference, big.Type
+	md, err := media(r, fmt.Sprintf("mt:photo:%d", p.ID), "photo", "image/jpeg", big, model.RoleLinkPreview)
+	if err != nil {
+		return err
+	}
+	msg.Media = append(msg.Media, md)
+	return nil
+}
+
 func pickSizes(in []tg.PhotoSizeClass) (big, small size, ok bool) {
 	for _, s := range in {
 		var c size

@@ -34,6 +34,8 @@ const (
 
 	RoleMain  = "main"
 	RoleThumb = "thumb"
+	// RoleLinkPreview is the photo of a message's link preview card.
+	RoleLinkPreview = "link_preview"
 )
 
 type Sender struct {
