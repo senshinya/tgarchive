@@ -331,6 +331,37 @@ export interface Article {
 
 export type SharedMediaType = 'media' | 'file' | 'link';
 
+/** The media wall's filters: what kind of media, and from which kind of chat. */
+export type WallType = 'all' | 'photo' | 'video';
+export type WallSource = 'all' | 'private' | 'channel';
+
+export interface DayCount {
+  day: string; // YYYY-MM-DD
+  count: number;
+}
+
+export interface Stats {
+  totals: {
+    messages: number;
+    private_chats: number;
+    channel_chats: number;
+    media_files: number;
+    media_bytes: number;
+    db_bytes: number;
+    disk_free: number;
+    disk_total: number;
+  };
+  /** Messages per day over the last 53 weeks; days without any are left out. */
+  daily: DayCount[];
+  /** Per month, oldest first: new messages and newly archived media bytes. */
+  monthly: { month: string; messages: number; media_bytes: number }[];
+  top_chats: { chat_id: number; messages: number; media_bytes: number }[];
+  /** By main media kind ('other' for thumbnails, link previews…), most first. */
+  media_kinds: { kind: string; count: number; bytes: number }[];
+  media_states: { done: number; pending: number; failed: number; too_large: number };
+  watches: { watch_id: number; chat_id: number; title: string; daily: DayCount[]; hits: number; scanned: number; scan_hits: number }[];
+}
+
 export interface WhitelistEntry {
   tg_user_id: number;
   note: string;

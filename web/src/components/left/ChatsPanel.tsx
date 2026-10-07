@@ -1,4 +1,4 @@
-import { Bookmark, CircleAlert, Megaphone, Radio, Settings, Volume2, VolumeX } from 'lucide-preact';
+import { Bookmark, ChartColumn, CircleAlert, Images, Megaphone, Radio, Settings, Volume2, VolumeX } from 'lucide-preact';
 import { avatarUrl } from '../../api/client';
 import type { Chat } from '../../api/types';
 import { botName, formatListTime, previewText, senderName } from '../../lib/format';
@@ -204,6 +204,22 @@ export function ChatsPanel() {
           onClick={() => navigate({ name: 'favorites' }, { fromList: true })}
         >
           <Bookmark size={22} />
+        </IconButton>
+        <IconButton
+          label="媒体墙"
+          class={`wall-button${r.name === 'media' ? ' active' : ''}`}
+          pressed={r.name === 'media'}
+          onClick={() => navigate({ name: 'media' }, { fromList: true })}
+        >
+          <Images size={22} />
+        </IconButton>
+        <IconButton
+          label="统计"
+          class={`stats-button${r.name === 'stats' ? ' active' : ''}`}
+          pressed={r.name === 'stats'}
+          onClick={() => navigate({ name: 'stats' }, { fromList: true })}
+        >
+          <ChartColumn size={22} />
         </IconButton>
         <IconButton label="监听频道" class="watch-button" onClick={() => navigate({ name: 'settings-watch-new' })}>
           <Radio size={22} />

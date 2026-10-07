@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 import type { Api } from '../api/client';
-import type { Article, ArticleMedia, Bot, ChannelInfo, Chat, Media, Message, Watch } from '../api/types';
+import type { Article, ArticleMedia, Bot, ChannelInfo, Chat, Media, Message, Stats, Watch } from '../api/types';
 
 export function makeBot(over: Partial<Bot> = {}): Bot {
   return {
@@ -48,6 +48,28 @@ export function makeChannelChat(over: Partial<Chat> = {}): Chat {
 
 export function makeChannelInfo(over: Partial<ChannelInfo> = {}): ChannelInfo {
   return { channel_id: 500, title: 'News', username: 'news', participants: 1200, watched: false, ...over };
+}
+
+export function makeStats(over: Partial<Stats> = {}): Stats {
+  return {
+    totals: {
+      messages: 0,
+      private_chats: 0,
+      channel_chats: 0,
+      media_files: 0,
+      media_bytes: 0,
+      db_bytes: 0,
+      disk_free: 0,
+      disk_total: 0,
+    },
+    daily: [],
+    monthly: [],
+    top_chats: [],
+    media_kinds: [],
+    media_states: { done: 0, pending: 0, failed: 0, too_large: 0 },
+    watches: [],
+    ...over,
+  };
 }
 
 export function makeWatch(over: Partial<Watch> = {}): Watch {
@@ -152,6 +174,8 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     tags: vi.fn(async () => []),
     deleteTag: vi.fn(async () => undefined),
     markRead: vi.fn(async () => undefined),
+    allMedia: vi.fn(async () => []),
+    stats: vi.fn(async () => makeStats()),
     addBot: vi.fn(async () => ({ bot_id: 1, steps: [] })),
     setBotEnabled: vi.fn(async (id: number, enabled: boolean) => makeBot({ id, enabled })),
     deleteBot: vi.fn(async () => undefined),

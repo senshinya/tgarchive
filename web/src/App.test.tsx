@@ -155,6 +155,20 @@ describe('App', () => {
     expect(container.querySelector('#LeftScrim')).toBeNull();
   });
 
+  it('opens the media wall and the stats from the chat list header', async () => {
+    const { container, api } = setup('/');
+    await screen.findByText('Alice');
+    fireEvent.click(screen.getByRole('button', { name: '媒体墙' }));
+    expect(location.pathname).toBe('/media');
+    await waitFor(() => expect(container.querySelector('.MiddleHeader-title')?.textContent).toBe('媒体墙'));
+    expect(container.querySelector('#Main')!.className).toBe('');
+    await waitFor(() => expect(api.allMedia).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: '统计' }));
+    expect(location.pathname).toBe('/stats');
+    await waitFor(() => expect(container.querySelector('.MiddleHeader-title')?.textContent).toBe('统计'));
+    await waitFor(() => expect(api.stats).toHaveBeenCalled());
+  });
+
   it('closes the event stream on unmount', async () => {
     const { unmount, es } = setup('/');
     await screen.findByText('Alice');
