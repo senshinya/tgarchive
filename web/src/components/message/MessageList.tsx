@@ -5,6 +5,7 @@ import { avatarUrl, errorMessage, mediaUrl } from '../../api/client';
 import type { Chat, Message } from '../../api/types';
 import { senderName } from '../../lib/format';
 import { groupMessages, type ListEntry } from '../../lib/grouping';
+import { scrollWithin } from '../../lib/scroll';
 import { useStore } from '../../state/store';
 import { Avatar } from '../../ui/Avatar';
 import { ContextMenu, type MenuItem } from '../../ui/ContextMenu';
@@ -129,8 +130,8 @@ export function MessageList({ chatId }: { chatId: number }) {
     if (unread.current.pending) {
       if (!unread.current.started || conv.loading) return;
       unread.current.pending = false;
-      const divider = el.querySelector('.unread-divider');
-      if (divider) divider.scrollIntoView?.({ block: 'start' });
+      const divider = el.querySelector<HTMLElement>('.unread-divider');
+      if (divider) scrollWithin(el, divider, 'start');
       else el.scrollTop = el.scrollHeight;
     } else if (s.lastId === 0) el.scrollTop = el.scrollHeight;
     else if (first < s.firstId && last === s.lastId) el.scrollTop = el.scrollHeight - s.height + s.top;
@@ -153,7 +154,7 @@ export function MessageList({ chatId }: { chatId: number }) {
     const el = ref.current?.querySelector(`[data-message-id="${jump.messageId}"]`)?.closest('.Message') as HTMLElement | null | undefined;
     if (conv.items.some((m) => m.id === jump.messageId) && el) {
       store.jumpTo.value = null;
-      el.scrollIntoView?.({ block: 'center' });
+      if (ref.current) scrollWithin(ref.current, el, 'center');
       el.classList.remove('highlight');
       void el.offsetWidth;
       el.classList.add('highlight');
