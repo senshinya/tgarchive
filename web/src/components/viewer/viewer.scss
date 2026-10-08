@@ -251,11 +251,14 @@
     object-fit: contain;
   }
 
-  // The caption and thumbnail strip stay at the bottom of the screen for videos as for photos:
-  // the progress bar and buttons sit above them (--viewer-foot, set by ViewerOverlay), never under
-  // the caption where they could not be dragged.
-  .vds-controls {
-    padding-bottom: calc(var(--viewer-foot, 0px) + 0.5rem);
+  // The caption and thumbnail strip stay at the bottom of the screen for videos as for photos.
+  // Phones: the player fills the screen and its progress bar and buttons are lifted above them
+  // (--viewer-foot, set by ViewerOverlay). Desktop: the slide itself is laid out clear of them
+  // (viewerLayout.ts), so the controls sit on the picture's bottom edge.
+  @media (max-width: 600px) {
+    .vds-controls {
+      padding-bottom: calc(var(--viewer-foot, 0px) + 0.5rem);
+    }
   }
 
   // The spinner's svg is inline by default: the line box adds a descender gap under it, so

@@ -63,8 +63,16 @@ describe('ViewerOverlay', () => {
     const root = document.createElement('div');
     root.className = 'pswp';
     document.body.appendChild(root);
+    const onFoot = vi.fn();
     render(
-      <ViewerOverlay items={[item(1, 'video', { text: 'caption' }), item(2)]} index={0} title="A" onPick={vi.fn()} onClose={vi.fn()} />,
+      <ViewerOverlay
+        items={[item(1, 'video', { text: 'caption' }), item(2)]}
+        index={0}
+        title="A"
+        onPick={vi.fn()}
+        onClose={vi.fn()}
+        onFoot={onFoot}
+      />,
       {
         container: root,
       },
@@ -73,6 +81,7 @@ describe('ViewerOverlay', () => {
     Object.defineProperty(foot, 'offsetHeight', { configurable: true, value: 120 });
     observers.forEach((cb) => cb());
     expect(root.style.getPropertyValue('--viewer-foot')).toBe('120px');
+    expect(onFoot).toHaveBeenLastCalledWith(120);
     globalThis.ResizeObserver = saved;
     root.remove();
   });

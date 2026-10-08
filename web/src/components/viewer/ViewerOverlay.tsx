@@ -13,6 +13,8 @@ interface Props {
   onClose: () => void;
   onPick: (index: number) => void;
   onZoom?: (dir: 1 | -1) => void;
+  /** The caption-and-strip block changed height (desktop videos are laid out clear of it). */
+  onFoot?: (height: number) => void;
 }
 
 const ARROW = 36;
@@ -49,14 +51,19 @@ export function Thumbs({ items, index, onPick }: Pick<Props, 'items' | 'index' |
 }
 
 /** Publishes the caption-and-strip block's height as --viewer-foot on the gallery root, where a
- * video player's controls read it to sit just above the block (viewer.scss). */
-function useFootHeight() {
+ * phone video player's controls read it to sit just above the block (viewer.scss), and to onFoot. */
+function useFootHeight(onFoot?: (height: number) => void) {
   const ref = useRef<HTMLDivElement>(null);
+  const notify = useRef(onFoot);
+  notify.current = onFoot;
   useLayoutEffect(() => {
     const el = ref.current;
     const root = el?.closest<HTMLElement>('.pswp');
     if (!el || !root) return;
-    const publish = () => root.style.setProperty('--viewer-foot', `${el.offsetHeight}px`);
+    const publish = () => {
+      root.style.setProperty('--viewer-foot', `${el.offsetHeight}px`);
+      notify.current?.(el.offsetHeight);
+    };
     publish();
     if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(publish);
@@ -68,8 +75,8 @@ function useFootHeight() {
 
 /** Header (title, date, position, zoom, download, close), caption and thumbnail strip drawn over
  * the gallery. Fades with PhotoSwipe's UI visibility (see viewer.scss). */
-export function ViewerOverlay({ items, index, title, onClose, onPick, onZoom }: Props) {
-  const foot = useFootHeight();
+export function ViewerOverlay({ items, index, title, onClose, onPick, onZoom, onFoot }: Props) {
+  const foot = useFootHeight(onFoot);
   const item = items[index];
   if (!item) return null;
   return (
