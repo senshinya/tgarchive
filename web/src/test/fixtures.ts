@@ -174,6 +174,7 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     tags: vi.fn(async () => []),
     deleteTag: vi.fn(async () => undefined),
     markRead: vi.fn(async () => undefined),
+    refreshPostStats: vi.fn(async () => undefined),
     allMedia: vi.fn(async () => []),
     stats: vi.fn(async () => makeStats()),
     addBot: vi.fn(async () => ({ bot_id: 1, steps: [] })),

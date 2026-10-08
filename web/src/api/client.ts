@@ -118,6 +118,8 @@ export interface Api {
   deleteTag(id: number): Promise<void>;
   /** Records that a chat has been read up to a message. */
   markRead(chatId: number, messageId: number): Promise<void>;
+  /** Asks for fresh counters of a channel conversation's archived posts (they arrive as message.updated). */
+  refreshPostStats(chatId: number, messageIds: number[]): Promise<void>;
   addBot(token: string): Promise<AddBotResult>;
   setBotEnabled(id: number, enabled: boolean): Promise<Bot>;
   deleteBot(id: number, purge: boolean): Promise<void>;
@@ -179,6 +181,7 @@ export const api: Api = {
   allMedia: (type, source, before = 0, limit = WALL_PAGE) => request('GET', `/api/media${qs({ type, source, before, limit })}`),
   stats: (tz) => request('GET', `/api/stats${qs({ tz })}`),
   markRead: (chatId, messageId) => request('POST', `/api/chats/${chatId}/read`, { message_id: messageId }),
+  refreshPostStats: (chatId, messageIds) => request('POST', `/api/chats/${chatId}/refresh-stats`, { message_ids: messageIds }),
   addBot: (token) => request('POST', '/api/admin/bots', { token }),
   setBotEnabled: (id, enabled) => request('PATCH', `/api/admin/bots/${id}`, { enabled }),
   deleteBot: (id, purge) => request('DELETE', `/api/admin/bots/${id}${purge ? '?purge=1' : ''}`),
