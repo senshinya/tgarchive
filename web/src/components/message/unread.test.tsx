@@ -4,6 +4,7 @@ import type { Api, PageParams } from '../../api/client';
 import type { Message } from '../../api/types';
 import { createStore, StoreContext } from '../../state/store';
 import { fakeApi, makeChannelChat, makeChat, makeMessage } from '../../test/fixtures';
+import * as scroll from '../../lib/scroll';
 import { MessageList } from './MessageList';
 
 // jsdom lays nothing out: give the list a viewport so "at the bottom" means something.
@@ -40,9 +41,8 @@ const pages = (around: Message[], latest: Message[]) =>
 describe('opening a channel with unread posts', () => {
   it('lands on the first unread post below a divider, and marks read only at the bottom', async () => {
     const scrolled: Element[] = [];
-    const spy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function (this: Element) {
-      scrolled.push(this);
-    });
+    const native = vi.spyOn(Element.prototype, 'scrollIntoView');
+    const spy = vi.spyOn(scroll, 'scrollWithin').mockImplementation((_list, el) => void scrolled.push(el));
     const api = fakeApi({
       chats: vi.fn(async () => [makeChannelChat({ last_read_id: 120, unread: 3 })]),
       messages: pages(range(100, 123), range(74, 123)),
@@ -63,6 +63,8 @@ describe('opening a channel with unread posts', () => {
     expect(api.markRead).toHaveBeenCalledWith(50, 123);
     // The divider stays where it was for this visit.
     expect(container.querySelector('.unread-divider')).toBe(divider);
+    expect(native).not.toHaveBeenCalled(); // it would scroll the columns on phones too
+    native.mockRestore();
     spy.mockRestore();
   });
 
@@ -92,9 +94,8 @@ describe('opening a channel with unread posts', () => {
 
   it('lets a jump to a message already loaded win over the unread posts', async () => {
     const scrolled: Element[] = [];
-    const spy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function (this: Element) {
-      scrolled.push(this);
-    });
+    const native = vi.spyOn(Element.prototype, 'scrollIntoView');
+    const spy = vi.spyOn(scroll, 'scrollWithin').mockImplementation((_list, el) => void scrolled.push(el));
     const api = fakeApi({
       chats: vi.fn(async () => [makeChannelChat({ last_read_id: 120, unread: 3 })]),
       messages: pages(range(100, 123), range(74, 123)),
@@ -107,6 +108,8 @@ describe('opening a channel with unread posts', () => {
     await act(async () => {});
     expect(vi.mocked(api.messages).mock.calls.some((c) => c[3]?.around)).toBe(false);
     expect(scrolled.some((el) => el.classList.contains('unread-divider'))).toBe(false);
+    expect(native).not.toHaveBeenCalled(); // it would scroll the columns on phones too
+    native.mockRestore();
     spy.mockRestore();
   });
 
