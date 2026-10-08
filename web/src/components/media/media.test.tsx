@@ -65,13 +65,26 @@ describe('Photo', () => {
     expect(api.retryMedia).toHaveBeenCalledWith(100);
   });
 
-  it('blurs spoiler media until revealed', () => {
+  it('shows spoiler media outright: the archive keeps no spoiler veil', () => {
     const onOpen = vi.fn();
     const { container } = renderWithStore(<Photo msg={photoMsg({ extra: { spoiler: true } })} onOpen={onOpen} />);
-    expect(container.querySelector('img')!.className).toBe('media-spoiler-blur');
-    fireEvent.click(screen.getByText('显示剧透内容'));
     expect(container.querySelector('img')!.className).toBe('');
-    expect(onOpen).not.toHaveBeenCalled();
+    expect(screen.queryByText('显示剧透内容')).toBeNull();
+    fireEvent.click(container.querySelector('img')!);
+    expect(onOpen).toHaveBeenCalled();
+  });
+
+  it('opens a spoiler video on the first tap', () => {
+    const onOpen = vi.fn();
+    const msg = makeMessage({
+      kind: 'video',
+      extra: { spoiler: true },
+      media: [makeMedia({ id: 5, kind: 'video' }), makeMedia({ id: 6, role: 'thumb' })],
+    });
+    const { container } = renderWithStore(<Video msg={msg} onOpen={onOpen} />);
+    expect(container.querySelector('img')!.className).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: '播放视频' }));
+    expect(onOpen).toHaveBeenCalled();
   });
 });
 

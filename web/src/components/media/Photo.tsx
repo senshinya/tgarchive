@@ -1,4 +1,3 @@
-import { useState } from 'preact/hooks';
 import { mediaUrl } from '../../api/client';
 import type { Message } from '../../api/types';
 import { fitMedia } from '../../lib/album';
@@ -15,9 +14,7 @@ interface Props {
 
 export function Photo({ msg, onOpen, fill }: Props) {
   const main = mainMedia(msg);
-  const [revealed, setRevealed] = useState(false);
   if (!main) return null;
-  const spoiler = msg.extra?.spoiler === true && !revealed;
   const size = fitMedia({ width: main.width, height: main.height });
   const style = fill ? undefined : { width: `${size.width}px`, aspectRatio: `${size.width} / ${size.height}` };
   return (
@@ -28,16 +25,10 @@ export function Photo({ msg, onOpen, fill }: Props) {
           alt=""
           loading="lazy"
           decoding="async"
-          class={spoiler ? 'media-spoiler-blur' : ''}
-          onClick={() => (spoiler ? setRevealed(true) : onOpen())}
+          onClick={onOpen}
         />
       ) : (
         <MediaStatus msg={msg} media={main} thumb={readyThumb(msg)} />
-      )}
-      {spoiler && main.state === 'done' && (
-        <button type="button" class="media-spoiler" onClick={() => setRevealed(true)}>
-          显示剧透内容
-        </button>
       )}
     </div>
   );

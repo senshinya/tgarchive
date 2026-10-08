@@ -35,7 +35,6 @@ function MediaTile({ msg, convKey }: { msg: Message; convKey: number }) {
   const thumb = readyThumb(msg);
   if (!main) return null;
   const done = main.state === 'done';
-  const spoiler = msg.extra?.spoiler === true;
   const src = main.kind === 'photo' && done ? mediaUrl(main.id) : thumb ? mediaUrl(thumb.id) : null;
   return (
     <button
@@ -48,9 +47,9 @@ function MediaTile({ msg, convKey }: { msg: Message; convKey: number }) {
       }}
     >
       {src ? (
-        <img src={src} alt="" loading="lazy" decoding="async" class={spoiler ? 'media-spoiler-blur' : ''} />
+        <img src={src} alt="" loading="lazy" decoding="async" />
       ) : done ? (
-        <video src={`${playUrl(main.id, main.compat_codec)}#t=0.1`} preload="metadata" muted playsInline class={spoiler ? 'media-spoiler-blur' : ''} />
+        <video src={`${playUrl(main.id, main.compat_codec)}#t=0.1`} preload="metadata" muted playsInline />
       ) : (
         <span class="SharedMedia-tile-state">{main.state === 'pending' ? '下载中' : '不可用'}</span>
       )}

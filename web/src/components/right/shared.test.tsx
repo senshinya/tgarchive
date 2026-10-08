@@ -82,13 +82,13 @@ describe('SharedMedia', () => {
     expect(store.sharedMediaOpen.value).toBe(false);
   });
 
-  it('blurs spoiler photos in the grid instead of showing them outright', async () => {
+  it('shows spoiler photos in the grid outright', async () => {
     const api = fakeApi({
       chatMedia: vi.fn(async () => [makeMessage({ id: 3, kind: 'photo', date: oct, extra: { spoiler: true }, media: [makeMedia({ id: 30 })] })]),
     });
     const { container } = renderWithStore(<SharedMedia chatId={10} />, api);
     await waitFor(() => expect(container.querySelector('.SharedMedia-tile img')).toBeTruthy());
-    expect(container.querySelector('.SharedMedia-tile img')!.className).toBe('media-spoiler-blur');
+    expect(container.querySelector('.SharedMedia-tile img')!.className).toBe('');
   });
 });
 
