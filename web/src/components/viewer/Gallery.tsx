@@ -9,6 +9,7 @@ import { silent } from '../../lib/silent';
 import { playUrl } from '../media/util';
 import type { ViewerItem } from '../../state/store';
 import { createVideoSlide, onPlayerControl, type VideoSlide } from './videoSlide';
+import { NARROW, slidePadding, videoSlideSize } from './viewerLayout';
 import { viewerKeyAction } from './viewerKeys';
 import { ViewerOverlay } from './ViewerOverlay';
 
@@ -30,11 +31,22 @@ const FALLBACK_W = 1280;
 const FALLBACK_H = 720;
 const MAX_ZOOM = 4;
 const ZOOM_FACTOR = 1.5;
-const HEADER_H = 56;
-const THUMBS_H = 64;
-const NARROW = 600;
+
+const viewport = () => ({ x: window.innerWidth, y: window.innerHeight });
 
 function slideOf(it: ViewerItem): SlideData {
+  if (it.kind !== 'photo') {
+    const { width, height } = videoSlideSize(viewport());
+    return {
+      width,
+      height,
+      src: mediaUrl(it.mediaId),
+      msrc: it.thumbId ? mediaUrl(it.thumbId) : undefined,
+      type: 'video',
+      item: it,
+      sized: true,
+    };
+  }
   const w = it.width && it.width > 0 ? it.width : FALLBACK_W;
   const h = it.height && it.height > 0 ? it.height : FALLBACK_H;
   return {
@@ -42,7 +54,7 @@ function slideOf(it: ViewerItem): SlideData {
     height: h,
     src: mediaUrl(it.mediaId),
     msrc: it.thumbId ? mediaUrl(it.thumbId) : undefined,
-    type: it.kind === 'photo' ? 'image' : 'video',
+    type: 'image',
     item: it,
     sized: !!(it.width && it.height),
   };
@@ -65,8 +77,9 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
     const videos = new Map<number, VideoSlide>(); // slide index → player
     let tearingDown = false;
 
+    const slides = items.map(slideOf);
     const p = new PhotoSwipe({
-      dataSource: items.map(slideOf),
+      dataSource: slides,
       appendToEl: container,
       index: start,
       bgOpacity: window.innerWidth <= NARROW ? 1 : 0.9, // phones: solid black, as Telegram
@@ -91,10 +104,7 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
       arrowPrev: false,
       arrowNext: false,
       errorMsg: '无法加载',
-      // Desktop keeps the media clear of the header and the thumbnail strip; phones go edge to
-      // edge with the controls floating over it, as Telegram does.
-      paddingFn: (viewport) =>
-        viewport.x <= NARROW ? { top: 0, bottom: 0, left: 0, right: 0 } : { top: HEADER_H, bottom: multi ? THUMBS_H + 8 : 16, left: 64, right: 64 },
+      paddingFn: (size, data) => slidePadding(size, data.type, multi),
     });
     first.current = false;
 
@@ -146,6 +156,18 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
     };
     p.on('loadComplete', ({ content, slide }) => fit(content, slide));
     p.on('contentAppend', ({ content }) => fit(content, content.slide));
+    // Video slides follow the viewport (rotating a phone, resizing the window).
+    p.on('beforeResize', () => {
+      const { width, height } = videoSlideSize(viewport());
+      for (const d of slides) {
+        if (d.type === 'video') Object.assign(d, { width, height });
+      }
+      for (const h of p.mainScroll.itemHolders) {
+        if (h.slide?.data.type !== 'video') continue;
+        h.slide.width = h.slide.content.width = width;
+        h.slide.height = h.slide.content.height = height;
+      }
+    });
 
     // Gestures on a video's own controls (scrubbing, volume, menus) are not swipes, and taps on
     // the player belong to Vidstack (play/pause, show controls, double-tap seek).
