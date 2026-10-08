@@ -57,14 +57,21 @@ func TestRecentWatchPosts(t *testing.T) {
 		t.Fatalf("unknown channel = %v", watchPostIDs(got))
 	}
 
-	if err := s.SetPostStats(ctx, got[0].MessageID, `{"views":9}`); err != nil {
-		t.Fatal(err)
+	if ok, err := s.SetPostStats(ctx, got[0].MessageID, got[0].Stats, `{"views":9}`); !ok || err != nil {
+		t.Fatalf("SetPostStats = %v %v", ok, err)
 	}
 	if v, _ := s.GetMessageView(ctx, got[0].MessageID); string(v.Stats) != `{"views":9}` {
 		t.Fatalf("stats after SetPostStats = %s", v.Stats)
 	}
-	if err := s.SetPostStats(ctx, 99999, `{}`); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("SetPostStats on a missing message: %v", err)
+	// Stats written meanwhile (a new hit re-archived the post) are not overwritten.
+	if ok, err := s.SetPostStats(ctx, got[0].MessageID, got[0].Stats, `{"views":10}`); ok || err != nil {
+		t.Fatalf("SetPostStats over newer stats = %v %v", ok, err)
+	}
+	if v, _ := s.GetMessageView(ctx, got[0].MessageID); string(v.Stats) != `{"views":9}` {
+		t.Fatalf("newer stats overwritten: %s", v.Stats)
+	}
+	if ok, err := s.SetPostStats(ctx, 99999, `{}`, `{}`); ok || err != nil {
+		t.Fatalf("SetPostStats on a missing message = %v %v", ok, err)
 	}
 }
 

@@ -22,9 +22,10 @@ afterAll(() => {
 const post = (id: number) => makeMessage({ id, chat_id: 50, text: `p${id}`, source: 'channel_watch' });
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => post(from + i));
 
-async function open(api: Api, chatId = 50) {
+async function open(api: Api, chatId = 50, before?: (store: ReturnType<typeof createStore>) => Promise<void> | void) {
   const store = createStore(api, { chatsReloadDelay: 0 });
   await store.loadChats();
+  await before?.(store);
   const r = render(
     <StoreContext.Provider value={store}>
       <MessageList chatId={chatId} />
@@ -73,6 +74,7 @@ describe('opening a channel with unread posts', () => {
     const { container } = await open(api);
     await screen.findByText('p123');
     expect(api.messages).toHaveBeenCalledWith(50, 0, 50);
+    expect(vi.mocked(api.messages).mock.calls.some((c) => c[3]?.around)).toBe(false);
     expect(container.querySelector('.unread-divider')).toBeNull();
   });
 
@@ -86,6 +88,48 @@ describe('opening a channel with unread posts', () => {
     expect(api.messages).toHaveBeenCalledWith(50, 0, 50, { around: 1 });
     const first = container.querySelector('.unread-divider')?.nextElementSibling;
     expect(first?.getAttribute('data-message-id')).toBe('1');
+  });
+
+  it('lets a jump to a message already loaded win over the unread posts', async () => {
+    const scrolled: Element[] = [];
+    const spy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function (this: Element) {
+      scrolled.push(this);
+    });
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChannelChat({ last_read_id: 120, unread: 3 })]),
+      messages: pages(range(100, 123), range(74, 123)),
+    });
+    await open(api, 50, async (store) => {
+      await store.refreshLatest(50); // posts kept from an earlier visit
+      store.jumpTo.value = { key: 50, messageId: 110 };
+    });
+    await waitFor(() => expect(scrolled.some((el) => el.getAttribute('data-message-id') === '110')).toBe(true));
+    await act(async () => {});
+    expect(vi.mocked(api.messages).mock.calls.some((c) => c[3]?.around)).toBe(false);
+    expect(scrolled.some((el) => el.classList.contains('unread-divider'))).toBe(false);
+    spy.mockRestore();
+  });
+
+  it('marks nothing read while the unread posts load, and falls back to the usual list if they fail', async () => {
+    let fail: (e: Error) => void = () => {};
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChannelChat({ last_read_id: 120, unread: 3 })]),
+      messages: vi.fn(async (_c: number, _b = 0, _l = 50, page: PageParams = {}) =>
+        page.around ? new Promise<Message[]>((_, reject) => (fail = reject)) : range(74, 123),
+      ),
+    });
+    const { container } = await open(api, 50, (store) => store.refreshLatest(50));
+    const list = container.querySelector('.MessageList') as HTMLElement;
+    Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 1500 });
+    fireEvent.scroll(list);
+    expect(api.markRead).not.toHaveBeenCalled();
+    await act(async () => fail(new Error('boom')));
+    await screen.findByText('重试');
+    // Effects run after paint: keep scrolling until the list is back to normal.
+    await waitFor(() => {
+      fireEvent.scroll(list);
+      expect(api.markRead).toHaveBeenCalledWith(50, 123);
+    });
   });
 
   it('keeps private chats on the latest message', async () => {

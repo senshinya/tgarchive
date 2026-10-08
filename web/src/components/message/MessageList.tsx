@@ -78,16 +78,21 @@ export function MessageList({ chatId }: { chatId: number }) {
   useEffect(() => {
     // A jump asked before the conversation opened (search, favorites, downloads) loads the window
     // around its message instead of the latest page, unless that message is already loaded.
+    // A jump wins over the unread posts.
     const j = store.jumpTo.value;
-    if (j && j.key === chatId && !store.conv(chatId).items.some((m) => m.id === j.messageId)) {
-      unread.current.pending = false;
-      void store.loadAround(chatId, j.messageId);
-    } else if (unread.current.pending) {
+    if (j && j.key === chatId) unread.current.pending = false;
+    if (j && j.key === chatId && !store.conv(chatId).items.some((m) => m.id === j.messageId)) void store.loadAround(chatId, j.messageId);
+    else if (unread.current.pending) {
       // Nothing read yet: the window around the first post.
       void store.loadAround(chatId, Math.max(readBefore, 1));
       unread.current.started = true;
     } else void store.refreshLatest(chatId);
   }, [chatId]);
+
+  // The unread posts failing to load leave the list as it is, working as usual.
+  useEffect(() => {
+    if (conv.error && unread.current.started) unread.current.pending = false;
+  }, [conv.error]);
 
   // Once a channel's posts are in, their counters are refreshed (a watch only keeps refreshing
   // them for a week); the new numbers arrive as message.updated.
@@ -172,6 +177,7 @@ export function MessageList({ chatId }: { chatId: number }) {
   // A channel's newest message in view marks it read (the left column's badge).
   const readUpTo = () => {
     const c = store.conv(chatId);
+    if (unread.current.pending) return; // what is shown is not yet where the reading resumes
     if (chatId > 0 && snap.current.atBottom && !c.hasNewer && c.items.length) store.markRead(chatId, c.items[c.items.length - 1].id);
   };
 

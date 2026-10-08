@@ -74,7 +74,13 @@ func (s *Store) ChatWatchPosts(ctx context.Context, chatID int64, ids []int64) (
 	return channel.Int64, posts, err
 }
 
-// SetPostStats replaces a message's stats_json.
-func (s *Store) SetPostStats(ctx context.Context, messageID int64, stats string) error {
-	return affected(s.db.ExecContext(ctx, "UPDATE messages SET stats_json = ? WHERE id = ?", stats, messageID))
+// SetPostStats replaces a message's stats_json if it is still old, reporting whether it did: stats
+// written since old was read (a new hit) are newer than a refresh based on old.
+func (s *Store) SetPostStats(ctx context.Context, messageID int64, old, stats string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, "UPDATE messages SET stats_json = ? WHERE id = ? AND stats_json = ?", stats, messageID, old)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }

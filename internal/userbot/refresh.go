@@ -3,7 +3,6 @@ package userbot
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log"
 	"strconv"
 	"time"
@@ -170,12 +169,11 @@ func (w *Watcher) refreshPosts(ctx context.Context, api *tg.Client, ch *tg.Chann
 			return err
 		}
 		for _, p := range g.posts {
-			if err := w.st.SetPostStats(ctx, p.MessageID, string(b)); errors.Is(err, store.ErrNotFound) {
-				continue
-			} else if err != nil {
+			ok, err := w.st.SetPostStats(ctx, p.MessageID, p.Stats, string(b))
+			if err != nil {
 				return err
 			}
-			if changed {
+			if ok && changed {
 				w.hub.Publish(events.Event{Type: "message.updated", Data: map[string]int64{"chat_id": p.ChatID, "message_id": p.MessageID}})
 			}
 		}
