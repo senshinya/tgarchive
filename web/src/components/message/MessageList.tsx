@@ -1,4 +1,5 @@
 import { ArrowDown, Copy, Download, Trash2 } from 'lucide-preact';
+import { Fragment } from 'preact';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { avatarUrl, errorMessage, mediaUrl } from '../../api/client';
 import type { Chat, Message } from '../../api/types';
@@ -18,6 +19,8 @@ import './message.scss';
 /** Load older history when the user scrolls within this many px of the top. */
 export const LOAD_OLDER_THRESHOLD = 400;
 const AT_BOTTOM_PX = 100;
+/** The most posts one open asks fresh counters for (the server's limit). */
+const REFRESH_POSTS = 100;
 const SHOW_DOWN_PX = 300;
 
 function download(href: string) {
@@ -61,14 +64,45 @@ export function MessageList({ chatId }: { chatId: number }) {
   const [confirm, setConfirm] = useState<Message | null>(null);
   const [tagging, setTagging] = useState<Message | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // A channel opened with unread posts shows them from the first one, below a divider that stays
+  // put for this visit: what was read when it opened, and whether that window is still loading
+  // (until then nothing scrolls and nothing is marked read).
+  const [readBefore] = useState(() => {
+    const chat = store.chats.value.find((c) => c.id === chatId);
+    return chat?.kind === 'channel' && chat.unread > 0 ? chat.last_read_id : -1;
+  });
+  const unread = useRef({ pending: readBefore >= 0, started: false });
+  const firstUnread = readBefore >= 0 ? conv.items.find((m) => m.id > readBefore)?.id : undefined;
+  const statsAsked = useRef(false);
 
   useEffect(() => {
     // A jump asked before the conversation opened (search, favorites, downloads) loads the window
     // around its message instead of the latest page, unless that message is already loaded.
+    // A jump wins over the unread posts.
     const j = store.jumpTo.value;
+    if (j && j.key === chatId) unread.current.pending = false;
     if (j && j.key === chatId && !store.conv(chatId).items.some((m) => m.id === j.messageId)) void store.loadAround(chatId, j.messageId);
-    else void store.refreshLatest(chatId);
+    else if (unread.current.pending) {
+      // Nothing read yet: the window around the first post.
+      void store.loadAround(chatId, Math.max(readBefore, 1));
+      unread.current.started = true;
+    } else void store.refreshLatest(chatId);
   }, [chatId]);
+
+  // The unread posts failing to load leave the list as it is, working as usual.
+  useEffect(() => {
+    if (conv.error && unread.current.started) unread.current.pending = false;
+  }, [conv.error]);
+
+  // Once a channel's posts are in, their counters are refreshed (a watch only keeps refreshing
+  // them for a week); the new numbers arrive as message.updated.
+  useEffect(() => {
+    if (statsAsked.current || unread.current.pending || !conv.loaded || conv.loading) return;
+    if (store.chats.value.find((c) => c.id === chatId)?.kind !== 'channel') return;
+    statsAsked.current = true;
+    const ids = conv.items.filter((m) => m.source === 'channel_watch').map((m) => m.id);
+    if (ids.length) void store.api.refreshPostStats(chatId, ids.slice(-REFRESH_POSTS)).catch(() => undefined);
+  }, [conv.loaded, conv.loading, conv.items]);
 
   const record = () => {
     const el = ref.current;
@@ -92,7 +126,13 @@ export function MessageList({ chatId }: { chatId: number }) {
     const first = conv.items[0]?.id ?? 0;
     const last = conv.items[conv.items.length - 1]?.id ?? 0;
     const s = snap.current;
-    if (s.lastId === 0) el.scrollTop = el.scrollHeight;
+    if (unread.current.pending) {
+      if (!unread.current.started || conv.loading) return;
+      unread.current.pending = false;
+      const divider = el.querySelector('.unread-divider');
+      if (divider) divider.scrollIntoView?.({ block: 'start' });
+      else el.scrollTop = el.scrollHeight;
+    } else if (s.lastId === 0) el.scrollTop = el.scrollHeight;
     else if (first < s.firstId && last === s.lastId) el.scrollTop = el.scrollHeight - s.height + s.top;
     // Following the bottom only while it is the latest: a window being extended stays put.
     else if (last > s.lastId && s.atBottom && !s.hasNewer) el.scrollTop = el.scrollHeight;
@@ -137,6 +177,7 @@ export function MessageList({ chatId }: { chatId: number }) {
   // A channel's newest message in view marks it read (the left column's badge).
   const readUpTo = () => {
     const c = store.conv(chatId);
+    if (unread.current.pending) return; // what is shown is not yet where the reading resumes
     if (chatId > 0 && snap.current.atBottom && !c.hasNewer && c.items.length) store.markRead(chatId, c.items[c.items.length - 1].id);
   };
 
@@ -252,14 +293,18 @@ export function MessageList({ chatId }: { chatId: number }) {
                       </div>
                     )}
                     {g.bubbles.map((b) => (
-                      <MessageBubble
-                        key={b.key}
-                        bubble={b}
-                        sender={sender}
-                        convKey={chatId}
-                        showName={merged && b.first}
-                        onMenu={(x, y, msg) => setMenu({ x, y, msg })}
-                      />
+                      <Fragment key={b.key}>
+                        {firstUnread !== undefined && (b.kind === 'album' ? b.msgs : [b.msg]).some((m) => m.id === firstUnread) && (
+                          <div class="unread-divider">以下为新消息</div>
+                        )}
+                        <MessageBubble
+                          bubble={b}
+                          sender={sender}
+                          convKey={chatId}
+                          showName={merged && b.first}
+                          onMenu={(x, y, msg) => setMenu({ x, y, msg })}
+                        />
+                      </Fragment>
                     ))}
                   </div>
                 );

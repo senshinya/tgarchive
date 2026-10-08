@@ -84,6 +84,23 @@
   }
 }
 
+// Where the unread posts begin (Telegram's "Unread messages" bar). Scrolled to on open, clear of
+// the header and the day's sticky date.
+.unread-divider {
+  scroll-margin-top: calc(var(--middle-header-height) + 3.5rem);
+  margin: 0.75rem 0;
+  padding: 0.3125rem 0;
+  border-radius: var(--border-radius-messages);
+  text-align: center;
+  font-size: calc(var(--message-text-size) - 1px);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-background) 78%, transparent);
+  box-shadow: 0 1px 2px var(--color-default-shadow);
+  user-select: none;
+}
+
 .message-group.with-avatar {
   position: relative;
   padding-left: 2.625rem;

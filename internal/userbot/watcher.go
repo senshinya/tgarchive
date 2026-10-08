@@ -74,6 +74,8 @@ type PostStats struct {
 	Forwards  int            `json:"forwards"`
 	Replies   int            `json:"replies"`
 	Hit       *HitInfo       `json:"hit,omitempty"`
+	// RefreshedAt is when the counters were last re-read after the hit (0: not since).
+	RefreshedAt int64 `json:"refreshed_at,omitempty"`
 }
 
 type HitInfo struct {
@@ -138,12 +140,14 @@ type Watcher struct {
 	photoMiss  map[int64]time.Time // channels whose photo could not be fetched recently
 	photoSlots chan struct{}
 	backfills  map[int64]*BackfillState // latest manual backfill per watch
+	opened     map[int64]time.Time      // when a conversation's posts were last refreshed on open
 }
 
 func NewWatcher(api API, st *store.Store, hub *events.Hub, n notify.Notifier, wakeDL func(), avatarDir string) *Watcher {
 	return &Watcher{api: api, st: st, hub: hub, notifier: n, wakeDL: wakeDL, avatarDir: avatarDir, wake: make(chan struct{}, 1),
 		Now: time.Now, MaxFlood: 300 * time.Second, DialogsTTL: 30 * time.Minute, RecentTTL: time.Minute,
-		recent: map[int64]*recent{}, photoMiss: map[int64]time.Time{}, photoSlots: make(chan struct{}, 2), backfills: map[int64]*BackfillState{}}
+		recent: map[int64]*recent{}, photoMiss: map[int64]time.Time{}, photoSlots: make(chan struct{}, 2), backfills: map[int64]*BackfillState{},
+		opened: map[int64]time.Time{}}
 }
 
 // Wake makes Run poll now (a watch was added or changed).
@@ -304,6 +308,9 @@ func (w *Watcher) poll(ctx context.Context, api *tg.Client, wv store.WatchView, 
 			return true, err
 		}
 		_, err := w.judge(ctx, api, wv, ch, cond)
+		if err == nil {
+			err = w.refreshRecent(ctx, api, ch)
+		}
 		return true, err
 	}
 	posts, err := newPosts(ctx, api, in, int(max(wv.LastSeenID, 0)))
@@ -335,6 +342,9 @@ func (w *Watcher) poll(ctx context.Context, api *tg.Client, wv store.WatchView, 
 		changed = true
 	}
 	judged, err := w.judge(ctx, api, wv, ch, cond)
+	if err == nil {
+		err = w.refreshRecent(ctx, api, ch)
+	}
 	return changed || judged, err
 }
 
@@ -540,12 +550,10 @@ func reactionKey(r tg.ReactionClass) (key, emoji, custom string) {
 	return "", "", ""
 }
 
-// statsOf measures an album (or single post): counters at their maximum over its messages.
-func statsOf(msgs []*tg.Message, convs []*model.Message) watchcond.Stats {
+// countersOf measures an album (or single post): counters at their maximum over its messages.
+func countersOf(msgs []*tg.Message) watchcond.Stats {
 	st := watchcond.Stats{Reactions: map[string]int{}, Kinds: map[string]bool{}}
-	var texts []string
-	hasMedia := false
-	for i, m := range msgs {
+	for _, m := range msgs {
 		st.Views = max(st.Views, m.Views)
 		st.Forwards = max(st.Forwards, m.Forwards)
 		if r, ok := m.GetReplies(); ok {
@@ -561,6 +569,16 @@ func statsOf(msgs []*tg.Message, convs []*model.Message) watchcond.Stats {
 			total += rc.Count
 		}
 		st.Total = max(st.Total, total)
+	}
+	return st
+}
+
+// statsOf measures an album (or single post) for its condition: counters, text and media kinds.
+func statsOf(msgs []*tg.Message, convs []*model.Message) watchcond.Stats {
+	st := countersOf(msgs)
+	var texts []string
+	hasMedia := false
+	for i, m := range msgs {
 		if m.Message != "" {
 			texts = append(texts, m.Message)
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -26,6 +27,7 @@ type WatchService interface {
 	InitialLastSeen(ctx context.Context, id int64) (int64, error)
 	ChannelPhoto(ctx context.Context, id int64) (string, error)
 	Backfill(ctx context.Context, watchID int64, hours int) (*userbot.BackfillState, error)
+	RefreshPosts(ctx context.Context, chatID int64, ids []int64) error
 	BackfillState(watchID int64) *userbot.BackfillState
 	Wake()
 }
@@ -34,6 +36,7 @@ const (
 	// Long enough for a dialogs scan that waits out Telegram's short FLOOD_WAITs.
 	watchCallTimeout = 90 * time.Second
 	maxWindow        = 1440
+	maxRefreshPosts  = 100
 )
 
 func (s *Server) watchRoutes(mux *http.ServeMux) {
@@ -52,6 +55,30 @@ func (s *Server) watchRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/watches/{id}/backfill", s.backfillWatch)
 	mux.HandleFunc("GET /api/admin/watch-settings", s.getWatchSettings)
 	mux.HandleFunc("PUT /api/admin/watch-settings", s.putWatchSettings)
+	mux.HandleFunc("POST /api/chats/{id}/refresh-stats", s.refreshPostStats)
+}
+
+// refreshPostStats asks the watcher to re-read the counters of the archived posts a conversation
+// shows. It answers at once; the new numbers arrive as message.updated events.
+func (s *Server) refreshPostStats(w http.ResponseWriter, r *http.Request) {
+	chatID, ok := pathID(r, "id")
+	var req struct {
+		MessageIDs []int64 `json:"message_ids"`
+	}
+	if !ok || json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&req) != nil ||
+		len(req.MessageIDs) == 0 || len(req.MessageIDs) > maxRefreshPosts {
+		writeErr(w, http.StatusBadRequest, "bad chat id or message_ids")
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), watchCallTimeout)
+		defer cancel()
+		err := s.Watcher.RefreshPosts(ctx, chatID, req.MessageIDs)
+		if err != nil && !errors.Is(err, store.ErrNotFound) && !errors.Is(err, userbot.ErrNotReady) {
+			log.Printf("refresh post stats of chat %d: %v", chatID, err)
+		}
+	}()
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // watchErr maps watcher errors: the account not being usable is a conflict, everything else the

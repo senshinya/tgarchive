@@ -4,9 +4,11 @@
 
 消息整条就是一个 Telegraph 文章链接（`telegra.ph` / `graph.org`）时，文章正文与其中的图片、视频会离线存档，WebUI 在该消息下显示文章卡片，点开为仿 Instant View 的阅读页。设计见 [`docs/superpowers/specs/2026-10-05-telegraph-archive-design.md`](docs/superpowers/specs/2026-10-05-telegraph-archive-design.md)。文章图片从原站直接下载，容器需要能访问外网。
 
-存档可全文搜索（正文、说明文字、文件名与 Telegraph 正文，中文按子串匹配，可限定单个会话，结果可跳到任意早的消息）；消息可收藏并打标签，在「收藏」视图按标签筛选；监听频道的会话在左栏显示未读数。设计见 [`docs/superpowers/specs/2026-10-07-search-favorites-unread-design.md`](docs/superpowers/specs/2026-10-07-search-favorites-unread-design.md)。
+存档可全文搜索（正文、说明文字、文件名与 Telegraph 正文，中文按子串匹配，可限定单个会话，结果可跳到任意早的消息）；消息可收藏并打标签，在「收藏」视图按标签筛选；监听频道的会话在左栏显示未读数，打开时停在第一条未读消息（上方有「以下为新消息」分隔线），滚到底才算已读。设计见 [`docs/superpowers/specs/2026-10-07-search-favorites-unread-design.md`](docs/superpowers/specs/2026-10-07-search-favorites-unread-design.md)。
 
 「媒体墙」把所有会话的图片、视频与 GIF 按月份排成等高行，可按类型和来源（私聊 / 频道）筛选，点开即在大图浏览器里翻遍整面墙；「统计」汇总消息、媒体与磁盘占用，并给出一年活跃热力图、累计增长、会话排行、媒体构成与各频道监听的命中趋势和命中率（命中率自 v0.8.0 起统计）。设计见 [`docs/superpowers/specs/2026-10-07-media-wall-stats-design.md`](docs/superpowers/specs/2026-10-07-media-wall-stats-design.md)。
+
+监听命中存档的帖子会继续刷新 reactions、浏览、转发与评论数：命中后 2 小时内每 10 分钟、6 小时内每 30 分钟、24 小时内每 2 小时，之后在第 3 天和第 7 天各刷新一次；打开频道会话时也会刷新当前显示的帖子（同一会话 5 分钟内最多一次）。
 
 单个 Go 二进制内嵌 Preact 前端，并以子进程托管官方 [telegram-bot-api](https://github.com/tdlib/telegram-bot-api) 本地服务器（`--local`，只监听 127.0.0.1:8081）。
 
