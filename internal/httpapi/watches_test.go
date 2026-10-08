@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,6 +32,7 @@ type fakeWatcher struct {
 	photos    int
 	avatarDir string
 	backfill  *userbot.BackfillState
+	refreshed chan []int64 // chat id followed by the message ids, per RefreshPosts call
 }
 
 var newsInfo = userbot.ChannelInfo{ChannelID: 500, Title: "News", Username: "news", Participants: 10}
@@ -110,6 +112,11 @@ func (f *fakeWatcher) BackfillState(int64) *userbot.BackfillState {
 	return f.backfill
 }
 
+func (f *fakeWatcher) RefreshPosts(_ context.Context, chatID int64, ids []int64) error {
+	f.refreshed <- append([]int64{chatID}, ids...)
+	return nil
+}
+
 func (f *fakeWatcher) Wake() {
 	f.mu.Lock()
 	f.wakes++
@@ -131,7 +138,7 @@ func newWatchEnv(t *testing.T) *watchEnv {
 	t.Cleanup(func() { st.Close() })
 	box, _ := seal.New(bytes.Repeat([]byte{1}, 32))
 	dir := t.TempDir()
-	fw := &fakeWatcher{ready: true, avatarDir: dir}
+	fw := &fakeWatcher{ready: true, avatarDir: dir, refreshed: make(chan []int64, 4)}
 	srv := &Server{Cfg: &config.Config{RequireForwardAuth: true}, Store: st, Box: box, Watcher: fw, Hub: events.NewHub(),
 		AvatarDir: dir, MediaDir: t.TempDir(), Now: func() time.Time { return time.Unix(1000, 0) }}
 	return &watchEnv{h: srv.Handler(), st: st, fw: fw}
@@ -338,5 +345,37 @@ func TestWatchActivityFields(t *testing.T) {
 	if one["last_polled_at"] != float64(990) || one["hits_24h"] != float64(1) || one["hits_7d"] != float64(1) || one["last_hit_at"] != float64(900) ||
 		one["updated_at"] == nil {
 		t.Fatalf("watch = %v", one)
+	}
+}
+
+func TestRefreshPostStats(t *testing.T) {
+	e := newWatchEnv(t)
+	if w := call(e.h, "POST", "/api/chats/7/refresh-stats", map[string]any{"message_ids": []int64{3, 4}}); w.Code != 202 {
+		t.Fatalf("refresh = %d %s", w.Code, w.Body)
+	}
+	select {
+	case got := <-e.fw.refreshed:
+		if fmt.Sprint(got) != "[7 3 4]" {
+			t.Fatalf("RefreshPosts got %v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RefreshPosts was not called")
+	}
+	many := make([]int64, 101)
+	for i := range many {
+		many[i] = int64(i + 1)
+	}
+	for _, c := range []struct {
+		path string
+		body any
+	}{
+		{"/api/chats/abc/refresh-stats", map[string]any{"message_ids": []int64{1}}},
+		{"/api/chats/7/refresh-stats", map[string]any{"message_ids": []int64{}}},
+		{"/api/chats/7/refresh-stats", map[string]any{"message_ids": many}},
+		{"/api/chats/7/refresh-stats", "nope"},
+	} {
+		if w := call(e.h, "POST", c.path, c.body); w.Code != 400 {
+			t.Fatalf("%s %v = %d", c.path, c.body, w.Code)
+		}
 	}
 }
