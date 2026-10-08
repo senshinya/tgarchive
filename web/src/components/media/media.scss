@@ -19,23 +19,6 @@
   }
 }
 
-.media-spoiler-blur {
-  filter: blur(20px);
-  transform: scale(1.1);
-}
-
-.media-spoiler {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-size: 0.875rem;
-  font-weight: var(--font-weight-medium);
-  background: rgba(0, 0, 0, 0.2);
-}
-
 .media-play {
   position: absolute;
   top: 50%;

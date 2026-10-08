@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, Download, Film, X, ZoomIn, ZoomOut } from 'lucide-preact';
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { mediaUrl } from '../../api/client';
 import { formatFullDate } from '../../lib/format';
 import type { ViewerItem } from '../../state/store';
@@ -48,9 +48,28 @@ export function Thumbs({ items, index, onPick }: Pick<Props, 'items' | 'index' |
   );
 }
 
+/** Publishes the caption-and-strip block's height as --viewer-foot on the gallery root, where a
+ * video player's controls read it to sit just above the block (viewer.scss). */
+function useFootHeight() {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const root = el?.closest<HTMLElement>('.pswp');
+    if (!el || !root) return;
+    const publish = () => root.style.setProperty('--viewer-foot', `${el.offsetHeight}px`);
+    publish();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(publish);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return ref;
+}
+
 /** Header (title, date, position, zoom, download, close), caption and thumbnail strip drawn over
  * the gallery. Fades with PhotoSwipe's UI visibility (see viewer.scss). */
 export function ViewerOverlay({ items, index, title, onClose, onPick, onZoom }: Props) {
+  const foot = useFootHeight();
   const item = items[index];
   if (!item) return null;
   return (
@@ -92,7 +111,7 @@ export function ViewerOverlay({ items, index, title, onClose, onPick, onZoom }: 
           <ChevronRight size={ARROW} />
         </button>
       )}
-      <div class="ViewerOverlay-foot">
+      <div class="ViewerOverlay-foot" ref={foot}>
         {item.text && (
           <div class="MediaViewer-caption">
             <RichText text={item.text} entities={item.entities} />

@@ -107,6 +107,12 @@ describe('MediaWall', () => {
     expect(srcs).toEqual(['/media/902', '/media/101']);
   });
 
+  it('shows spoiler media outright', async () => {
+    const r = setup(vi.fn(async () => [photo(1, { extra: { spoiler: true } })]));
+    await waitFor(() => expect(tiles(r.container)).toHaveLength(1));
+    expect(r.container.querySelector('.MediaWall-tile img')!.className).toBe('');
+  });
+
   it('says so when there is nothing to show', async () => {
     setup(vi.fn(async () => []));
     expect(await screen.findByText('暂无媒体')).toBeTruthy();

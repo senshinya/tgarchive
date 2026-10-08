@@ -1,5 +1,4 @@
 import { Play } from 'lucide-preact';
-import { useState } from 'preact/hooks';
 import { mediaUrl } from '../../api/client';
 import type { Message } from '../../api/types';
 import { fitMedia } from '../../lib/album';
@@ -17,10 +16,8 @@ interface Props {
 /** Video bubble: thumbnail + play button + duration badge; plays in the media viewer. */
 export function Video({ msg, onOpen, fill }: Props) {
   const main = mainMedia(msg);
-  const [revealed, setRevealed] = useState(false);
   if (!main) return null;
   const thumb = readyThumb(msg);
-  const spoiler = msg.extra?.spoiler === true && !revealed;
   const size = fitMedia({ width: main.width, height: main.height });
   const style = fill ? undefined : { width: `${size.width}px`, aspectRatio: `${size.width} / ${size.height}` };
   const done = main.state === 'done';
@@ -34,15 +31,15 @@ export function Video({ msg, onOpen, fill }: Props) {
   return (
     <div class={`media-inner Video${fill ? ' fill' : ''}`} style={style}>
       {thumb ? (
-        <img src={mediaUrl(thumb.id)} alt="" loading="lazy" class={spoiler ? 'media-spoiler-blur' : ''} />
+        <img src={mediaUrl(thumb.id)} alt="" loading="lazy" />
       ) : (
-        <video src={`${playUrl(main.id, main.compat_codec)}#t=0.1`} preload="metadata" muted playsInline class={spoiler ? 'media-spoiler-blur' : ''} />
+        <video src={`${playUrl(main.id, main.compat_codec)}#t=0.1`} preload="metadata" muted playsInline />
       )}
       <button
         type="button"
         class="media-play"
         aria-label="播放视频"
-        onClick={() => (spoiler ? setRevealed(true) : onOpen())}
+        onClick={onOpen}
       >
         <Play size={28} fill="currentColor" />
       </button>

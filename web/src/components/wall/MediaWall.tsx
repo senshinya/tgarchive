@@ -35,7 +35,6 @@ function Tile({ msg, width, height, onOpen }: { msg: Message; width: number; hei
   const main = mainMedia(msg)!;
   const thumb = readyThumb(msg);
   const done = main.state === 'done';
-  const spoiler = msg.extra?.spoiler === true;
   // A wall page holds dozens of tiles a couple of hundred pixels tall: the thumbnail (320px) is
   // enough and a fraction of the original's weight.
   const src = thumb ? mediaUrl(thumb.id) : main.kind === 'photo' && done ? mediaUrl(main.id) : null;
@@ -49,14 +48,13 @@ function Tile({ msg, width, height, onOpen }: { msg: Message; width: number; hei
       onClick={onOpen}
     >
       {src ? (
-        <img src={src} alt="" loading="lazy" decoding="async" class={spoiler ? 'media-spoiler-blur' : ''} />
+        <img src={src} alt="" loading="lazy" decoding="async" />
       ) : done ? (
         <video
           src={`${playUrl(main.id, main.compat_codec)}#t=0.1`}
           preload="metadata"
           muted
           playsInline
-          class={spoiler ? 'media-spoiler-blur' : ''}
         />
       ) : (
         <span class="MediaWall-tile-state">{main.state === 'pending' ? '下载中' : '不可用'}</span>

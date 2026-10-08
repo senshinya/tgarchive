@@ -49,4 +49,31 @@ describe('ViewerOverlay', () => {
     expect(screen.queryByRole('button', { name: '放大' })).toBeNull();
     expect(screen.getByRole('link', { name: '下载' }).getAttribute('href')).toBe('/media/1?download=1');
   });
+
+  it('tells the video controls how tall the caption and strip are, so they sit above them', () => {
+    const observers: (() => void)[] = [];
+    const saved = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(cb: () => void) {
+        observers.push(cb);
+      }
+      observe() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    const root = document.createElement('div');
+    root.className = 'pswp';
+    document.body.appendChild(root);
+    render(
+      <ViewerOverlay items={[item(1, 'video', { text: 'caption' }), item(2)]} index={0} title="A" onPick={vi.fn()} onClose={vi.fn()} />,
+      {
+        container: root,
+      },
+    );
+    const foot = root.querySelector('.ViewerOverlay-foot') as HTMLElement;
+    Object.defineProperty(foot, 'offsetHeight', { configurable: true, value: 120 });
+    observers.forEach((cb) => cb());
+    expect(root.style.getPropertyValue('--viewer-foot')).toBe('120px');
+    globalThis.ResizeObserver = saved;
+    root.remove();
+  });
 });
