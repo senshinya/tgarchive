@@ -36,7 +36,7 @@ const viewport = () => ({ x: window.innerWidth, y: window.innerHeight });
 
 function slideOf(it: ViewerItem): SlideData {
   if (it.kind !== 'photo') {
-    const { width, height } = videoSlideSize(viewport());
+    const { width, height } = videoSlideSize(viewport(), it.width ?? 0, it.height ?? 0);
     return {
       width,
       height,
@@ -65,6 +65,8 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
   const [index, setIndex] = useState(() => Math.max(0, items.findIndex((it) => it.mediaId === mediaId)));
   const current = useRef(mediaId);
   const first = useRef(true);
+  // The caption-and-strip block's height: desktop videos are laid out clear of it.
+  const foot = useRef(0);
   const onClosedRef = useRef(onClosed);
   onClosedRef.current = onClosed;
 
@@ -104,7 +106,7 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
       arrowPrev: false,
       arrowNext: false,
       errorMsg: '无法加载',
-      paddingFn: (size, data) => slidePadding(size, data.type, multi),
+      paddingFn: (size, data) => slidePadding(size, data.type, multi, foot.current),
     });
     first.current = false;
 
@@ -156,14 +158,18 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
     };
     p.on('loadComplete', ({ content, slide }) => fit(content, slide));
     p.on('contentAppend', ({ content }) => fit(content, content.slide));
-    // Video slides follow the viewport (rotating a phone, resizing the window).
+    // Video slides follow the viewport across the phone breakpoint (rotating, resizing).
     p.on('beforeResize', () => {
-      const { width, height } = videoSlideSize(viewport());
+      const sizeOf = (d: SlideData) => {
+        const it = d.item as ViewerItem;
+        return videoSlideSize(viewport(), it.width ?? 0, it.height ?? 0);
+      };
       for (const d of slides) {
-        if (d.type === 'video') Object.assign(d, { width, height });
+        if (d.type === 'video') Object.assign(d, sizeOf(d));
       }
       for (const h of p.mainScroll.itemHolders) {
         if (h.slide?.data.type !== 'video') continue;
+        const { width, height } = sizeOf(h.slide.data);
         h.slide.width = h.slide.content.width = width;
         h.slide.height = h.slide.content.height = height;
       }
@@ -233,6 +239,11 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
       onClose={() => closeGallery(pswp)}
       onPick={(i) => pswp.goTo(i)}
       onZoom={(dir) => zoom(pswp, dir)}
+      onFoot={(h) => {
+        if (h === foot.current) return;
+        foot.current = h;
+        if (items[pswp.currIndex]?.kind !== 'photo' && window.innerWidth > NARROW) pswp.updateSize(true);
+      }}
     />,
     pswp.element,
   );

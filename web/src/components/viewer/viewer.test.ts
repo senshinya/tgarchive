@@ -59,6 +59,7 @@ describe('sourceType', () => {
 
   it('keeps the caption and strip at the bottom for videos too, lifting the player controls above them', () => {
     expect(bodyOf('.ViewerOverlay-foot {')).not.toContain('bottom: 4.5rem');
-    expect(css).toMatch(/\.vds-controls\s*\{[^}]*padding-bottom:\s*calc\(var\(--viewer-foot/);
+    // Phones only: on desktop the slide itself stays clear of the caption.
+    expect(css).toMatch(/@media \(max-width:\s*600px\)\s*\{\s*\.vds-controls\s*\{[^}]*padding-bottom:\s*calc\(var\(--viewer-foot/);
   });
 });
