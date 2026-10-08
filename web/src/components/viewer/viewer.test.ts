@@ -59,6 +59,6 @@ describe('sourceType', () => {
 
   it('keeps the caption and strip at the bottom for videos too, lifting the player controls above them', () => {
     expect(bodyOf('.ViewerOverlay-foot {')).not.toContain('bottom: 4.5rem');
-    expect(css).toMatch(/\.vds-controls\s*\{[^}]*padding-bottom:\s*var\(--viewer-foot/);
+    expect(css).toMatch(/\.vds-controls\s*\{[^}]*padding-bottom:\s*calc\(var\(--viewer-foot/);
   });
 });

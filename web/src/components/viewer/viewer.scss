@@ -243,7 +243,11 @@
     background: transparent;
   }
 
+  // The player spans the screen: the picture is letterboxed inside it (Vidstack sizes the
+  // <video> by its width only, which overflows the player for a portrait video).
   media-player video {
+    width: 100%;
+    height: 100%;
     object-fit: contain;
   }
 
@@ -251,7 +255,7 @@
   // the progress bar and buttons sit above them (--viewer-foot, set by ViewerOverlay), never under
   // the caption where they could not be dragged.
   .vds-controls {
-    padding-bottom: var(--viewer-foot, 0px);
+    padding-bottom: calc(var(--viewer-foot, 0px) + 0.5rem);
   }
 
   // The spinner's svg is inline by default: the line box adds a descender gap under it, so
