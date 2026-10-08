@@ -59,9 +59,10 @@ export function playUrl(id: number, compatCodec?: string): string {
   return compatCodec && !canPlayCodec(compatCodec) ? `/media/${id}?compat=1` : mediaUrl(id);
 }
 
-/** The source type to hand the player: Vidstack picks a provider by canPlayType, and Chrome
- * answers "" for video/quicktime although it plays a QuickTime file's H.264/HEVC as MP4 (iPhone
- * recordings arrive as .mov). Anything that is not a video type is tried as MP4 too. */
+/** The source type to hand the player. Vidstack gives a source its video provider only by the
+ * URL's extension (ours have none) or a type on its list, which lacks video/quicktime, so a .mov
+ * (iPhone recordings) got no player at all; every browser that plays the codec plays the file
+ * as MP4. Anything that is not a video type is tried as MP4 too. */
 export function sourceType(mime: string): string {
   if (!mime.startsWith('video/') || mime === 'video/quicktime') return 'video/mp4';
   return mime;
