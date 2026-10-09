@@ -1,7 +1,7 @@
 // Which viewer action a key press means (spec §3.4). On a video, plain arrows, space, J/K/L,
 // M, F, < > and the volume keys belong to Vidstack's own shortcuts, so they map to nothing here.
 
-export type ViewerKeyAction = 'prev' | 'next' | 'close' | 'zoomIn' | 'zoomOut' | null;
+export type ViewerKeyAction = 'prev' | 'next' | 'close' | 'zoomIn' | 'zoomOut' | 'rotateCw' | 'rotateCcw' | null;
 
 export interface KeyLike {
   key: string;
@@ -39,6 +39,10 @@ export function viewerKeyAction(e: KeyLike, kind: string): ViewerKeyAction {
     case '-':
     case '_':
       return kind === 'photo' ? 'zoomOut' : null;
+    case 'r':
+      return 'rotateCw';
+    case 'R':
+      return 'rotateCcw';
     default:
       return null;
   }

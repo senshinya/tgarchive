@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { slidePadding, videoSlideSize } from './viewerLayout';
+import { slidePadding, turn, turned, videoSlideSize } from './viewerLayout';
 
 const desktop = { x: 1280, y: 800 };
 const phone = { x: 390, y: 844 };
@@ -30,5 +30,19 @@ describe('videoSlideSize', () => {
   it('is the video on desktop', () => {
     expect(videoSlideSize(desktop, 480, 832)).toEqual({ width: 480, height: 832 });
     expect(videoSlideSize(desktop, 0, 0)).toEqual({ width: 1280, height: 720 });
+  });
+});
+
+describe('turn / turned', () => {
+  it('counts quarter turns both ways and wraps', () => {
+    expect(turn(0, 1)).toBe(1);
+    expect(turn(3, 1)).toBe(0);
+    expect(turn(0, -1)).toBe(3);
+  });
+
+  it('swaps width and height on odd turns only', () => {
+    expect(turned(1920, 1080, 1)).toEqual({ width: 1080, height: 1920 });
+    expect(turned(1920, 1080, 2)).toEqual({ width: 1920, height: 1080 });
+    expect(turned(1920, 1080, 3)).toEqual({ width: 1080, height: 1920 });
   });
 });

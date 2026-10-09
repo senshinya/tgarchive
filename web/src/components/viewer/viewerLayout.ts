@@ -28,3 +28,13 @@ export function videoSlideSize(viewport: Size, width: number, height: number) {
   if (viewport.x <= NARROW) return { width: viewport.x, height: viewport.y };
   return width > 0 && height > 0 ? { width, height } : FALLBACK;
 }
+
+/** Quarter turns (0–3) after rotating once clockwise (1) or counter-clockwise (-1). */
+export function turn(quarters: number, dir: 1 | -1) {
+  return (quarters + dir + 4) % 4;
+}
+
+/** A picture's width and height as shown after `quarters` quarter turns. */
+export function turned(width: number, height: number, quarters: number) {
+  return quarters % 2 ? { width: height, height: width } : { width, height };
+}
