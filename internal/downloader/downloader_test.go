@@ -3,6 +3,7 @@ package downloader
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -227,6 +228,63 @@ func TestStaleDownloadKeepsReplacementFile(t *testing.T) {
 	entries, _ := os.ReadDir(filepath.Dir(filepath.Join(f.mediaDir, got.Path)))
 	if len(entries) != 1 {
 		t.Fatalf("files left = %v, want only the replacement", entries)
+	}
+}
+
+// media.id is a plain INTEGER PRIMARY KEY: delete the newest row and the next insert takes its id.
+// A stale download finishing after that must leave the unrelated media now holding the id alone
+// (pending, no path) and drop its own file, so the new media is still downloaded in its turn.
+func TestStaleDownloadIgnoresReusedID(t *testing.T) {
+	f, res, stale := setup(t, 0)
+	d := f.newDL(0)
+	src := &stallSource{stall: stale.ID, started: make(chan struct{}), release: make(chan struct{})}
+	d.Register("bot", src)
+	staleDone := make(chan struct{})
+	go func() { d.Process(ctx, stale); close(staleDone) }()
+	<-src.started
+
+	if _, _, err := f.st.DeleteMessage(ctx, res.MessageID, 1); err != nil {
+		t.Fatal(err)
+	}
+	msg := &model.Message{TgMessageID: 2, Source: model.SourceBotUpdate, Date: 1, Kind: model.KindPhoto, RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`),
+		Media: []model.Media{{DedupeKey: "bot:new", SourceRef: "fid2", Kind: "photo", Role: model.RoleMain}}}
+	if _, err := f.st.Ingest(ctx, store.IngestInput{BotID: f.bot, Sender: model.Sender{TgUserID: 42}, Msg: msg, Now: 2}); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := f.st.GetMedia(ctx, stale.ID)
+	if err != nil || fresh.DedupeKey != "bot:new" {
+		t.Fatalf("media %d = %+v %v, want the new media reusing the id", stale.ID, fresh, err)
+	}
+
+	close(src.release)
+	<-staleDone
+	got, _ := f.st.GetMedia(ctx, fresh.ID)
+	if got.State != store.StatePending || got.Path != "" || got.Attempts != 0 {
+		t.Fatalf("new media after the stale download = %+v, want untouched", got)
+	}
+	if len(f.settled) != 0 {
+		t.Fatalf("settled = %v", f.settled)
+	}
+	dir := filepath.Join(f.mediaDir, "1", "2026", "10")
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("stale download left on disk: %v", entries)
+	}
+
+	d.Register("bot", &stallSource{}) // same id: the stall was meant for the old media only
+	d.Process(ctx, got)
+	got, _ = f.st.GetMedia(ctx, fresh.ID)
+	if got.State != store.StateDone {
+		t.Fatalf("new media = %+v", got)
+	}
+	b, err := os.ReadFile(filepath.Join(f.mediaDir, got.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("media %d", fresh.ID); string(b) != want {
+		t.Fatalf("file holds %q, want %q", b, want)
+	}
+	if !strings.Contains(got.Path, fmt.Sprintf("%x", sha1.Sum([]byte("bot:new")))) {
+		t.Fatalf("path = %q, want the new media's own file", got.Path)
 	}
 }
 

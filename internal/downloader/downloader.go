@@ -248,7 +248,7 @@ func (d *Downloader) Process(ctx context.Context, m *store.Media) {
 			log.Printf("downloader: hevc tag fix for media %d: %v", m.ID, err)
 		}
 	}
-	ok, err := d.st.MarkMediaDone(ctx, m.ID, rel, size)
+	ok, err := d.st.MarkMediaDone(ctx, m.ID, m.DedupeKey, rel, size)
 	if err != nil {
 		log.Printf("downloader: mark media %d done: %v", m.ID, err)
 		return
@@ -267,13 +267,13 @@ func (d *Downloader) retry(ctx context.Context, m *store.Media, cause error) {
 		return
 	}
 	next := d.Now().Add(d.Delays[n-1]).Unix()
-	if err := d.st.MarkMediaRetry(ctx, m.ID, n, next, botapifs.RedactPath(cause.Error())); err != nil {
+	if err := d.st.MarkMediaRetry(ctx, m.ID, m.DedupeKey, n, next, botapifs.RedactPath(cause.Error())); err != nil {
 		log.Printf("downloader: schedule retry for media %d: %v", m.ID, err)
 	}
 }
 
 func (d *Downloader) fail(ctx context.Context, m *store.Media, attempts int, cause error) {
-	if err := d.st.MarkMediaFailed(ctx, m.ID, attempts, botapifs.RedactPath(cause.Error())); err != nil {
+	if err := d.st.MarkMediaFailed(ctx, m.ID, m.DedupeKey, attempts, botapifs.RedactPath(cause.Error())); err != nil {
 		log.Printf("downloader: mark media %d failed: %v", m.ID, err)
 		return
 	}
@@ -281,7 +281,7 @@ func (d *Downloader) fail(ctx context.Context, m *store.Media, attempts int, cau
 }
 
 func (d *Downloader) tooLarge(ctx context.Context, m *store.Media) {
-	if err := d.st.MarkMediaTooLarge(ctx, m.ID); err != nil {
+	if err := d.st.MarkMediaTooLarge(ctx, m.ID, m.DedupeKey); err != nil {
 		log.Printf("downloader: mark media %d too large: %v", m.ID, err)
 		return
 	}

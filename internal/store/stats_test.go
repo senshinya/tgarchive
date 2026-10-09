@@ -17,7 +17,7 @@ func TestStats(t *testing.T) {
 	mediaOf := func(msgID int64) []int64 { t.Helper(); return mediaIDs(t, s, msgID) }
 	done := func(id, size int64) {
 		t.Helper()
-		if _, err := s.MarkMediaDone(ctx, id, "p", size); err != nil {
+		if _, err := s.MarkMediaDone(ctx, id, mediaKey(t, s, id), "p", size); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -47,8 +47,9 @@ func TestStats(t *testing.T) {
 		}
 		chanMsgs = append(chanMsgs, res.MessageID)
 	}
-	s.MarkMediaFailed(ctx, mediaOf(chanMsgs[0])[0], 3, "x")
-	s.MarkMediaTooLarge(ctx, mediaOf(chanMsgs[2])[0])
+	failed, tooLarge := mediaOf(chanMsgs[0])[0], mediaOf(chanMsgs[2])[0]
+	s.MarkMediaFailed(ctx, failed, mediaKey(t, s, failed), 3, "x")
+	s.MarkMediaTooLarge(ctx, tooLarge, mediaKey(t, s, tooLarge))
 	s.AddPending(ctx, watch, []Pending{{TgMessageID: 50, GroupedID: 1}, {TgMessageID: 51, GroupedID: 1}, {TgMessageID: 53}}, 53)
 	s.AddWatchHit(ctx, watch, true)
 
