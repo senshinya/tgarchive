@@ -1,6 +1,7 @@
 package userbot
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -70,5 +71,39 @@ func TestBackfillReportsChannelErrors(t *testing.T) {
 	eventually(t, "backfill done", func() bool { return !e.w.BackfillState(e.watch).Running })
 	if b := e.w.BackfillState(e.watch); b.Error == "" {
 		t.Fatalf("state = %+v", b)
+	}
+}
+
+// A backfill passing over posts polling already archived refreshes their counters but keeps the
+// original hit: its time is when the post was first archived, and it schedules the later refreshes.
+func TestBackfillKeepsTheHitOfArchivedPosts(t *testing.T) {
+	e := newWatchEnv(t, fire10)
+	e.oldPost(5)
+	e.w.PollOnce(ctx) // init at 5
+	e.tg.reacted(6, 0, false, 100, map[string]int{"🔥": 20})
+	e.w.PollOnce(ctx)
+	hitAt := e.now.Unix()
+	e.tg.reacted(6, 0, false, 300, map[string]int{"🔥": 40})
+	e.now = e.now.Add(3 * time.Hour)
+	if _, err := e.w.Backfill(ctx, e.watch, 24); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "backfill done", func() bool { return !e.w.BackfillState(e.watch).Running })
+	if b := e.w.BackfillState(e.watch); b.Error != "" || b.Archived != 0 {
+		t.Fatalf("state = %+v", b)
+	}
+	got := e.archived(t)
+	if len(got) != 1 {
+		t.Fatalf("archived = %v", tgIDs(got))
+	}
+	var ps PostStats
+	if err := json.Unmarshal(got[0].Stats, &ps); err != nil {
+		t.Fatal(err)
+	}
+	if ps.Hit == nil || ps.Hit.At != hitAt || len(ps.Hit.Reasons) != 1 || ps.Hit.Reasons[0] != "🔥 20 ≥ 10" {
+		t.Fatalf("hit = %+v, want the polled one at %d", ps.Hit, hitAt)
+	}
+	if ps.Views != 300 || ps.Total != 40 || ps.RefreshedAt != e.now.Unix() {
+		t.Fatalf("counters = %+v, want the backfill's", ps)
 	}
 }

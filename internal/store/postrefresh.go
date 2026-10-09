@@ -44,6 +44,21 @@ func (s *Store) RecentWatchPosts(ctx context.Context, channelID, since int64) ([
 		ORDER BY m.id`, channelID, since))
 }
 
+// WatchPostsByTgID returns the live archived watch posts of a channel among tgIDs.
+func (s *Store) WatchPostsByTgID(ctx context.Context, channelID int64, tgIDs []int64) ([]WatchPost, error) {
+	if len(tgIDs) == 0 {
+		return []WatchPost{}, nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(tgIDs)), ",")
+	args := []any{channelID}
+	for _, id := range tgIDs {
+		args = append(args, id)
+	}
+	return collectWatchPosts(s.db.QueryContext(ctx, `SELECT `+watchPostCols+` FROM messages m JOIN chats c ON c.id = m.chat_id
+		WHERE c.channel_id = ? AND m.deleted_at = 0 AND m.source = 'channel_watch' AND m.tg_message_id IN (`+ph+`)
+		ORDER BY m.id`, args...))
+}
+
 // ChatWatchPosts returns the live archived watch posts among ids in a channel chat, with whole
 // albums (an album's counters are its members' maximum), and the chat's channel. ErrNotFound when
 // the chat is not a channel chat.
