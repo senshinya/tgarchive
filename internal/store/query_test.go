@@ -365,3 +365,76 @@ func TestListMessagesAfterAndAround(t *testing.T) {
 		t.Errorf("bot timeline around: %v, %v", tg(merged), err)
 	}
 }
+
+// A reply quotes a message from the same message id space: a fetched channel post's reply id is
+// the source channel's, and a watched post's is its channel's.
+func TestReplyQuoteMatchesItsSource(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	fetched := func(id, origin, replyTo int64, text string) *model.Message {
+		m := textMsg(id, text)
+		m.Source = model.SourceUserbotFetch
+		m.OriginChatID = origin
+		m.ReplyToTgMessageID = replyTo
+		return m
+	}
+	ingest(t, s, bot, textMsg(349, "unrelated bot message"))
+	ingest(t, s, bot, fetched(348, -1002, 0, "other channel's 348"))
+	ingest(t, s, bot, fetched(347, -1001, 0, "channel A 347"))
+	for _, c := range []struct {
+		msg  *model.Message
+		want string // "" for no quote
+	}{
+		{fetched(350, -1001, 349, "re 349"), ""},              // 349 is a bot update, not channel A's
+		{fetched(351, -1001, 348, "re 348"), ""},              // 348 is another channel's
+		{fetched(352, -1001, 347, "re 347"), "channel A 347"}, // same channel
+	} {
+		r := ingest(t, s, bot, c.msg)
+		v, err := s.GetMessageView(ctx, r.MessageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := ""
+		if v.Reply != nil {
+			got = v.Reply.Text
+		}
+		if got != c.want {
+			t.Fatalf("%q quotes %q, want %q", c.msg.Text, got, c.want)
+		}
+	}
+
+	seedWatch(t, s)
+	first := channelPost(10, "")
+	first.Text = "first post"
+	p, err := s.Ingest(ctx, IngestInput{ChannelID: chanID, Msg: first, Now: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A comment with the same message id lives in the discussion group's id space.
+	if _, err := s.Ingest(ctx, IngestInput{ChannelID: chanID, Msg: comment(11, "a comment", "mt:photo:c11", `{}`),
+		Now: 101, ThreadRootID: p.MessageID}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		id, replyTo int64
+		want        string
+	}{{12, 10, "first post"}, {13, 11, ""}} {
+		post := channelPost(c.id, "")
+		post.ReplyToTgMessageID = c.replyTo
+		r, err := s.Ingest(ctx, IngestInput{ChannelID: chanID, Msg: post, Now: 102})
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := s.GetMessageView(ctx, r.MessageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := ""
+		if v.Reply != nil {
+			got = v.Reply.Text
+		}
+		if got != c.want {
+			t.Fatalf("post %d quotes %q, want %q", c.id, got, c.want)
+		}
+	}
+}

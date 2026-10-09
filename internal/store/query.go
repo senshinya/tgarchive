@@ -528,15 +528,25 @@ func (s *Store) hydrate(ctx context.Context, views []MessageView) error {
 		if r == 0 {
 			continue
 		}
-		// A bot chat's replies quote its own updates; a comment quotes another comment.
-		src := model.SourceBotUpdate
-		if views[i].Source == model.SourceChannelComment {
-			src = model.SourceChannelComment
+		// A reply id only means something in the id space it was taken from: a bot update quotes
+		// the chat's own updates, a watched post another post of its channel, a comment another
+		// comment, and a fetched post another post fetched from the same source channel (never a
+		// bot update that happens to share its id).
+		src := views[i].Source
+		q := `SELECT id, kind, substr(text, 1, 200), extra_json FROM messages
+			WHERE chat_id = ? AND source = ? AND tg_message_id = ? AND deleted_at = 0`
+		args := []any{views[i].ChatID, src, r}
+		switch src {
+		case model.SourceBotUpdate, model.SourceChannelWatch, model.SourceChannelComment:
+		case model.SourceUserbotFetch:
+			q += ` AND origin_chat_id = (SELECT origin_chat_id FROM messages WHERE id = ?)`
+			args = append(args, views[i].ID)
+		default:
+			continue
 		}
 		var rv ReplyView
 		var extra string
-		err := s.db.QueryRowContext(ctx, `SELECT id, kind, substr(text, 1, 200), extra_json FROM messages
-			WHERE chat_id = ? AND source = ? AND tg_message_id = ? AND deleted_at = 0`, views[i].ChatID, src, r).Scan(&rv.ID, &rv.Kind, &rv.Text, &extra)
+		err := s.db.QueryRowContext(ctx, q, args...).Scan(&rv.ID, &rv.Kind, &rv.Text, &extra)
 		if err == nil {
 			if src == model.SourceChannelComment {
 				rv.Extra = rawOrNil(extra)
