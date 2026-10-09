@@ -26,7 +26,7 @@ func newSettingsEnv(t *testing.T) (http.Handler, *botapiserver.Supervisor) {
 	t.Cleanup(func() { st.Close() })
 	box, _ := seal.New(bytes.Repeat([]byte{1}, 32))
 	sup := botapiserver.New("/nonexistent/telegram-bot-api", t.TempDir(), t.TempDir(), 18082)
-	srv := &Server{Cfg: &config.Config{RequireForwardAuth: true}, Store: st, Box: box, TgApp: tgapp.New(st, box), BotAPI: sup, Now: time.Now}
+	srv := &Server{Cfg: &config.Config{RequireForwardAuth: true, AllowedHosts: []string{"example.com"}}, Store: st, Box: box, TgApp: tgapp.New(st, box), BotAPI: sup, Now: time.Now}
 	return srv.Handler(), sup
 }
 

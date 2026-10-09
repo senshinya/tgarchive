@@ -159,7 +159,7 @@ func newWatchEnv(t *testing.T) *watchEnv {
 	dir := t.TempDir()
 	fw := &fakeWatcher{ready: true, avatarDir: dir, refreshed: make(chan []int64, 4), comments: make(chan [2]int64, 4),
 		commenter: map[string]string{"user:11": "users/11.jpg", "channel:700": "channels/700.jpg"}}
-	srv := &Server{Cfg: &config.Config{RequireForwardAuth: true}, Store: st, Box: box, Watcher: fw, Hub: events.NewHub(),
+	srv := &Server{Cfg: &config.Config{RequireForwardAuth: true, AllowedHosts: []string{"example.com"}}, Store: st, Box: box, Watcher: fw, Hub: events.NewHub(),
 		AvatarDir: dir, MediaDir: t.TempDir(), Now: func() time.Time { return time.Unix(1000, 0) }}
 	return &watchEnv{h: srv.Handler(), st: st, fw: fw}
 }

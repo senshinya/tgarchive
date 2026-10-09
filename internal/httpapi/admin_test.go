@@ -50,7 +50,7 @@ func newAdminEnv(t *testing.T) *adminEnv {
 	mgr := collector.New(ctx, collector.Deps{Store: st, Clients: reg, Downloader: dl, Receipts: receipt.New(st, reg), Hub: hub, MediaDir: mediaDir, PollTimeoutSec: 1})
 	t.Cleanup(func() { mgr.StopAll(); cancel(); st.Close() })
 	srv := &Server{
-		Cfg:   &config.Config{RequireForwardAuth: true, BotAPIURL: fake.URL(), CloudAPIURL: fake.URL()},
+		Cfg:   &config.Config{RequireForwardAuth: true, AllowedHosts: []string{"example.com"}, BotAPIURL: fake.URL(), CloudAPIURL: fake.URL()},
 		Store: st, Box: box, Clients: reg, Manager: mgr, Downloader: dl, Hub: hub,
 		TgApp:    tgapp.New(st, box),
 		MediaDir: mediaDir, AvatarDir: t.TempDir(), Now: time.Now,

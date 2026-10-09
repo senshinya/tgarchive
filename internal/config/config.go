@@ -4,7 +4,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -18,6 +20,7 @@ type Config struct {
 	BotAPIBinary       string // telegram-bot-api 可执行文件路径/名称
 	TokenEncKey        []byte
 	RequireForwardAuth bool
+	AllowedHosts       []string // 除 IP 字面量与 localhost 外可用的 Host（小写、无端口）；["*"] 不检查
 	MediaMaxBytes      int64
 	BarkNotifyFile     string
 	PollTimeoutSec     int
@@ -76,6 +79,12 @@ func Load(getenv func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("REQUIRE_FORWARD_AUTH must be true or false, got %q", v)
 	}
 
+	hosts, err := parseHosts(getenv("ALLOWED_HOSTS"))
+	if err != nil {
+		return nil, err
+	}
+	c.AllowedHosts = hosts
+
 	if v := getenv("MEDIA_MAX_BYTES"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || n < 0 {
@@ -84,6 +93,25 @@ func Load(getenv func(string) string) (*Config, error) {
 		c.MediaMaxBytes = n
 	}
 	return c, nil
+}
+
+// parseHosts reads ALLOWED_HOSTS: comma-separated host names without scheme or port, or "*" alone.
+func parseHosts(v string) ([]string, error) {
+	var out []string
+	for _, h := range strings.Split(v, ",") {
+		h = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".")
+		if h == "" {
+			continue
+		}
+		if h != "*" && strings.ContainsAny(h, ":/*[] ") {
+			return nil, fmt.Errorf("ALLOWED_HOSTS takes host names without scheme or port, got %q", h)
+		}
+		out = append(out, h)
+	}
+	if len(out) > 1 && slices.Contains(out, "*") {
+		return nil, errors.New(`ALLOWED_HOSTS is either "*" or a list of host names`)
+	}
+	return out, nil
 }
 
 func or(v, def string) string {

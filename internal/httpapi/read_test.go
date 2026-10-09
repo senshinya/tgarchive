@@ -44,7 +44,7 @@ func newReadEnv(t *testing.T) *readEnv {
 	mediaDir, avatarDir := t.TempDir(), t.TempDir()
 	hub := events.NewHub()
 	srv := &Server{
-		Cfg: &config.Config{RequireForwardAuth: true}, Store: st, Hub: hub,
+		Cfg: &config.Config{RequireForwardAuth: true, AllowedHosts: []string{"example.com"}}, Store: st, Hub: hub,
 		Downloader: downloader.New(st, mediaDir, 0, nil),
 		Web:        fstest.MapFS{"index.html": {Data: []byte("<html>app</html>")}, "assets/app.js": {Data: []byte("js!")}},
 		MediaDir:   mediaDir, AvatarDir: avatarDir, Now: time.Now,
@@ -338,6 +338,48 @@ func TestServeMediaContentSafety(t *testing.T) {
 		!strings.HasPrefix(w.Header().Get("Content-Disposition"), "attachment") || !strings.Contains(w.Header().Get("Content-Disposition"), "evil.html") ||
 		w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("Content-Security-Policy") != csp {
 		t.Fatalf("html = %d %v", w.Code, w.Header())
+	}
+}
+
+func TestHostCheck(t *testing.T) {
+	e := newReadEnv(t)
+	get := func(host string) int {
+		req := httptest.NewRequest("GET", "/api/bots", nil)
+		req.Host = host
+		req.Header.Set("Remote-User", "shinya")
+		w := httptest.NewRecorder()
+		e.h.ServeHTTP(w, req)
+		return w.Code
+	}
+	// A DNS rebinding attack needs a name of its own; addresses and localhost cannot be rebound.
+	e.srv.Cfg.AllowedHosts = nil
+	for _, h := range []string{"192.168.7.146:8090", "192.168.7.146", "127.0.0.1:8080", "[::1]:8080", "[fe80::1%25eth0]:80", "localhost:5173", "LocalHost"} {
+		if c := get(h); c != 200 {
+			t.Fatalf("host %s = %d", h, c)
+		}
+	}
+	for _, h := range []string{"evil.example:8090", "example.com", "192.168.7.146.nip.io", "localhost.evil.example", ""} {
+		if c := get(h); c != 403 {
+			t.Fatalf("host %q = %d, want 403", h, c)
+		}
+	}
+	e.srv.Cfg.AllowedHosts = []string{"tg.example.com"}
+	for h, want := range map[string]int{"TG.example.com:443": 200, "tg.example.com.": 200, "tg.example.com": 200, "other.example.com": 403, "10.0.0.1": 200} {
+		if c := get(h); c != want {
+			t.Fatalf("allowed host %s = %d, want %d", h, c, want)
+		}
+	}
+	e.srv.Cfg.AllowedHosts = []string{"*"}
+	if c := get("anything.example"); c != 200 {
+		t.Fatalf("* = %d", c)
+	}
+	// healthz goes through the same check; the container's own healthcheck uses 127.0.0.1.
+	e.srv.Cfg.AllowedHosts = nil
+	req := httptest.NewRequest("GET", "/healthz", nil)
+	w := httptest.NewRecorder()
+	e.h.ServeHTTP(w, req)
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "host not allowed") {
+		t.Fatalf("healthz on a foreign name = %d %s", w.Code, w.Body)
 	}
 }
 

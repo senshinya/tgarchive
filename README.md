@@ -37,6 +37,7 @@ cd web && npm run dev   # Vite 开发服务器，/api、/media、/avatars 代理
 | `LISTEN` | `:8080` | HTTP 监听地址 |
 | `DATA_DIR` | `/data` | 数据根目录（`db/`、`media/`、`avatars/`、`botapi/`、`botapi-tmp/`） |
 | `REQUIRE_FORWARD_AUTH` | `true` | 除 `/healthz` 外要求请求带 `Remote-User`，否则 401 |
+| `ALLOWED_HOSTS` | 空 | 防 DNS rebinding：`Host` 为 IP 地址或 `localhost` 时总是放行，其余域名须列在此处（逗号分隔，不含协议与端口，大小写不敏感），否则 403（`/healthz` 同样）。经反代用域名访问时填该域名，`*` 关闭检查 |
 | `BARK_NOTIFY_FILE` | 空 | Bark 配置（`endpoint` + `device_keys`），机器人或 userbot 出错时推送；空则不推 |
 | `MEDIA_MAX_BYTES` | `0` | 单文件存档上限，0 为不限；Telegraph 文章的网页媒体此时仍有 2 GiB 的默认上限（作者不可信） |
 | `BOT_API_MANAGED` | `true` | 是否托管 `telegram-bot-api` 子进程 |

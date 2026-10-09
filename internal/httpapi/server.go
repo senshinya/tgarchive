@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io/fs"
 	"mime"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path"
 	"strconv"
@@ -90,6 +92,10 @@ func (s *Server) Handler() http.Handler {
 // auth is the in-app backstop behind Caddy forward_auth (which strips client-sent Remote-* headers).
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hostAllowed(r.Host, s.Cfg.AllowedHosts) {
+			writeErr(w, http.StatusForbidden, "host not allowed")
+			return
+		}
 		if s.Cfg.RequireForwardAuth && r.URL.Path != "/healthz" && r.Header.Get("Remote-User") == "" {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
@@ -100,6 +106,30 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// hostAllowed guards against DNS rebinding: a page on the attacker's name, re-pointed at this
+// server, would otherwise be same-origin with it. Rebinding needs a name of its own, so a Host that
+// is an IP address or localhost is always fine and the plain LAN deployment needs no setting; any
+// other name must be listed in ALLOWED_HOSTS, unless that is "*".
+func hostAllowed(hostport string, allowed []string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.ToLower(strings.Trim(host, "[]")), ".")
+	if host == "" {
+		return false
+	}
+	if _, err := netip.ParseAddr(host); err == nil || host == "localhost" {
+		return true
+	}
+	for _, a := range allowed {
+		if a == "*" || a == host {
+			return true
+		}
+	}
+	return false
 }
 
 // crossSite is a CSRF backstop for state-changing requests. Browsers label cross-origin requests
