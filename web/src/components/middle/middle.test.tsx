@@ -193,7 +193,7 @@ describe('MiddleColumn search button', () => {
 describe('read marks', () => {
   it('marks a channel read up to its newest message once the bottom is in view', async () => {
     const api = fakeApi({
-      chats: vi.fn(async () => [makeChannelChat({ id: 50, unread: 2, last_read_id: 1 })]),
+      chats: vi.fn(async () => [makeChannelChat({ id: 50, unread: 2, last_read_pos: 1, first_unread_id: 2 })]),
       messages: vi.fn(async () => [makeMessage({ id: 2, chat_id: 50, text: 'a' }), makeMessage({ id: 3, chat_id: 50, text: 'b' })]),
     });
     const r = renderWithStore(<MiddleColumn chatId={50} />, api);

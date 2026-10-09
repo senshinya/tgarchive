@@ -3,6 +3,7 @@ import { createContext } from 'preact';
 import { useContext } from 'preact/hooks';
 import { ApiError, PAGE_SIZE, convMessages, errorMessage, type Api } from '../api/client';
 import type { ArchiveEvent, Bot, Chat, Downloads, Entity, Message, WallSource, WallType } from '../api/types';
+import { byPosition, type Ordered } from '../lib/order';
 
 export interface Conversation {
   items: Message[]; // ascending by id
@@ -83,7 +84,7 @@ export function mergeById(a: Message[], b: Message[]): Message[] {
   const map = new Map<number, Message>();
   for (const m of a) map.set(m.id, m);
   for (const m of b) map.set(m.id, m);
-  return [...map.values()].sort((x, y) => x.id - y.id);
+  return [...map.values()].sort(byPosition);
 }
 
 /** Byte progress of one download in flight (total 0 while unknown). */
@@ -279,14 +280,14 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
       const page = await convMessages(api, chatId, 0, PAGE_SIZE);
       if (gen !== generation(chatId)) return;
       const c = conv(chatId);
-      const newestKnown = c.items.length ? c.items[c.items.length - 1].id : 0;
-      const overlaps = !opts.reset && !c.hasNewer && c.loaded && page.length > 0 && page[0].id <= newestKnown;
+      const newestKnown = c.items[c.items.length - 1];
+      const overlaps = !opts.reset && !c.hasNewer && c.loaded && page.length > 0 && !!newestKnown && byPosition(page[0], newestKnown) <= 0;
       if (overlaps) {
-        // Within the refreshed window [page[0].id, newest], the server is authoritative: drop
+        // Within the refreshed window [page[0], newest], the server is authoritative: drop
         // anything we had there that it no longer returns (deleted while disconnected). Items
         // older than the window are untouched.
         const pageIds = new Set(page.map((m) => m.id));
-        const kept = c.items.filter((m) => m.id < page[0].id || pageIds.has(m.id));
+        const kept = c.items.filter((m) => byPosition(m, page[0]) < 0 || pageIds.has(m.id));
         setConv(chatId, { items: mergeById(kept, page), loading: false, loaded: true });
       } else {
         setConv(chatId, { items: page, hasMore: page.length >= PAGE_SIZE, hasNewer: false, loading: false, loaded: true });
@@ -305,8 +306,10 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
       const page = await convMessages(api, chatId, 0, PAGE_SIZE, { around: messageId });
       if (gen !== generation(chatId)) return;
       const half = Math.floor(PAGE_SIZE / 2);
-      const older = page.filter((m) => m.id <= messageId).length;
-      const newer = page.length - older;
+      const target = page.find((m) => m.id === messageId);
+      // Without the target (deleted meanwhile) either side may go on: asking finds out.
+      const older = target ? page.filter((m) => byPosition(m, target) <= 0).length : PAGE_SIZE;
+      const newer = target ? page.length - older : PAGE_SIZE;
       setConv(chatId, { items: page, hasMore: older >= PAGE_SIZE - half, hasNewer: newer >= half, loading: false, loaded: true });
     } catch (e) {
       if (gen === generation(chatId)) setConv(chatId, { loading: false, error: errorMessage(e) });
@@ -357,10 +360,11 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
       const c = conversations.value[key];
       if (!key || !c?.loaded) continue;
       const known = c.items.some((x) => x.id === m.id);
-      const oldest = c.items[0]?.id ?? 0;
-      const newest = c.items[c.items.length - 1]?.id ?? 0;
-      // Never insert a message outside the loaded window: that would leave a hole.
-      const inside = (!c.hasMore || m.id > oldest) && (!c.hasNewer || m.id < newest);
+      const oldest = c.items[0];
+      const newest = c.items[c.items.length - 1];
+      // Never insert a message outside the loaded window: that would leave a hole. A channel post
+      // archived late lands inside it, where it was posted.
+      const inside = (!c.hasMore || (!!oldest && byPosition(m, oldest) > 0)) && (!c.hasNewer || (!!newest && byPosition(m, newest) < 0));
       if (known || inside) setConv(key, { items: mergeById(c.items, [m]) });
     }
   }
@@ -494,12 +498,14 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     }
   }
 
-  /** Marks a channel conversation read up to messageId: its badge clears at once, and the server
-   * hears about it at most once a second. Private chats have no unread count. */
-  function markRead(chatId: number, messageId: number) {
+  /** Marks a channel conversation read up to message m (its post, in publishing order): its badge
+   * clears at once, and the server hears about it at most once a second. Private chats have no
+   * unread count. */
+  function markRead(chatId: number, m: Ordered) {
+    const messageId = m.id;
     const chat = chats.value.find((c) => c.id === chatId);
-    if (!chat || chat.kind !== 'channel' || messageId <= chat.last_read_id) return;
-    chats.value = chats.value.map((c) => (c.id === chatId ? { ...c, last_read_id: messageId, unread: 0 } : c));
+    if (!chat || chat.kind !== 'channel' || m.pos <= chat.last_read_pos) return;
+    chats.value = chats.value.map((c) => (c.id === chatId ? { ...c, last_read_pos: m.pos, unread: 0, first_unread_id: 0 } : c));
     const mark = readMarks.get(chatId);
     if (mark) {
       mark.pending = messageId;

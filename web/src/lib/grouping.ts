@@ -1,5 +1,6 @@
 import type { Commenter, Message } from '../api/types';
 import { dayKey, formatDayLabel } from './format';
+import { byPosition } from './order';
 
 /** Consecutive messages further apart than this start a new visual group. */
 export const GROUP_GAP_SECONDS = 600;
@@ -38,7 +39,7 @@ export function commenterOf(m: Pick<Message, 'extra'>): Commenter | undefined {
  * author among comments; watched channel posts are never grouped.
  */
 export function groupMessages(messages: Message[], now: Date = new Date()): ListEntry[] {
-  const sorted = [...messages].sort((a, b) => a.id - b.id);
+  const sorted = [...messages].sort(byPosition);
   const out: ListEntry[] = [];
   let currentDay = '';
   let group: BubbleContent[] = [];

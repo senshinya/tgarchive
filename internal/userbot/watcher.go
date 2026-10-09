@@ -686,12 +686,28 @@ func (w *Watcher) customEmoji(ctx context.Context, api *tg.Client, ids []int64) 
 }
 
 // archive stores an album (or single post) that met the condition; created reports whether it
-// was new (a post archived before is only refreshed). polled says polling found it, which counted
+// was new (a post archived before is only refreshed: it keeps its first hit, whose time schedules
+// the later refreshes, and its comments summary). polled says polling found it, which counted
 // it as scanned; a backfill hit does not count towards the hit rate.
 func (w *Watcher) archive(ctx context.Context, api *tg.Client, wv store.WatchView, ch *tg.Channel, msgs []*tg.Message,
 	convs []*model.Message, reasons []string, now int64, polled bool) (created bool, err error) {
 	ps := w.postStats(ctx, api, msgs, statsOf(msgs, convs))
 	ps.Hit = &HitInfo{At: now, Reasons: reasons}
+	ids := make([]int64, len(msgs))
+	for i, m := range msgs {
+		ids[i] = int64(m.ID)
+	}
+	prev, err := w.st.WatchPostsByTgID(ctx, ch.ID, ids)
+	if err != nil {
+		return false, err
+	}
+	for _, p := range prev {
+		var old PostStats
+		if json.Unmarshal([]byte(p.Stats), &old) == nil && old.Hit != nil {
+			ps.Hit, ps.Comments, ps.RefreshedAt = old.Hit, old.Comments, now
+			break
+		}
+	}
 	b, err := json.Marshal(ps)
 	if err != nil {
 		return false, err

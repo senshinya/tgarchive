@@ -50,10 +50,13 @@ export interface Chat {
   last_message_at: number;
   last_kind: string;
   last_text: string;
-  /** The newest message read (channels; see markRead). */
-  last_read_id: number;
-  /** Messages newer than last_read_id; always 0 for private chats. */
+  /** The `pos` of the last post read (channels; see markRead). */
+  last_read_pos: number;
+  /** Posts after last_read_pos; always 0 for private chats. A post archived late, behind it, is
+   * not unread. */
   unread: number;
+  /** The first unread post, where reading resumes; 0 when there is none. */
+  first_unread_id: number;
 }
 
 export type MediaState = 'pending' | 'done' | 'failed' | 'too_large';
@@ -165,6 +168,9 @@ export interface Message {
   favorite?: FavoriteInfo | null;
   /** The archived post a comment belongs to; 0 for anything but a comment. */
   thread_root_id?: number;
+  /** Its place in the conversation (see lib/order): a channel's posts and comments by their
+   * Telegram message id, so one archived late still sits where it was posted. */
+  pos: number;
 }
 
 export interface Tag {

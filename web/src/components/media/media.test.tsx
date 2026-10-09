@@ -15,7 +15,7 @@ import { IMAGE_DOCUMENT_MAX_BYTES, displayKind, playUrl } from './util';
 import { Voice } from './Voice';
 import { VideoNote } from './VideoNote';
 import { setSilent } from '../../lib/silent';
-import { toViewerItems } from '../viewer/MediaViewer';
+import { byArchive, toViewerItems } from '../viewer/MediaViewer';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -298,6 +298,14 @@ describe('images sent as files', () => {
   it('pages through the viewer as a photo', () => {
     expect(toViewerItems([imageDoc('image/gif')])).toEqual([expect.objectContaining({ mediaId: 70, kind: 'photo', mime: 'image/gif' })]);
     expect(toViewerItems([imageDoc('application/pdf')])).toEqual([]);
+  });
+
+  it('pages through a conversation in its order, and the wall in archive order', () => {
+    const photo = (id: number, pos: number) =>
+      makeMessage({ id, pos, kind: 'photo', media: [makeMedia({ id: id * 10, kind: 'photo', mime: 'image/jpeg', width: 10, height: 10 })] });
+    const posts = [photo(3, 100), photo(1, 300), photo(2, 200)]; // post 100 archived last
+    expect(toViewerItems(posts).map((i) => i.mediaId)).toEqual([30, 20, 10]);
+    expect(toViewerItems(posts, byArchive).map((i) => i.mediaId)).toEqual([10, 20, 30]);
   });
 });
 

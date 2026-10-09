@@ -27,8 +27,9 @@ export function makeChat(over: Partial<Chat> = {}): Chat {
     last_message_at: 1_790_000_000,
     last_kind: 'text',
     last_text: 'hello',
-    last_read_id: 0,
+    last_read_pos: 0,
     unread: 0,
+    first_unread_id: 0,
     ...over,
   };
 }
@@ -115,6 +116,7 @@ export function makeMedia(over: Partial<Media> = {}): Media {
 
 export function makeMessage(over: Partial<Message> = {}): Message {
   return {
+    pos: over.id ?? 1,
     id: 1,
     chat_id: 10,
     tg_message_id: 1,

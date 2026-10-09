@@ -511,8 +511,8 @@ func TestMarkRead(t *testing.T) {
 	}
 	var chats []store.ChatView
 	json.Unmarshal(do(e.h, "GET", "/api/chats", nil).Body.Bytes(), &chats)
-	if chats[0].LastReadID < e.photoMsg {
-		t.Fatalf("last_read_id = %d", chats[0].LastReadID)
+	if len(chats) != 1 || chats[0].LastReadPos != 0 || chats[0].Unread != 0 {
+		t.Fatalf("chats = %+v (a private chat keeps no read position)", chats)
 	}
 	for _, c := range []struct {
 		path string

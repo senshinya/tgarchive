@@ -8,6 +8,7 @@ const at = (d: number, h: number, m = 0) => new Date(2026, 9, d, h, m).getTime()
 function msg(id: number, date: number, extra: Partial<Message> = {}): Message {
   return {
     id,
+    pos: id,
     chat_id: 1,
     tg_message_id: id,
     source: 'bot_update',
