@@ -24,3 +24,26 @@ func TestDoneMediaPaths(t *testing.T) {
 		t.Fatalf("paths = %v, want %v (pending media must be skipped)", got, want)
 	}
 }
+
+func TestDueMediaSplitsWebFromTelegram(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	ingest(t, s, bot, photoMsg(1, "web:a", "web:b", "web:c", "bot:a", "user:b"))
+	keys := func(ms []Media, err error) []string {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, m := range ms {
+			out = append(out, m.DedupeKey)
+		}
+		return out
+	}
+	if got := keys(s.DueTelegramMedia(ctx, 0, 10)); !reflect.DeepEqual(got, []string{"bot:a", "user:b"}) {
+		t.Fatalf("telegram = %v", got)
+	}
+	if got := keys(s.DueWebMedia(ctx, 0, 2)); !reflect.DeepEqual(got, []string{"web:a", "web:b"}) {
+		t.Fatalf("web = %v", got)
+	}
+}

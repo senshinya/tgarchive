@@ -52,7 +52,22 @@ func (s *Store) GetMedia(ctx context.Context, id int64) (*Media, error) {
 }
 
 func (s *Store) DueMedia(ctx context.Context, now int64, limit int) ([]Media, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+mediaCols+" FROM media WHERE state = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?", now, limit)
+	return s.dueMedia(ctx, "", now, limit)
+}
+
+// DueTelegramMedia is DueMedia without the "web:" (Telegraph article) media, and DueWebMedia is
+// only those. The downloader takes them separately so a web backlog with lower ids can never
+// crowd Telegram media out of the rows it looks at.
+func (s *Store) DueTelegramMedia(ctx context.Context, now int64, limit int) ([]Media, error) {
+	return s.dueMedia(ctx, " AND dedupe_key NOT GLOB 'web:*'", now, limit)
+}
+
+func (s *Store) DueWebMedia(ctx context.Context, now int64, limit int) ([]Media, error) {
+	return s.dueMedia(ctx, " AND dedupe_key GLOB 'web:*'", now, limit)
+}
+
+func (s *Store) dueMedia(ctx context.Context, filter string, now int64, limit int) ([]Media, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+mediaCols+" FROM media WHERE state = 'pending' AND next_attempt_at <= ?"+filter+" ORDER BY id LIMIT ?", now, limit)
 	if err != nil {
 		return nil, err
 	}

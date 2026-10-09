@@ -219,7 +219,7 @@ fetch_job_messages(job_id INTEGER, message_id INTEGER, PRIMARY KEY(job_id, messa
 - `raw_json` 全量保存，供日后补充渲染器；未识别类型 `kind=other`，前端显示「不支持的消息类型」气泡
 - 迁移：内嵌 SQL 文件，启动时按 `PRAGMA user_version` 顺序执行；WAL 模式
 
-媒体路径：`media/<bot_id>/<yyyy>/<mm>/<sha1(dedupe_key)>.<ext>`；缩略图同目录 `.thumb.jpg`。头像：`avatars/{bots,senders}/<tg_id>.jpg`。userbot 代取的媒体在 `media/mt/<yyyy>/<mm>/`。代取消息的 `date` 为原帖时间，会话排序（`last_message_at`）取入库时间。
+媒体路径：`media/<bot_id>/<yyyy>/<mm>/<sha1(dedupe_key)>-<media_id>.<ext>`（media id 让每行的文件与 `.part` 独占，旧文件按库内路径保持原名）；缩略图同目录 `.thumb.jpg`。头像：`avatars/{bots,senders}/<tg_id>.jpg`。userbot 代取的媒体在 `media/mt/<yyyy>/<mm>/`。代取消息的 `date` 为原帖时间，会话排序（`last_message_at`）取入库时间。
 
 ## 5. Bot 采集流程
 

@@ -11,6 +11,7 @@ package mp4fix
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -35,7 +36,15 @@ func Candidate(path string) bool {
 // HEV1ToHVC1 relabels every hev1 sample entry whose hvcC carries VPS, SPS and PPS as hvc1,
 // in place. It reports whether the file changed. Files that are not MP4s, or that it cannot
 // parse, are left alone and reported unchanged without error; only I/O failures are errors.
-func HEV1ToHVC1(path string) (bool, error) {
+//
+// The file is untrusted (any Telegraph author can embed a video), so a parser bug must not take
+// the caller down: a panic is turned into an error, leaving the file as it was.
+func HEV1ToHVC1(path string) (changed bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			changed, err = false, fmt.Errorf("mp4fix: parse %s: %v", filepath.Base(path), r)
+		}
+	}()
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return false, err
@@ -66,30 +75,32 @@ func HEV1ToHVC1(path string) (bool, error) {
 // findTopLevel scans the file's top-level boxes for one of type typ.
 func findTopLevel(r io.ReaderAt, size int64, typ string) (off, length int64, ok bool, err error) {
 	var hdr [16]byte
-	for pos := int64(0); pos+8 <= size; {
+	// Sizes come from the file, so bounds are checked as remaining lengths (size-pos), which
+	// cannot overflow the way pos+n does for a largesize near MaxInt64.
+	for pos := int64(0); size-pos >= 8; {
 		if _, err := r.ReadAt(hdr[:8], pos); err != nil {
 			return 0, 0, false, err
 		}
-		n := int64(binary.BigEndian.Uint32(hdr[:4]))
+		n := uint64(binary.BigEndian.Uint32(hdr[:4]))
 		switch n {
 		case 1:
-			if pos+16 > size {
+			if size-pos < 16 {
 				return 0, 0, false, nil
 			}
 			if _, err := r.ReadAt(hdr[8:16], pos+8); err != nil {
 				return 0, 0, false, err
 			}
-			n = int64(binary.BigEndian.Uint64(hdr[8:16]))
+			n = binary.BigEndian.Uint64(hdr[8:16])
 		case 0:
-			n = size - pos
+			n = uint64(size - pos)
 		}
-		if n < 8 || pos+n > size {
+		if n < 8 || n > uint64(size-pos) {
 			return 0, 0, false, nil // malformed: not something we should modify
 		}
 		if string(hdr[4:8]) == typ {
-			return pos, n, true, nil
+			return pos, int64(n), true, nil
 		}
-		pos += n
+		pos += int64(n)
 	}
 	return 0, 0, false, nil
 }
@@ -99,7 +110,7 @@ var containers = map[string]bool{"moov": true, "trak": true, "mdia": true, "minf
 
 // walk visits the boxes in b[start:end], descending into containers and sample descriptions.
 func walk(b []byte, start, end int64, patches *[]int64) {
-	for pos := start; pos+8 <= end; {
+	for pos := start; end-pos >= 8; {
 		n, hdr, ok := boxAt(b, pos, end)
 		if !ok {
 			return
@@ -110,7 +121,7 @@ func walk(b []byte, start, end int64, patches *[]int64) {
 			walk(b, pos+hdr, pos+n, patches)
 		case typ == "stsd":
 			// FullBox: version/flags (4) + entry_count (4), then the sample entries.
-			if pos+hdr+8 <= pos+n {
+			if n-hdr >= 8 {
 				sampleEntries(b, pos+hdr+8, pos+n, patches)
 			}
 		}
@@ -119,7 +130,7 @@ func walk(b []byte, start, end int64, patches *[]int64) {
 }
 
 func sampleEntries(b []byte, start, end int64, patches *[]int64) {
-	for pos := start; pos+8 <= end; {
+	for pos := start; end-pos >= 8; {
 		n, hdr, ok := boxAt(b, pos, end)
 		if !ok {
 			return
@@ -134,7 +145,7 @@ func sampleEntries(b []byte, start, end int64, patches *[]int64) {
 // hasParameterSets finds the hvcC among a sample entry's child boxes and reports whether its
 // NAL unit arrays include at least one VPS (32), SPS (33) and PPS (34).
 func hasParameterSets(b []byte, start, end int64) bool {
-	for pos := start; pos+8 <= end; {
+	for pos := start; end-pos >= 8; {
 		n, hdr, ok := boxAt(b, pos, end)
 		if !ok {
 			return false
@@ -181,22 +192,24 @@ func nalTypes(c []byte) (map[int]bool, error) {
 	return out, nil
 }
 
-// boxAt returns the size and header length of the box at pos, bounded by end.
+// boxAt returns the size and header length of the box at pos, bounded by end. The caller
+// guarantees pos+8 <= end <= len(b). The size is checked against the room left (end-pos)
+// rather than as pos+size, which a 64-bit largesize could overflow past the check.
 func boxAt(b []byte, pos, end int64) (size, hdr int64, ok bool) {
-	size = int64(binary.BigEndian.Uint32(b[pos : pos+4]))
+	n := uint64(binary.BigEndian.Uint32(b[pos : pos+4]))
 	hdr = 8
-	switch size {
+	switch n {
 	case 1:
-		if pos+16 > end {
+		if end-pos < 16 {
 			return 0, 0, false
 		}
-		size = int64(binary.BigEndian.Uint64(b[pos+8 : pos+16]))
+		n = binary.BigEndian.Uint64(b[pos+8 : pos+16])
 		hdr = 16
 	case 0:
-		size = end - pos
+		n = uint64(end - pos)
 	}
-	if size < hdr || pos+size > end {
+	if n < uint64(hdr) || n > uint64(end-pos) {
 		return 0, 0, false
 	}
-	return size, hdr, true
+	return int64(n), hdr, true
 }
