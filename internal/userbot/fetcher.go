@@ -401,7 +401,8 @@ func (f *Fetcher) archive(ctx context.Context, job *store.FetchJob, got *fetched
 		if err != nil {
 			return err
 		}
-		ir, err := f.st.Ingest(ctx, store.IngestInput{BotID: job.BotID, Sender: sender, Msg: msg, Now: now})
+		// The user sent the link again: a post deleted from the archive comes back.
+		ir, err := f.st.Ingest(ctx, store.IngestInput{BotID: job.BotID, Sender: sender, Msg: msg, Now: now, Revive: true})
 		if err != nil {
 			return err
 		}

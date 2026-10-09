@@ -107,3 +107,39 @@ func TestBackfillKeepsTheHitOfArchivedPosts(t *testing.T) {
 		t.Fatalf("counters = %+v, want the backfill's", ps)
 	}
 }
+
+// A backfill is the user asking for posts again: one they deleted from the archive comes back.
+// Polling taking the same post in again (here after the watch was re-enabled) leaves it deleted.
+func TestBackfillRevivesDeletedPostsPollingDoesNot(t *testing.T) {
+	e := newWatchEnv(t, fire10)
+	e.oldPost(5)
+	e.w.PollOnce(ctx) // init at 5
+	e.tg.reacted(6, 0, false, 100, map[string]int{"🔥": 20})
+	e.w.PollOnce(ctx)
+	got := e.archived(t)
+	if len(got) != 1 {
+		t.Fatalf("archived = %v", tgIDs(got))
+	}
+	id := got[0].ID
+	if _, _, err := e.st.DeleteMessage(ctx, id, e.now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	e.st.UpdateWatch(ctx, e.watch, 30, fire10, false, 2)
+	e.st.UpdateWatch(ctx, e.watch, 30, fire10, true, 3)
+	e.w.PollOnce(ctx)
+	if got := e.archived(t); len(got) != 0 {
+		t.Fatalf("polling revived %v", tgIDs(got))
+	}
+
+	if _, err := e.w.Backfill(ctx, e.watch, 24); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "backfill done", func() bool { return !e.w.BackfillState(e.watch).Running })
+	if b := e.w.BackfillState(e.watch); b.Error != "" || b.Archived != 1 {
+		t.Fatalf("state = %+v", b)
+	}
+	if got := e.archived(t); len(got) != 1 || got[0].ID != id {
+		t.Fatalf("archived after backfill = %+v", got)
+	}
+}
