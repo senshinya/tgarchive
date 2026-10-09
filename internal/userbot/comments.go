@@ -34,6 +34,8 @@ const (
 	commentsFullAge = 3 * 86400
 	// CommentsBackfillKey marks the one-off comment backfill of posts archived before comments were kept.
 	CommentsBackfillKey = "comments_backfill"
+	// backfillPause separates the posts of the one-off comment backfill.
+	backfillPause = 300 * time.Millisecond
 	// openCommentsEvery is how often opening a post's comments may refresh them.
 	openCommentsEvery = 5 * time.Minute
 )
@@ -484,6 +486,10 @@ func (w *Watcher) backfillChannel(ctx context.Context, api *tg.Client, ch *tg.Ch
 			}
 			if len(msgs) == 0 {
 				continue
+			}
+			// Paced: a first run reads every archived post's comments.
+			if !sleep(ctx, backfillPause) {
+				return ctx.Err()
 			}
 			info, err := w.syncComments(ctx, api, ch, g[0].MessageID, msgs, false)
 			if err != nil {

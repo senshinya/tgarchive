@@ -7,6 +7,7 @@ import { useStore } from '../../state/store';
 import { Avatar } from '../../ui/Avatar';
 import { IconButton } from '../../ui/Button';
 import { ArticleReader } from '../article/ArticleReader';
+import { CommentsView } from '../comments/CommentsView';
 import { MessageList } from '../message/MessageList';
 import { Wallpaper } from './Wallpaper';
 import './middle.scss';
@@ -123,8 +124,8 @@ function MiddleHeader({ chatId }: { chatId: number }) {
 }
 
 /** The conversation (a chat id, or -botId for a bot's merged timeline); with articleId, the
- * article reader on top of it. */
-export function MiddleColumn({ chatId, articleId = 0 }: { chatId: number; articleId?: number }) {
+ * article reader on top of it; with commentsId, that archived post's comments instead. */
+export function MiddleColumn({ chatId, articleId = 0, commentsId = 0 }: { chatId: number; articleId?: number; commentsId?: number }) {
   if (!chatId) {
     return (
       <div id="MiddleColumn" class="empty">
@@ -132,6 +133,14 @@ export function MiddleColumn({ chatId, articleId = 0 }: { chatId: number; articl
         <div class="empty-hint">
           <span>选择一个会话开始浏览存档</span>
         </div>
+      </div>
+    );
+  }
+  if (commentsId) {
+    return (
+      <div id="MiddleColumn">
+        <Wallpaper />
+        <CommentsView key={commentsId} chatId={chatId} postId={commentsId} />
       </div>
     );
   }

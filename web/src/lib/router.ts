@@ -4,6 +4,7 @@ export type Route =
   | { name: 'home' }
   | { name: 'chat'; chatId: number }
   | { name: 'article'; chatId: number; messageId: number }
+  | { name: 'comments'; chatId: number; messageId: number }
   | { name: 'bot'; botId: number }
   | { name: 'bot-article'; botId: number; messageId: number }
   | { name: 'downloads' }
@@ -25,6 +26,9 @@ export function parseRoute(pathname: string): Route {
   if (parts[0] === 'chat' && parts.length === 2 && id(parts[1])) return { name: 'chat', chatId: id(parts[1]) };
   if (parts[0] === 'chat' && parts.length === 4 && parts[2] === 'article' && id(parts[1]) && id(parts[3])) {
     return { name: 'article', chatId: id(parts[1]), messageId: id(parts[3]) };
+  }
+  if (parts[0] === 'chat' && parts.length === 4 && parts[2] === 'comments' && id(parts[1]) && id(parts[3])) {
+    return { name: 'comments', chatId: id(parts[1]), messageId: id(parts[3]) };
   }
   if (parts[0] === 'bot' && parts.length === 2 && id(parts[1])) return { name: 'bot', botId: id(parts[1]) };
   if (parts[0] === 'bot' && parts.length === 4 && parts[2] === 'article' && id(parts[1]) && id(parts[3])) {
@@ -55,6 +59,8 @@ export function routePath(r: Route): string {
       return `/chat/${r.chatId}`;
     case 'article':
       return `/chat/${r.chatId}/article/${r.messageId}`;
+    case 'comments':
+      return `/chat/${r.chatId}/comments/${r.messageId}`;
     case 'bot':
       return `/bot/${r.botId}`;
     case 'bot-article':
@@ -110,7 +116,7 @@ export interface NavigateOptions {
  * merged timeline.
  */
 export function routeConvKey(r: Route): number {
-  if (r.name === 'chat' || r.name === 'article') return r.chatId;
+  if (r.name === 'chat' || r.name === 'article' || r.name === 'comments') return r.chatId;
   if (r.name === 'bot' || r.name === 'bot-article') return -r.botId;
   return 0;
 }
@@ -118,6 +124,11 @@ export function routeConvKey(r: Route): number {
 /** The article message a route shows over its conversation; 0 for none. */
 export function routeArticleId(r: Route): number {
   return r.name === 'article' || r.name === 'bot-article' ? r.messageId : 0;
+}
+
+/** The archived post whose comments a route shows over its conversation; 0 for none. */
+export function routeCommentsId(r: Route): number {
+  return r.name === 'comments' ? r.messageId : 0;
 }
 
 /** The route showing conversation `key` (see routeConvKey). */

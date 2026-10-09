@@ -92,8 +92,10 @@ export function OriginHeader({ msg }: { msg: Message }) {
   );
 }
 
-/** Reply quote; clicking scrolls to the replied message when it is loaded and flashes it. */
+/** Reply quote; clicking scrolls to the replied message when it is loaded and flashes it. A quoted
+ * comment takes its author's name and color. */
 export function ReplyQuote({ msg, senderName }: { msg: Message; senderName: string }) {
+  const from = msg.reply?.extra?.from;
   const r = msg.reply;
   const jump = (e: MouseEvent) => {
     e.stopPropagation();
@@ -106,8 +108,13 @@ export function ReplyQuote({ msg, senderName }: { msg: Message; senderName: stri
     el.classList.add('highlight');
   };
   return (
-    <button type="button" class={`EmbeddedMessage${r ? '' : ' missing'}`} onClick={jump}>
-      <span class="embedded-title">{r ? senderName : '回复'}</span>
+    <button
+      type="button"
+      class={`EmbeddedMessage${r ? '' : ' missing'}`}
+      style={from ? { '--accent-color': peerColor(from.id), '--accent-background-color': `color-mix(in srgb, ${peerColor(from.id)} 10%, transparent)` } : undefined}
+      onClick={jump}
+    >
+      <span class="embedded-title">{r ? (from?.name ?? senderName) : '回复'}</span>
       <span class="embedded-text">{r ? previewText(r.kind, r.text) : '原消息未存档'}</span>
     </button>
   );

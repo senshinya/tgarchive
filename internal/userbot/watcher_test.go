@@ -36,7 +36,7 @@ type watchTG struct {
 	historyN    int // getHistory calls
 	available   tg.ChatReactionsClass
 	emojiDocs   int // getCustomEmojiDocuments calls
-	discussion  // comments (comments_test.go)
+	discussion      // comments (comments_test.go)
 }
 
 func newWatchTG() *watchTG {

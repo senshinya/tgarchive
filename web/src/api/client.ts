@@ -120,6 +120,10 @@ export interface Api {
   markRead(chatId: number, messageId: number): Promise<void>;
   /** Asks for fresh counters of a channel conversation's archived posts (they arrive as message.updated). */
   refreshPostStats(chatId: number, messageIds: number[]): Promise<void>;
+  /** The comments of an archived post: per `page`, or the newest. */
+  comments(chatId: number, postId: number, page?: PageParams, limit?: number): Promise<Message[]>;
+  /** Asks for an archived post's new comments (they arrive as comments.updated). */
+  refreshComments(chatId: number, postId: number): Promise<void>;
   addBot(token: string): Promise<AddBotResult>;
   setBotEnabled(id: number, enabled: boolean): Promise<Bot>;
   deleteBot(id: number, purge: boolean): Promise<void>;
@@ -182,6 +186,9 @@ export const api: Api = {
   stats: (tz) => request('GET', `/api/stats${qs({ tz })}`),
   markRead: (chatId, messageId) => request('POST', `/api/chats/${chatId}/read`, { message_id: messageId }),
   refreshPostStats: (chatId, messageIds) => request('POST', `/api/chats/${chatId}/refresh-stats`, { message_ids: messageIds }),
+  comments: (chatId, postId, page = {}, limit = PAGE_SIZE) =>
+    request('GET', `/api/chats/${chatId}/posts/${postId}/comments${qs({ limit, ...page })}`),
+  refreshComments: (chatId, postId) => request('POST', `/api/chats/${chatId}/posts/${postId}/refresh-comments`),
   addBot: (token) => request('POST', '/api/admin/bots', { token }),
   setBotEnabled: (id, enabled) => request('PATCH', `/api/admin/bots/${id}`, { enabled }),
   deleteBot: (id, purge) => request('DELETE', `/api/admin/bots/${id}${purge ? '?purge=1' : ''}`),
@@ -226,7 +233,7 @@ export function mediaUrl(id: number, download = false): string {
   return `/media/${id}${download ? '?download=1' : ''}`;
 }
 
-export function avatarUrl(kind: 'bots' | 'senders' | 'channels', tgId: number): string {
+export function avatarUrl(kind: 'bots' | 'senders' | 'channels' | 'users', tgId: number): string {
   return `/avatars/${kind}/${tgId}`;
 }
 

@@ -101,6 +101,25 @@ export interface ReplyRef {
   id: number;
   kind: string;
   text: string;
+  /** The quoted comment's author (extra.from); absent for bot chats. */
+  extra?: { from?: Commenter };
+}
+
+/** Who wrote a comment: a user, or a channel or group writing as itself. */
+export interface Commenter {
+  kind: 'user' | 'channel';
+  id: number;
+  name: string;
+  /** A profile photo is known (served at /avatars/users|channels/:id). */
+  photo?: boolean;
+}
+
+/** What an archived post's stats say about its comments; present when it takes comments. */
+export interface CommentsInfo {
+  /** The authors of the newest kept comments, newest first (at most 3). */
+  recent: Commenter[];
+  /** The discussion group cannot be read by the account: the comments are not kept. */
+  unreadable?: boolean;
 }
 
 export type MessageKind =
@@ -124,7 +143,7 @@ export interface Message {
   id: number;
   chat_id: number;
   tg_message_id: number;
-  source: 'bot_update' | 'userbot_fetch' | 'channel_watch';
+  source: 'bot_update' | 'userbot_fetch' | 'channel_watch' | 'channel_comment';
   media_group_id: string;
   date: number;
   edit_date: number;
@@ -144,6 +163,8 @@ export interface Message {
   stats?: PostStats;
   /** Set when the message is a favorite. */
   favorite?: FavoriteInfo | null;
+  /** The archived post a comment belongs to; 0 for anything but a comment. */
+  thread_root_id?: number;
 }
 
 export interface Tag {
@@ -186,6 +207,8 @@ export interface PostStats {
   forwards: number;
   replies: number;
   hit?: { at: number; reasons: string[] };
+  /** Present when the post takes comments; the count is `replies`. */
+  comments?: CommentsInfo;
 }
 
 /** A channel as the watch picker lists it. */
@@ -457,6 +480,8 @@ export type ArchiveEvent =
   | { type: 'watch.updated'; data: { watch_id: number } }
   | { type: 'favorites.updated'; data: null }
   | { type: 'chat.read'; data: { chat_id: number } }
+  /** New or changed comments of an archived post. */
+  | { type: 'comments.updated'; data: { chat_id: number; root_id: number } }
   /** Synthetic, never sent by the server: the store broadcasts it to `onEvent` listeners after it
    * resynced following a reconnect, so views holding their own fetched data refetch it. */
   | { type: 'resync'; data: null };
@@ -471,6 +496,7 @@ export const EVENT_TYPES = [
   'watch.updated',
   'favorites.updated',
   'chat.read',
+  'comments.updated',
 ] as const;
 
 /** One search result: a message and the text around its first match. */
