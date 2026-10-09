@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tgdown "github.com/gotd/td/telegram/downloader"
@@ -127,11 +129,11 @@ type Watcher struct {
 	wake      chan struct{}
 
 	Now        func() time.Time
-	MaxFlood   time.Duration // longest FLOOD_WAIT waited out
 	DialogsTTL time.Duration
 	RecentTTL  time.Duration
 	Absent     *AbsentChannels // channels a dialogs scan did not find; shared with the Fetcher
 
+	floodUntil atomic.Int64 // unix nanoseconds until which the last FLOOD_WAIT runs (see with)
 	mu         sync.Mutex
 	dialogsAt  time.Time
 	dialogs    []ChannelInfo // last complete scan; nil before the first
@@ -153,7 +155,7 @@ type Watcher struct {
 
 func NewWatcher(api API, st *store.Store, hub *events.Hub, n notify.Notifier, wakeDL func(), avatarDir string) *Watcher {
 	return &Watcher{api: api, st: st, hub: hub, notifier: n, wakeDL: wakeDL, avatarDir: avatarDir, wake: make(chan struct{}, 1),
-		Now: time.Now, MaxFlood: 300 * time.Second, DialogsTTL: 30 * time.Minute, RecentTTL: time.Minute, Absent: NewAbsentChannels(),
+		Now: time.Now, DialogsTTL: 30 * time.Minute, RecentTTL: time.Minute, Absent: NewAbsentChannels(),
 		recent: map[int64]*recent{}, photoMiss: map[int64]time.Time{}, photoSlots: make(chan struct{}, 2), backfills: map[int64]*BackfillState{},
 		opened: map[int64]time.Time{}, commentsOpened: map[int64]time.Time{}, commenterMiss: map[string]time.Time{}}
 }
@@ -189,9 +191,10 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 }
 
-// PollOnce runs one round over every enabled watch; nothing happens while the account is not ready.
+// PollOnce runs one round over every enabled watch; nothing happens while the account is not ready
+// or a FLOOD_WAIT runs.
 func (w *Watcher) PollOnce(ctx context.Context) {
-	if !w.api.WaitReady(ctx, 0) {
+	if !w.api.WaitReady(ctx, 0) || w.floodLeft() > 0 {
 		return
 	}
 	watches, err := w.st.ListWatches(ctx)
@@ -220,14 +223,15 @@ func (w *Watcher) pollWatch(ctx context.Context, wv store.WatchView) (stop bool)
 		return false
 	}
 	changed := false
-	err = w.api.With(ctx, func(api *tg.Client) error {
+	err = w.with(ctx, func(api *tg.Client) error {
 		var err error
 		changed, err = w.poll(ctx, api, wv, cond)
 		return err
 	})
 	if d, ok := tgerr.AsFloodWait(err); ok {
+		// Rounds are skipped until the wait is over (with): calling again within it only makes
+		// Telegram extend it.
 		log.Printf("watch %d: flood wait %s", wv.ID, d)
-		sleep(ctx, min(d, w.MaxFlood))
 		return true
 	}
 	if err != nil && watchTransient(err) {
@@ -245,6 +249,37 @@ func (w *Watcher) pollWatch(ctx context.Context, wv store.WatchView) (stop bool)
 		w.publish(wv.ID)
 	}
 	return false
+}
+
+// with runs fn through the account, recording any FLOOD_WAIT it answers: until that wait is over,
+// polling and the other background work leave Telegram alone (floodLeft). The wait is taken as
+// the account's, whichever call got it.
+func (w *Watcher) with(ctx context.Context, fn func(api *tg.Client) error) error {
+	err := w.api.With(ctx, fn)
+	if d, ok := tgerr.AsFloodWait(err); ok {
+		until := w.Now().Add(d + time.Second).UnixNano()
+		for {
+			cur := w.floodUntil.Load()
+			if cur >= until {
+				break
+			}
+			if w.floodUntil.CompareAndSwap(cur, until) {
+				log.Printf("watch: flood wait %s, background calls paused until %s", d, time.Unix(0, until).Format(time.TimeOnly))
+				break
+			}
+		}
+	}
+	return err
+}
+
+// floodLeft is how long the last recorded FLOOD_WAIT still runs; 0 when it is over.
+func (w *Watcher) floodLeft() time.Duration {
+	return max(time.Duration(w.floodUntil.Load()-w.Now().UnixNano()), 0)
+}
+
+// floodErr stands for a FLOOD_WAIT that still runs for d, refusing a call before it is made.
+func floodErr(d time.Duration) error {
+	return tgerr.New(420, fmt.Sprintf("FLOOD_WAIT_%d", int(math.Ceil(d.Seconds()))))
 }
 
 // watchTransient reports errors a later round may not see: the connection going away, or
@@ -819,7 +854,7 @@ func getChannel(ctx context.Context, api *tg.Client, ch *tg.Channel) (*tg.Channe
 // channel can be read.
 func (w *Watcher) InitialLastSeen(ctx context.Context, channelID int64) (int64, error) {
 	var top int64
-	err := w.api.With(ctx, func(api *tg.Client) error {
+	err := w.with(ctx, func(api *tg.Client) error {
 		ch, err := w.channel(ctx, api, channelID)
 		if err != nil {
 			return err
@@ -860,8 +895,12 @@ func (w *Watcher) Channels(ctx context.Context, refresh bool) (ChannelList, erro
 	defer w.mu.Unlock()
 	stale := w.dialogs == nil || w.Now().Sub(w.dialogsAt) >= w.DialogsTTL
 	if (refresh || stale) && !w.scanning {
-		w.scanning, w.scanErr = true, ""
-		go w.scanDialogs()
+		if left := w.floodLeft(); left > 0 {
+			w.scanErr = reason(floodErr(left))
+		} else {
+			w.scanning, w.scanErr = true, ""
+			go w.scanDialogs()
+		}
 	}
 	return w.channelList(), nil
 }
@@ -906,7 +945,7 @@ func (w *Watcher) collectDialogs(ctx context.Context) ([]ChannelInfo, error) {
 	req := &tg.MessagesGetDialogsRequest{OffsetPeer: &tg.InputPeerEmpty{}, Limit: dialogsPage}
 	for page := 0; ; page++ {
 		var res tg.MessagesDialogsClass
-		err := w.api.With(ctx, func(api *tg.Client) error {
+		err := w.with(ctx, func(api *tg.Client) error {
 			var err error
 			res, err = api.MessagesGetDialogs(ctx, req)
 			return err
@@ -1047,7 +1086,7 @@ func samePeer(a, b tg.PeerClass) bool {
 // Search finds public broadcast channels by name.
 func (w *Watcher) Search(ctx context.Context, q string) ([]ChannelInfo, error) {
 	out := []ChannelInfo{}
-	err := w.api.With(ctx, func(api *tg.Client) error {
+	err := w.with(ctx, func(api *tg.Client) error {
 		res, err := api.ContactsSearch(ctx, &tg.ContactsSearchRequest{Q: q, Limit: 20})
 		if err != nil {
 			return err
@@ -1101,7 +1140,7 @@ func (w *Watcher) Resolve(ctx context.Context, input string) (*ChannelInfo, erro
 		link = l
 	}
 	var info *ChannelInfo
-	err := w.api.With(ctx, func(api *tg.Client) error {
+	err := w.with(ctx, func(api *tg.Client) error {
 		ch, _, err := resolveChannel(ctx, api, w.st, w.Now, w.Absent, link)
 		if err != nil {
 			return err
@@ -1148,7 +1187,7 @@ func (w *Watcher) Known(ctx context.Context, id int64) (*store.Channel, error) {
 // Test judges a channel's latest posts against a draft condition (nil: no condition yet).
 func (w *Watcher) Test(ctx context.Context, channelID int64, cond *watchcond.Node) (*TestResult, error) {
 	res := &TestResult{Posts: []TestPost{}}
-	err := w.api.With(ctx, func(api *tg.Client) error {
+	err := w.with(ctx, func(api *tg.Client) error {
 		r, err := w.recentPosts(ctx, api, channelID)
 		if err != nil {
 			return err
@@ -1338,7 +1377,7 @@ func (w *Watcher) channelPhoto(ctx context.Context, id int64, force bool) (strin
 		return rel, nil
 	}
 	has := false
-	err := w.api.With(ctx, func(api *tg.Client) error {
+	err := w.with(ctx, func(api *tg.Client) error {
 		ch, err := w.channel(ctx, api, id)
 		if err != nil {
 			return err
@@ -1406,6 +1445,9 @@ func (w *Watcher) RefreshChannels(ctx context.Context) {
 		return
 	}
 	for _, id := range ids {
+		if left := w.floodLeft(); left > 0 && !sleep(ctx, left) {
+			return
+		}
 		w.mu.Lock()
 		delete(w.photoMiss, id)
 		w.mu.Unlock()

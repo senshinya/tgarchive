@@ -323,7 +323,7 @@ func (w *Watcher) CommenterPhoto(ctx context.Context, kind string, id int64) (st
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
-	err = w.api.With(ctx, func(api *tg.Client) error {
+	err = w.with(ctx, func(api *tg.Client) error {
 		return savePhoto(ctx, api, &tg.InputPeerPhotoFileLocation{Peer: ref.input(kind, id), PhotoID: p.PhotoID}, dst)
 	})
 	if err == nil {
@@ -373,6 +373,9 @@ func (w *Watcher) RefreshComments(ctx context.Context, chatID, rootID int64) err
 	if len(posts) == 0 {
 		return store.ErrNotFound
 	}
+	if w.floodLeft() > 0 {
+		return nil // the comments kept are shown; refreshed on an opening after the wait
+	}
 	now := w.Now()
 	w.mu.Lock()
 	if at, ok := w.commentsOpened[rootID]; ok && now.Sub(at) < openCommentsEvery {
@@ -384,7 +387,7 @@ func (w *Watcher) RefreshComments(ctx context.Context, chatID, rootID int64) err
 	if !w.api.WaitReady(ctx, 0) {
 		return ErrNotReady
 	}
-	return w.api.With(ctx, func(api *tg.Client) error {
+	return w.with(ctx, func(api *tg.Client) error {
 		ch, err := w.channel(ctx, api, channel)
 		if err != nil {
 			return err
@@ -405,6 +408,9 @@ func (w *Watcher) BackfillComments(ctx context.Context) {
 		if !w.api.WaitReady(ctx, 0) {
 			sleep(ctx, time.Minute)
 			continue
+		}
+		if left := w.floodLeft(); left > 0 && !sleep(ctx, left) {
+			return
 		}
 		err := w.backfillComments(ctx)
 		if err == nil {
@@ -440,7 +446,7 @@ func (w *Watcher) backfillComments(ctx context.Context) error {
 		if len(posts) == 0 {
 			continue
 		}
-		err = w.api.With(ctx, func(api *tg.Client) error {
+		err = w.with(ctx, func(api *tg.Client) error {
 			ch, err := w.channel(ctx, api, wv.ChannelID)
 			if err != nil {
 				return err

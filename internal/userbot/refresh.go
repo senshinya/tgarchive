@@ -72,6 +72,9 @@ func (w *Watcher) RefreshPosts(ctx context.Context, chatID int64, ids []int64) e
 	if err != nil || len(posts) == 0 {
 		return err
 	}
+	if w.floodLeft() > 0 {
+		return nil // the counters kept are shown; refreshed on an opening after the wait
+	}
 	now := w.Now()
 	w.mu.Lock()
 	if at, ok := w.opened[chatID]; ok && now.Sub(at) < openRefreshEvery {
@@ -83,7 +86,7 @@ func (w *Watcher) RefreshPosts(ctx context.Context, chatID int64, ids []int64) e
 	if !w.api.WaitReady(ctx, 0) {
 		return ErrNotReady
 	}
-	return w.api.With(ctx, func(api *tg.Client) error {
+	return w.with(ctx, func(api *tg.Client) error {
 		ch, err := w.channel(ctx, api, channel)
 		if err != nil {
 			return err

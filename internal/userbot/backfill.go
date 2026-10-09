@@ -100,10 +100,16 @@ func (w *Watcher) runBackfill(wv store.WatchView, cond *watchcond.Node, hours in
 	})
 }
 
-// withFlood runs fn through the account, waiting out FLOOD_WAITs of up to five minutes.
+// withFlood runs fn through the account, waiting out FLOOD_WAITs of up to five minutes. A longer
+// one, or one still running from an earlier call, is returned without calling Telegram again.
 func (w *Watcher) withFlood(ctx context.Context, fn func(api *tg.Client) error) error {
+	if left := w.floodLeft(); left > maxDialogWait {
+		return floodErr(left)
+	} else if left > 0 && !sleep(ctx, left) {
+		return ctx.Err()
+	}
 	for {
-		err := w.api.With(ctx, fn)
+		err := w.with(ctx, fn)
 		d, ok := tgerr.AsFloodWait(err)
 		if !ok || d > maxDialogWait {
 			return err
