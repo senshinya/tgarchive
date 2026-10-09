@@ -83,6 +83,7 @@ services:
 - 容器以 UID/GID 10001 运行，镜像自带健康检查 `GET /healthz`
 - 硬件转码：compose 加 `devices: [/dev/dri:/dev/dri]`，并用 `group_add` 加入宿主 render 节点所属的组（`stat -c %g /dev/dri/renderD128`）
 - 前面必须有反代做认证并写入 `Remote-User`，且先剥掉客户端自带的 `Remote-*` 头；SSE 路径 `/api/events` 不要缓冲
+- 反代须原样转发 `Host`（Caddy 默认如此），用域名访问时把该域名写进 `ALLOWED_HOSTS`；写请求一律要求 `Content-Type: application/json`，带 `Origin` 时须与 `Host` 一致，自写脚本调用 API 时注意
 - 首次使用：管理 → API 凭据填 [my.telegram.org](https://my.telegram.org) 的 `api_id` / `api_hash` → 添加机器人并设置白名单 →（可选）用户账号登录
 
 ## 许可
