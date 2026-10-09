@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -173,5 +175,35 @@ func TestInMemoryReadsShareWriter(t *testing.T) {
 	chat := ingest(t, s, bot, textMsg(1, "hi")).ChatID
 	if page, err := s.ListMessages(ctx, chat, 0, 50); err != nil || len(page) != 1 {
 		t.Fatalf("page = %v, %v", page, err)
+	}
+}
+
+// A database a newer build migrated past this build's migrations is refused, and left as it is.
+func TestOpenRefusesNewerSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v int
+	s.db.QueryRow("PRAGMA user_version").Scan(&v)
+	newer := v + 1
+	if _, err := s.db.Exec(fmt.Sprintf("PRAGMA user_version = %d", newer)); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if s, err := Open(path); err == nil || !strings.Contains(err.Error(), "newer") {
+		if s != nil {
+			s.Close()
+		}
+		t.Fatalf("open newer = %v", err)
+	}
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.QueryRow("PRAGMA user_version").Scan(&v); err != nil || v != newer {
+		t.Fatalf("user_version after the refusal = %d, %v", v, err)
 	}
 }

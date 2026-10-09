@@ -92,6 +92,11 @@ func (s *Store) migrate(ctx context.Context, limit int) error {
 		names = append(names, e.Name())
 	}
 	sort.Strings(names)
+	if ver > len(names) {
+		// Written by a newer build: this one does not know its schema, and running against it
+		// could corrupt it.
+		return fmt.Errorf("database schema version %d is newer than this build supports (%d)", ver, len(names))
+	}
 	for i, name := range names {
 		n := i + 1
 		if !strings.HasPrefix(name, fmt.Sprintf("%04d_", n)) {
