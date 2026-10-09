@@ -92,7 +92,7 @@ func TestProcessSuccess(t *testing.T) {
 	if got.State != store.StateDone || got.Size != 4 {
 		t.Fatalf("media = %+v", got)
 	}
-	if !regexp.MustCompile(`^\d+/2026/10/[0-9a-f]{40}\.jpg$`).MatchString(got.Path) {
+	if !regexp.MustCompile(`^\d+/2026/10/[0-9a-f]{40}-\d+\.jpg$`).MatchString(got.Path) {
 		t.Fatalf("path = %q", got.Path)
 	}
 	if _, err := os.Stat(filepath.Join(f.mediaDir, got.Path)); err != nil {
@@ -148,6 +148,85 @@ func TestDeletedWhileDownloadingRemovesFile(t *testing.T) {
 	entries, _ := os.ReadDir(filepath.Join(f.mediaDir, "1", "2026", "10"))
 	if len(entries) != 0 {
 		t.Fatalf("orphaned download left on disk: %v", entries)
+	}
+}
+
+// stallSource writes the media id into the file it fetches, holding the fetch of stall until
+// release is closed.
+type stallSource struct {
+	stall   int64
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *stallSource) Fetch(_ context.Context, m *store.Media, dstBase string) (string, int64, error) {
+	if m.ID == s.stall {
+		close(s.started)
+		<-s.release
+	}
+	body := []byte(fmt.Sprintf("media %d", m.ID))
+	p := dstBase + ".jpg"
+	return p, int64(len(body)), os.WriteFile(p, body, 0o644)
+}
+
+// A download outliving its media row must not touch the file of the row that replaced it: the
+// message is deleted mid-download (the row goes as an orphan), the same file is sent again (a
+// new row, same dedupe key), and the new row finishes first. The stale download then completes
+// and drops its file, which used to be the new row's file too, leaving it done but missing.
+func TestStaleDownloadKeepsReplacementFile(t *testing.T) {
+	f, res, stale := setup(t, 0)
+	d := f.newDL(0)
+	src := &stallSource{stall: stale.ID, started: make(chan struct{}), release: make(chan struct{})}
+	d.Register("bot", src)
+	staleDone := make(chan struct{})
+	go func() { d.Process(ctx, stale); close(staleDone) }()
+	<-src.started
+
+	ingestKey := func(tgID int64, key string) int64 {
+		t.Helper()
+		msg := &model.Message{TgMessageID: tgID, Source: model.SourceBotUpdate, Date: 1, Kind: model.KindPhoto, RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`),
+			Media: []model.Media{{DedupeKey: key, SourceRef: "fid", Kind: "photo", Role: model.RoleMain}}}
+		if _, err := f.st.Ingest(ctx, store.IngestInput{BotID: f.bot, Sender: model.Sender{TgUserID: 42}, Msg: msg, Now: 2}); err != nil {
+			t.Fatal(err)
+		}
+		due, _ := f.st.DueMedia(ctx, 0, 10)
+		for _, m := range due {
+			if m.DedupeKey == key {
+				return m.ID
+			}
+		}
+		t.Fatalf("no due media for %s", key)
+		return 0
+	}
+	ingestKey(2, "bot:other") // so the deleted row is not the newest and its id is not reused
+	if _, _, err := f.st.DeleteMessage(ctx, res.MessageID, 1); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := f.st.GetMedia(ctx, ingestKey(3, "bot:k"))
+	if err != nil || fresh.ID == stale.ID {
+		t.Fatalf("fresh = %+v %v, want a new row", fresh, err)
+	}
+	d.Process(ctx, fresh)
+
+	close(src.release)
+	<-staleDone
+	got, _ := f.st.GetMedia(ctx, fresh.ID)
+	if got.State != store.StateDone {
+		t.Fatalf("media = %+v", got)
+	}
+	b, err := os.ReadFile(filepath.Join(f.mediaDir, got.Path))
+	if err != nil {
+		t.Fatalf("replacement file gone: %v", err)
+	}
+	if want := fmt.Sprintf("media %d", fresh.ID); string(b) != want {
+		t.Fatalf("replacement file holds %q, want %q", b, want)
+	}
+	if _, err := f.st.GetMedia(ctx, stale.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("stale row still there: %v", err)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(filepath.Join(f.mediaDir, got.Path)))
+	if len(entries) != 1 {
+		t.Fatalf("files left = %v, want only the replacement", entries)
 	}
 }
 
