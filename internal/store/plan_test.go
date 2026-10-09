@@ -53,12 +53,44 @@ func TestCommentQueriesUseThreadIndex(t *testing.T) {
 			WHERE thread_root_id != 0 AND thread_root_id = ? AND deleted_at = 0`,
 		"recent commenters": `SELECT extra_json FROM messages WHERE thread_root_id != 0 AND thread_root_id = ? AND deleted_at = 0
 			ORDER BY tg_message_id DESC LIMIT 200`,
-		"newest comments": `SELECT id FROM messages WHERE ` + sc.cond + ` AND deleted_at = 0 ORDER BY tg_message_id DESC, id DESC LIMIT 50`,
-		"older comments": `SELECT id FROM messages WHERE ` + sc.cond + ` AND deleted_at = 0 AND (tg_message_id, id) < (5, 5)
+		"newest comments": `SELECT ` + msgCols + ` FROM messages WHERE ` + sc.cond + ` AND deleted_at = 0 ORDER BY tg_message_id DESC, id DESC LIMIT 50`,
+		"older comments": `SELECT ` + msgCols + ` FROM messages WHERE ` + sc.cond + ` AND deleted_at = 0 AND (tg_message_id, id) < (5, 5)
 			ORDER BY tg_message_id DESC, id DESC LIMIT 50`,
-		"newer comments": `SELECT id FROM messages WHERE ` + sc.cond + ` AND deleted_at = 0 AND (tg_message_id, id) > (5, 5)
+		"newer comments": `SELECT ` + msgCols + ` FROM messages WHERE ` + sc.cond + ` AND deleted_at = 0 AND (tg_message_id, id) > (5, 5)
 			ORDER BY tg_message_id, id LIMIT 50`,
 	} {
 		wantPlan(t, s, name, q, []string{"messages_thread"}, sc.arg)
+	}
+}
+
+// A channel's timeline walks messages_posts past no comment; a bot chat's walks
+// messages_chat_page in arrival order.
+func TestTimelineQueriesUsePostIndex(t *testing.T) {
+	s := newStore(t)
+	seedWatch(t, s)
+	res, err := s.Ingest(ctx, IngestInput{ChannelID: chanID, Msg: channelPost(1, "", "k1"), Now: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	channel, err := s.chatScope(ctx, res.ChatID)
+	if err != nil || channel.key != "tg_message_id" {
+		t.Fatalf("scope = %+v, %v", channel, err)
+	}
+	private := scope{channel.cond, 999, "id"}
+	for _, c := range []struct {
+		name  string
+		sc    scope
+		index string
+	}{{"channel", channel, "messages_posts"}, {"private", private, "messages_chat_page"}} {
+		k := c.sc.key
+		for name, q := range map[string]string{
+			"newest": `SELECT ` + msgCols + ` FROM messages WHERE ` + c.sc.cond + ` AND deleted_at = 0 ORDER BY ` + k + ` DESC, id DESC LIMIT 50`,
+			"older": `SELECT ` + msgCols + ` FROM messages WHERE ` + c.sc.cond + ` AND deleted_at = 0 AND (` + k + `, id) < (5, 5)
+				ORDER BY ` + k + ` DESC, id DESC LIMIT 50`,
+			"newer": `SELECT ` + msgCols + ` FROM messages WHERE ` + c.sc.cond + ` AND deleted_at = 0 AND (` + k + `, id) > (5, 5)
+				ORDER BY ` + k + `, id LIMIT 50`,
+		} {
+			wantPlan(t, s, c.name+" "+name, q, []string{c.index}, c.sc.arg)
+		}
 	}
 }
