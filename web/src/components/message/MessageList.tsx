@@ -75,30 +75,39 @@ export function MessageList({ chatId }: { chatId: number }) {
   const [deleting, setDeleting] = useState(false);
   // A channel opened with unread posts shows them from the first one, below a divider that stays
   // put for this visit: what was read when it opened, and whether that window is still loading
-  // (until then nothing scrolls and nothing is marked read).
-  const [read] = useState(() => {
-    const chat = store.chats.value.find((c) => c.id === chatId);
-    return chat?.kind === 'channel' && chat.unread > 0 && chat.first_unread_id > 0
-      ? { before: chat.last_read_pos, resume: chat.first_unread_id }
-      : null;
-  });
-  const unread = useRef({ pending: read !== null, started: false });
+  // (until then nothing scrolls and nothing is marked read). A chat's unread posts are known from
+  // the chat list, so a chat waits for it before opening (a page loaded at the chat starts both at
+  // once); a bot timeline has none.
+  const [read, setRead] = useState<{ before: number; resume: number } | null>(null);
+  const unread = useRef({ pending: chatId > 0, started: false });
   const firstUnread = read ? conv.items.find((m) => m.pos > read.before)?.id : undefined;
   const statsAsked = useRef(false);
+  const opened = useRef(false);
+  const chatsReady = chatId < 0 || store.chatsLoaded.value;
 
   useEffect(() => {
+    if (opened.current) return;
     // A jump asked before the conversation opened (search, favorites, downloads) loads the window
     // around its message instead of the latest page, unless that message is already loaded.
-    // A jump wins over the unread posts.
+    // A jump wins over the unread posts, and needs no chat list.
     const j = store.jumpTo.value;
-    if (j && j.key === chatId) unread.current.pending = false;
-    if (j && j.key === chatId && !store.conv(chatId).items.some((m) => m.id === j.messageId)) void store.loadAround(chatId, j.messageId);
-    else if (read && unread.current.pending) {
+    const jumping = !!j && j.key === chatId;
+    if (!jumping && !chatsReady) return;
+    opened.current = true;
+    const chat = store.chats.value.find((c) => c.id === chatId);
+    const r =
+      !jumping && chat?.kind === 'channel' && chat.unread > 0 && chat.first_unread_id > 0
+        ? { before: chat.last_read_pos, resume: chat.first_unread_id }
+        : null;
+    setRead(r);
+    unread.current.pending = r !== null;
+    if (jumping && !store.conv(chatId).items.some((m) => m.id === j.messageId)) void store.loadAround(chatId, j.messageId);
+    else if (r) {
       // The window around the first unread post.
-      void store.loadAround(chatId, read.resume);
+      void store.loadAround(chatId, r.resume);
       unread.current.started = true;
     } else void store.refreshLatest(chatId);
-  }, [chatId]);
+  }, [chatId, chatsReady]);
 
   // The unread posts failing to load leave the list as it is, working as usual.
   useEffect(() => {
@@ -272,7 +281,7 @@ export function MessageList({ chatId }: { chatId: number }) {
               </button>
             </div>
           )}
-          {!conv.loaded && conv.loading && (
+          {!conv.loaded && (conv.loading || !chatsReady) && (
             <div class="history-notice">
               <Spinner size={32} />
             </div>

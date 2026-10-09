@@ -153,6 +153,57 @@ describe('opening a channel with unread posts', () => {
     vi.mocked(scroll.scrollWithin).mockRestore();
   });
 
+  it('waits for the chat list before deciding where to open (a page loaded at the chat)', async () => {
+    const scrolled: Element[] = [];
+    const spy = vi.spyOn(scroll, 'scrollWithin').mockImplementation((_list, el) => void scrolled.push(el));
+    let release: () => void = () => {};
+    const api = fakeApi({
+      chats: vi.fn(
+        () =>
+          new Promise<ReturnType<typeof makeChannelChat>[]>(
+            (r) => (release = () => r([makeChannelChat({ last_read_pos: 120, unread: 3, first_unread_id: 121 })])),
+          ),
+      ),
+      messages: pages(range(100, 123), range(74, 123)),
+    });
+    const store = createStore(api, { chatsReloadDelay: 0 });
+    const chats = store.loadChats(); // App starts it along with the list
+    const { container } = render(
+      <StoreContext.Provider value={store}>
+        <MessageList chatId={50} />
+      </StoreContext.Provider>,
+    );
+    await act(async () => {});
+    expect(api.messages).not.toHaveBeenCalled();
+    await act(async () => {
+      release();
+      await chats;
+    });
+    await screen.findByText('p123');
+    expect(api.messages).toHaveBeenCalledWith(50, 0, 50, { around: 121 });
+    expect(vi.mocked(api.messages).mock.calls.some((c) => !c[3])).toBe(false);
+    const divider = container.querySelector('.unread-divider');
+    expect(divider?.nextElementSibling?.getAttribute('data-message-id')).toBe('121');
+    expect(scrolled).toContain(divider);
+    expect(api.markRead).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('opens a bot timeline without waiting for the chat list', async () => {
+    const api = fakeApi({
+      chats: vi.fn(() => new Promise<never>(() => {})),
+      botMessages: vi.fn(async () => [makeMessage({ id: 1, text: 'hi' })]),
+    });
+    const store = createStore(api);
+    void store.loadChats();
+    render(
+      <StoreContext.Provider value={store}>
+        <MessageList chatId={-1} />
+      </StoreContext.Provider>,
+    );
+    await screen.findByText('hi');
+  });
+
   it('keeps private chats on the latest message', async () => {
     const api = fakeApi({
       chats: vi.fn(async () => [makeChat({ id: 10, last_read_pos: 1, unread: 4, first_unread_id: 1 })]),
