@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,6 +36,7 @@ type fakeWatcher struct {
 	refreshed chan []int64      // chat id followed by the message ids, per RefreshPosts call
 	comments  chan [2]int64     // chat id and post, per RefreshComments call
 	commenter map[string]string // "user:<id>" -> avatar file written by CommenterPhoto
+	listed    []bool            // the refresh flag of each Channels call
 }
 
 var newsInfo = userbot.ChannelInfo{ChannelID: 500, Title: "News", Username: "news", Participants: 10}
@@ -46,7 +48,10 @@ func (f *fakeWatcher) err() error {
 	return nil
 }
 
-func (f *fakeWatcher) Channels(context.Context, bool) (userbot.ChannelList, error) {
+func (f *fakeWatcher) Channels(_ context.Context, refresh bool) (userbot.ChannelList, error) {
+	f.mu.Lock()
+	f.listed = append(f.listed, refresh)
+	f.mu.Unlock()
 	return userbot.ChannelList{Channels: []userbot.ChannelInfo{newsInfo}, Loading: true}, f.err()
 }
 
@@ -143,9 +148,10 @@ func (f *fakeWatcher) Wake() {
 }
 
 type watchEnv struct {
-	h  http.Handler
-	st *store.Store
-	fw *fakeWatcher
+	h   http.Handler
+	srv *Server
+	st  *store.Store
+	fw  *fakeWatcher
 }
 
 func newWatchEnv(t *testing.T) *watchEnv {
@@ -159,9 +165,9 @@ func newWatchEnv(t *testing.T) *watchEnv {
 	dir := t.TempDir()
 	fw := &fakeWatcher{ready: true, avatarDir: dir, refreshed: make(chan []int64, 4), comments: make(chan [2]int64, 4),
 		commenter: map[string]string{"user:11": "users/11.jpg", "channel:700": "channels/700.jpg"}}
-	srv := &Server{Cfg: &config.Config{RequireForwardAuth: true}, Store: st, Box: box, Watcher: fw, Hub: events.NewHub(),
+	srv := &Server{Cfg: &config.Config{RequireForwardAuth: true, AllowedHosts: []string{"example.com"}}, Store: st, Box: box, Watcher: fw, Hub: events.NewHub(),
 		AvatarDir: dir, MediaDir: t.TempDir(), Now: func() time.Time { return time.Unix(1000, 0) }}
-	return &watchEnv{h: srv.Handler(), st: st, fw: fw}
+	return &watchEnv{h: srv.Handler(), srv: srv, st: st, fw: fw}
 }
 
 const condOK = `{"op":"and","items":[{"metric":"views","cmp":"gte","value":10}]}`
@@ -253,10 +259,41 @@ func TestWatchPurge(t *testing.T) {
 	}
 }
 
+// A rescan of the account's dialogs costs Telegram requests (and FLOOD_WAITs), so only a POST asks
+// for one, at most every channelsRefreshEvery; a GET, which any page can fire with <img>, never does.
+func TestChannelsRefresh(t *testing.T) {
+	e := newWatchEnv(t)
+	now := time.Unix(1000, 0)
+	e.srv.Now = func() time.Time { return now }
+	refresh := func() *httptest.ResponseRecorder { return call(e.h, "POST", "/api/admin/channels/refresh", nil) }
+	if w := call(e.h, "GET", "/api/admin/channels?refresh=1", nil); w.Code != 200 {
+		t.Fatalf("get = %d %s", w.Code, w.Body)
+	}
+	if w := refresh(); w.Code != 200 || !strings.Contains(w.Body.String(), `"channel_id":500`) || !strings.Contains(w.Body.String(), `"loading":true`) {
+		t.Fatalf("refresh = %d %s", w.Code, w.Body)
+	}
+	refresh()
+	now = now.Add(channelsRefreshEvery - time.Second)
+	refresh()
+	now = now.Add(time.Second)
+	refresh()
+	// A refresh the account could not take does not use up the next one.
+	now = now.Add(channelsRefreshEvery)
+	e.fw.ready = false
+	if w := refresh(); w.Code != 409 {
+		t.Fatalf("refresh offline = %d %s", w.Code, w.Body)
+	}
+	e.fw.ready = true
+	refresh()
+	if got, want := fmt.Sprint(e.fw.listed), "[false true false false true true true]"; got != want {
+		t.Fatalf("refresh flags = %s, want %s", got, want)
+	}
+}
+
 func TestChannelPickerEndpoints(t *testing.T) {
 	e := newWatchEnv(t)
 	call(e.h, "POST", "/api/admin/watches", watchReq(500, 30, condOK))
-	if w := call(e.h, "GET", "/api/admin/channels?refresh=1", nil); w.Code != 200 || !strings.Contains(w.Body.String(), `"watched":true`) ||
+	if w := call(e.h, "GET", "/api/admin/channels", nil); w.Code != 200 || !strings.Contains(w.Body.String(), `"watched":true`) ||
 		!strings.Contains(w.Body.String(), `"loading":true`) {
 		t.Fatalf("channels = %d %s", w.Code, w.Body)
 	}

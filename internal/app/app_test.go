@@ -33,6 +33,7 @@ func cfgFor(fake *tgtest.FakeTG, dataDir string) *config.Config {
 		DataDir: dataDir, BotAPIURL: fake.URL(), CloudAPIURL: fake.URL(),
 		BotAPIDirRemote: fake.RemoteDir, BotAPIDirLocal: fake.RemoteDir,
 		TokenEncKey: bytes.Repeat([]byte{7}, 32), RequireForwardAuth: true, PollTimeoutSec: 1,
+		AllowedHosts: []string{"example.com"}, // httptest requests' Host
 	}
 }
 

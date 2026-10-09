@@ -53,13 +53,38 @@ describe('api client', () => {
     expect(JSON.parse(String(calls[0].init.body))).toEqual({ note: '朋友', can_fetch: true });
   });
 
-  it('sends bodiless POSTs without a content type', async () => {
+  it('sends every write as JSON, {} when it has no body', async () => {
     const calls = mockFetch(204);
     await expect(api.retryMedia(9)).resolves.toBeUndefined();
     await api.userbotLogout();
-    expect(calls[0].url).toBe('/api/media/9/retry');
+    await api.deleteMessage(4);
+    await api.unfavorite(4);
+    await api.favorite(4);
+    expect(calls.map((c) => `${c.init.method} ${c.url}`)).toEqual([
+      'POST /api/media/9/retry',
+      'POST /api/admin/userbot/logout',
+      'DELETE /api/messages/4',
+      'DELETE /api/messages/4/favorite',
+      'PUT /api/messages/4/favorite',
+    ]);
+    for (const c of calls) {
+      expect((c.init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+      expect(c.init.body).toBe('{}');
+    }
+  });
+
+  it('sends reads without a body or content type', async () => {
+    const calls = mockFetch(200, []);
+    await api.bots();
     expect(calls[0].init.headers).toBeUndefined();
-    expect(calls[1].url).toBe('/api/admin/userbot/logout');
+    expect(calls[0].init.body).toBeUndefined();
+  });
+
+  it('reads the channel list with GET and asks for a rescan with POST', async () => {
+    const calls = mockFetch(200, { channels: [], loading: false, updated_at: 0, error: '' });
+    await api.channels();
+    await api.channels(true);
+    expect(calls.map((c) => `${c.init.method} ${c.url}`)).toEqual(['GET /api/admin/channels', 'POST /api/admin/channels/refresh']);
   });
 
   it('adds purge only when asked', async () => {

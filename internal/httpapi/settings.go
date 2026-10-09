@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -34,8 +33,7 @@ func (s *Server) getTelegramApp(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) putTelegramApp(w http.ResponseWriter, r *http.Request) {
 	var c tgapp.Credentials
-	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid json")
+	if !decodeSmall(w, r, &c) {
 		return
 	}
 	if err := tgapp.Validate(c); err != nil {

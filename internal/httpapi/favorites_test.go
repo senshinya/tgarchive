@@ -43,6 +43,13 @@ func TestFavoritesEndpoints(t *testing.T) {
 	if w := call(e.h, "PUT", fav, nil); w.Code != 200 {
 		t.Fatalf("favorite without body = %d %s", w.Code, w.Body)
 	}
+	// The WebUI sends {} when it has no tags to set; that must keep them, like no body.
+	w = call(e.h, "PUT", fav, map[string]any{})
+	info = store.FavoriteInfo{}
+	json.Unmarshal(w.Body.Bytes(), &info)
+	if w.Code != 200 || len(info.Tags) != 1 {
+		t.Fatalf("favorite with {} = %d %s", w.Code, w.Body)
+	}
 	if w := call(e.h, "PUT", tags, map[string]any{"tags": []string{"a\nb"}}); w.Code != 400 {
 		t.Fatalf("bad tag = %d", w.Code)
 	}
