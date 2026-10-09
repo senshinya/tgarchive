@@ -115,6 +115,7 @@ func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer, w
 	fetcher := userbot.NewFetcher(ub, st, rc, clients, hub, dl.Wake, mediaDir)
 	watcher := userbot.NewWatcher(ub, st, hub, notifier, dl.Wake, avatarDir)
 	watcher.MediaDir = mediaDir
+	watcher.Absent = fetcher.Absent // one record of the channels the account is not in
 	tw := telegraph.NewWorker(st, telegraph.NewClient(cfg.TelegraphAPIURL), rc, hub, dl.Wake)
 	av := &avatars.Refresher{Store: st, Clients: clients, Mapper: mapper, Dir: avatarDir}
 	mgr := collector.New(ctx, collector.Deps{
