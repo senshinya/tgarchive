@@ -43,6 +43,7 @@ func allMediaQuery(typ, source string, beforeID int64, limit int) (string, []any
 // ListAllMedia pages through the media wall: photos ("photo"), videos and GIFs ("video") or
 // both ("all"), from every chat ("all"), private chats or channels; beforeID pages.
 func (s *Store) ListAllMedia(ctx context.Context, typ, source string, beforeID int64, limit int) ([]MessageView, error) {
+	s = s.reader()
 	q, args, err := allMediaQuery(typ, source, beforeID, limit)
 	if err != nil {
 		return nil, err

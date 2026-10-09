@@ -49,6 +49,7 @@ var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 // term of q (case-insensitively, as substrings), newest first. convKey limits it to one chat
 // (positive) or one bot's chats (-botId); 0 searches everything. beforeID pages.
 func (s *Store) Search(ctx context.Context, q string, convKey, beforeID int64, limit int) ([]SearchHit, error) {
+	s = s.reader()
 	terms := SearchTerms(q)
 	if terms == nil {
 		return nil, ErrBadQuery

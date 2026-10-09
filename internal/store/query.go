@@ -128,6 +128,7 @@ const lastMessage = `CASE WHEN c.kind = 'channel' THEN
 // ListChats lists conversations, most recent first: every bot × sender chat of botID (all bots
 // for 0), and with botID 0 also the watched channels' conversations.
 func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) {
+	s = s.reader()
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.id, c.kind, COALESCE(c.bot_id, 0), c.last_message_at,
 			COALESCE(s.tg_user_id, 0), COALESCE(s.first_name, ''), COALESCE(s.last_name, ''), COALESCE(s.username, ''),
@@ -263,15 +264,18 @@ func botScope(botID int64) scope {
 type Page struct{ Before, After, Around int64 }
 
 func (s *Store) ListMessages(ctx context.Context, chatID, beforeID int64, limit int) ([]MessageView, error) {
+	s = s.reader()
 	return s.ListMessagesPage(ctx, chatID, Page{Before: beforeID}, limit)
 }
 
 // ListBotMessages pages through every chat of one bot as a single timeline.
 func (s *Store) ListBotMessages(ctx context.Context, botID, beforeID int64, limit int) ([]MessageView, error) {
+	s = s.reader()
 	return s.listMessages(ctx, botScope(botID), Page{Before: beforeID}, limit)
 }
 
 func (s *Store) ListMessagesPage(ctx context.Context, chatID int64, p Page, limit int) ([]MessageView, error) {
+	s = s.reader()
 	sc, err := s.chatScope(ctx, chatID)
 	if err != nil {
 		return nil, err
@@ -282,6 +286,7 @@ func (s *Store) ListMessagesPage(ctx context.Context, chatID int64, p Page, limi
 // ListCommentsPage pages through the comments of archived post rootID, which must be a live
 // channel post of chat chatID (ErrNotFound otherwise).
 func (s *Store) ListCommentsPage(ctx context.Context, chatID, rootID int64, p Page, limit int) ([]MessageView, error) {
+	s = s.reader()
 	var one int
 	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM messages WHERE id = ? AND chat_id = ? AND source = 'channel_watch' AND deleted_at = 0`,
 		rootID, chatID).Scan(&one)
@@ -305,6 +310,7 @@ func (s *Store) ListCommentsPage(ctx context.Context, chatID, rootID int64, p Pa
 }
 
 func (s *Store) ListBotMessagesPage(ctx context.Context, botID int64, p Page, limit int) ([]MessageView, error) {
+	s = s.reader()
 	return s.listMessages(ctx, botScope(botID), p, limit)
 }
 
@@ -433,6 +439,7 @@ func (s *Store) newer(ctx context.Context, sc scope, c cursor, limit int) ([]Mes
 
 // GetMessageView returns one non-deleted message with its media and reply preview.
 func (s *Store) GetMessageView(ctx context.Context, id int64) (MessageView, error) {
+	s = s.reader()
 	views, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages WHERE id = ? AND deleted_at = 0`, id))
 	if err != nil {
 		return MessageView{}, err
@@ -447,6 +454,7 @@ func (s *Store) GetMessageView(ctx context.Context, id int64) (MessageView, erro
 }
 
 func (s *Store) ListChatMedia(ctx context.Context, chatID int64, typ string, beforeID int64, limit int) ([]MessageView, error) {
+	s = s.reader()
 	sc, err := s.chatScope(ctx, chatID)
 	if err != nil {
 		return nil, err
@@ -456,6 +464,7 @@ func (s *Store) ListChatMedia(ctx context.Context, chatID int64, typ string, bef
 
 // ListBotMedia is ListChatMedia over every chat of one bot.
 func (s *Store) ListBotMedia(ctx context.Context, botID int64, typ string, beforeID int64, limit int) ([]MessageView, error) {
+	s = s.reader()
 	return s.listMedia(ctx, botScope(botID), typ, beforeID, limit)
 }
 

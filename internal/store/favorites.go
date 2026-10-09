@@ -189,6 +189,7 @@ func tagsOf(ctx context.Context, tx *sql.Tx, msgID int64) ([]TagRef, error) {
 // ListFavorites pages through the favorites, most recently added first; tagID 0 means any tag,
 // beforeFavID pages (a FavID from the previous page).
 func (s *Store) ListFavorites(ctx context.Context, tagID, beforeFavID int64, limit int) ([]FavoriteItem, error) {
+	s = s.reader()
 	rows, err := s.db.QueryContext(ctx, `SELECT f.id, f.message_id FROM favorites f JOIN messages m ON m.id = f.message_id
 		WHERE m.deleted_at = 0 AND (? = 0 OR f.id < ?)
 			AND (? = 0 OR EXISTS (SELECT 1 FROM message_tags mt WHERE mt.message_id = f.message_id AND mt.tag_id = ?))
@@ -238,6 +239,7 @@ func (s *Store) ListFavorites(ctx context.Context, tagID, beforeFavID int64, lim
 
 // ListTags returns every tag by name, with how many live favorites carry it.
 func (s *Store) ListTags(ctx context.Context) ([]TagCount, error) {
+	s = s.reader()
 	rows, err := s.db.QueryContext(ctx, `SELECT t.id, t.name,
 			(SELECT COUNT(*) FROM message_tags mt JOIN messages m ON m.id = mt.message_id WHERE mt.tag_id = t.id AND m.deleted_at = 0)
 		FROM tags t ORDER BY t.name`)
