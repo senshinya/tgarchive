@@ -29,9 +29,9 @@ func TestDownloadQueries(t *testing.T) {
 		t.Fatalf("queue = %d", n)
 	}
 
-	s.MarkMediaFailed(ctx, b, 3, "HTTP 500")
-	s.MarkMediaFailed(ctx, c, 3, "boom")
-	s.MarkMediaFailed(ctx, g, 3, "x")
+	s.MarkMediaFailed(ctx, b, mediaKey(t, s, b), 3, "HTTP 500")
+	s.MarkMediaFailed(ctx, c, mediaKey(t, s, c), 3, "boom")
+	s.MarkMediaFailed(ctx, g, mediaKey(t, s, g), 3, "x")
 	s.DeleteMessage(ctx, gone.MessageID, 9) // its media is gone with it
 	failed, err := s.FailedDownloads(ctx, 50)
 	if err != nil || len(failed) != 2 || failed[0].MediaID != c || failed[1].Error != "HTTP 500" {

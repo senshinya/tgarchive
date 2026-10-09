@@ -59,7 +59,7 @@ func newReadEnv(t *testing.T) *readEnv {
 	due, _ := st.DueMedia(bg, 0, 10)
 	os.MkdirAll(filepath.Join(mediaDir, "1"), 0o755)
 	os.WriteFile(filepath.Join(mediaDir, "1", "p.jpg"), []byte("photo-bytes"), 0o644)
-	st.MarkMediaDone(bg, due[0].ID, "1/p.jpg", 11)
+	st.MarkMediaDone(bg, due[0].ID, due[0].DedupeKey, "1/p.jpg", 11)
 	return &readEnv{srv: srv, h: srv.Handler(), st: st, hub: hub, chat: r1.ChatID, photoMsg: r1.MessageID, media: due[0].ID}
 }
 
@@ -332,7 +332,7 @@ func TestServeMediaContentSafety(t *testing.T) {
 		t.Fatalf("due = %+v", due)
 	}
 	os.WriteFile(filepath.Join(e.srv.MediaDir, "1", "h.html"), []byte("<script>alert(1)</script>"), 0o644)
-	e.st.MarkMediaDone(bg, due[0].ID, "1/h.html", 25)
+	e.st.MarkMediaDone(bg, due[0].ID, due[0].DedupeKey, "1/h.html", 25)
 	w = do(e.h, "GET", fmt.Sprintf("/media/%d", due[0].ID), nil)
 	if w.Code != 200 || w.Header().Get("Content-Type") != "application/octet-stream" ||
 		!strings.HasPrefix(w.Header().Get("Content-Disposition"), "attachment") || !strings.Contains(w.Header().Get("Content-Disposition"), "evil.html") ||
@@ -514,7 +514,7 @@ func TestDownloadsEndpoint(t *testing.T) {
 	for _, m := range due {
 		byKey[m.DedupeKey] = m
 	}
-	e.st.MarkMediaFailed(bg, byKey["bot:failed"].ID, 3, "HTTP 500")
+	e.st.MarkMediaFailed(bg, byKey["bot:failed"].ID, "bot:failed", 3, "HTTP 500")
 
 	src := heldSource{started: make(chan struct{})}
 	e.srv.Downloader.Register("bot", src)

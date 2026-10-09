@@ -24,7 +24,7 @@ func TestCompatJobs(t *testing.T) {
 		t.Fatalf("pending videos must wait for their download, got %v", err)
 	}
 	for _, id := range []int64{older, newer, photo} {
-		if _, err := s.MarkMediaDone(ctx, id, "1/f", 4); err != nil {
+		if _, err := s.MarkMediaDone(ctx, id, mediaKey(t, s, id), "1/f", 4); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -68,7 +68,8 @@ func TestOrphanedVideoTakesItsCopyAlong(t *testing.T) {
 	m := photoMsg(1, "bot:v")
 	m.Kind, m.Media[0].Kind, m.Media[0].Mime = "video", "video", "video/mp4"
 	msgID := ingest(t, s, bot, m).MessageID
-	if _, err := s.MarkMediaDone(ctx, mediaIDs(t, s, msgID)[0], "1/2026/10/v.mov", 4); err != nil {
+	mid := mediaIDs(t, s, msgID)[0]
+	if _, err := s.MarkMediaDone(ctx, mid, mediaKey(t, s, mid), "1/2026/10/v.mov", 4); err != nil {
 		t.Fatal(err)
 	}
 	_, orphans, err := s.DeleteMessage(ctx, msgID, 9000)
