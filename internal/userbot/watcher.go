@@ -76,6 +76,8 @@ type PostStats struct {
 	Hit       *HitInfo       `json:"hit,omitempty"`
 	// RefreshedAt is when the counters were last re-read after the hit (0: not since).
 	RefreshedAt int64 `json:"refreshed_at,omitempty"`
+	// Comments is set when the post takes comments (an archived post's; not in condition tests).
+	Comments *CommentsInfo `json:"comments,omitempty"`
 }
 
 type HitInfo struct {
@@ -141,13 +143,18 @@ type Watcher struct {
 	photoSlots chan struct{}
 	backfills  map[int64]*BackfillState // latest manual backfill per watch
 	opened     map[int64]time.Time      // when a conversation's posts were last refreshed on open
+
+	// MediaDir is where media files live, for removing the ones a re-read comment no longer uses.
+	MediaDir       string
+	commentsOpened map[int64]time.Time  // when a post's comments were last refreshed on open
+	commenterMiss  map[string]time.Time // commenters whose photo could not be fetched recently
 }
 
 func NewWatcher(api API, st *store.Store, hub *events.Hub, n notify.Notifier, wakeDL func(), avatarDir string) *Watcher {
 	return &Watcher{api: api, st: st, hub: hub, notifier: n, wakeDL: wakeDL, avatarDir: avatarDir, wake: make(chan struct{}, 1),
 		Now: time.Now, MaxFlood: 300 * time.Second, DialogsTTL: 30 * time.Minute, RecentTTL: time.Minute,
 		recent: map[int64]*recent{}, photoMiss: map[int64]time.Time{}, photoSlots: make(chan struct{}, 2), backfills: map[int64]*BackfillState{},
-		opened: map[int64]time.Time{}}
+		opened: map[int64]time.Time{}, commentsOpened: map[int64]time.Time{}, commenterMiss: map[string]time.Time{}}
 }
 
 // Wake makes Run poll now (a watch was added or changed).
@@ -689,18 +696,21 @@ func (w *Watcher) archive(ctx context.Context, api *tg.Client, wv store.WatchVie
 	if err != nil {
 		return false, err
 	}
+	var posts []store.WatchPost
 	for _, c := range convs {
 		c.Source = model.SourceChannelWatch
 		ir, err := w.st.Ingest(ctx, store.IngestInput{ChannelID: ch.ID, Msg: c, Stats: string(b), Now: now})
 		if err != nil {
 			return created, err
 		}
+		posts = append(posts, store.WatchPost{MessageID: ir.MessageID, ChatID: ir.ChatID, TgMessageID: c.TgMessageID, Stats: string(b)})
 		typ := "message.updated"
 		if ir.Created {
 			typ, created = "message.created", true
 		}
 		w.hub.Publish(events.Event{Type: typ, Data: map[string]int64{"chat_id": ir.ChatID, "message_id": ir.MessageID}})
 	}
+	w.archiveComments(ctx, api, ch, msgs, posts)
 	// A retry after a partial failure re-archives the same post: count it once.
 	if created {
 		if err := w.st.AddWatchHit(ctx, wv.ID, polled); err != nil {
@@ -711,6 +721,22 @@ func (w *Watcher) archive(ctx context.Context, api *tg.Client, wv store.WatchVie
 		w.wakeDL()
 	}
 	return created, nil
+}
+
+// archiveComments keeps the comments a just archived post already has. The post stays archived
+// whatever happens here: a failure only leaves its comments to the next refresh.
+func (w *Watcher) archiveComments(ctx context.Context, api *tg.Client, ch *tg.Channel, msgs []*tg.Message, posts []store.WatchPost) {
+	if len(posts) == 0 {
+		return
+	}
+	sort.Slice(posts, func(i, j int) bool { return posts[i].MessageID < posts[j].MessageID })
+	info, err := w.syncComments(ctx, api, ch, posts[0].MessageID, msgs, false)
+	if err == nil && info != nil {
+		err = w.setComments(ctx, posts, info, countersOf(msgs).Replies)
+	}
+	if err != nil && ctx.Err() == nil {
+		log.Printf("watch: comments of channel %d post %d: %v", ch.ID, posts[0].TgMessageID, err)
+	}
 }
 
 // channel resolves a stored channel id to a full channel (with access hash): from the peer

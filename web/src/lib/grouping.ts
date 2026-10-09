@@ -1,4 +1,4 @@
-import type { Message } from '../api/types';
+import type { Commenter, Message } from '../api/types';
 import { dayKey, formatDayLabel } from './format';
 
 /** Consecutive messages further apart than this start a new visual group. */
@@ -16,11 +16,26 @@ function lastMsg(b: BubbleContent): Message {
   return b.kind === 'message' ? b.msg : b.msgs[b.msgs.length - 1];
 }
 
+/** Who a message's group belongs to: a comment's author, otherwise its chat. */
+export function senderKey(m: Message): string {
+  if (m.source === 'channel_comment') {
+    const from = commenterOf(m);
+    if (from) return `${from.kind}:${from.id}`;
+  }
+  return `chat:${m.chat_id}`;
+}
+
+/** The author of a comment (extra.from). */
+export function commenterOf(m: Pick<Message, 'extra'>): Commenter | undefined {
+  const from = (m.extra as { from?: Commenter } | undefined)?.from;
+  return from && typeof from.id === 'number' ? from : undefined;
+}
+
 /**
  * Splits an ascending message list into date separators and sender groups. Messages of one
  * media group that are adjacent become a single album bubble. In a bot's merged timeline each
- * chat is a different sender, so a change of chat also starts a new group; watched channel posts
- * are never grouped.
+ * chat is a different sender, so a change of chat also starts a new group, as does a change of
+ * author among comments; watched channel posts are never grouped.
  */
 export function groupMessages(messages: Message[], now: Date = new Date()): ListEntry[] {
   const sorted = [...messages].sort((a, b) => a.id - b.id);
@@ -49,7 +64,7 @@ export function groupMessages(messages: Message[], now: Date = new Date()): List
       continue;
     }
     // Channel posts stand alone, as in a Telegram channel: each is its own group with its own tail.
-    if (prev && (m.date - lastMsg(prev).date > GROUP_GAP_SECONDS || lastMsg(prev).chat_id !== m.chat_id || m.source === 'channel_watch')) flush();
+    if (prev && (m.date - lastMsg(prev).date > GROUP_GAP_SECONDS || senderKey(lastMsg(prev)) !== senderKey(m) || m.source === 'channel_watch')) flush();
     group.push({ kind: 'message', key: String(m.id), msg: m });
   }
   flush();

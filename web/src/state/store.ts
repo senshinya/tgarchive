@@ -79,7 +79,7 @@ function idsKey(ids: number[]): string {
   return [...ids].sort((a, b) => a - b).join(',');
 }
 
-function mergeById(a: Message[], b: Message[]): Message[] {
+export function mergeById(a: Message[], b: Message[]): Message[] {
   const map = new Map<number, Message>();
   for (const m of a) map.set(m.id, m);
   for (const m of b) map.set(m.id, m);
@@ -349,8 +349,10 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     return undefined;
   }
 
-  /** Adds or replaces `m` in its chat and in its bot's merged timeline, wherever loaded. */
+  /** Adds or replaces `m` in its chat and in its bot's merged timeline, wherever loaded. Comments
+   * belong to no timeline (the comments view keeps its own). */
   function upsertMessage(m: Message) {
+    if (m.thread_root_id) return;
     for (const key of [m.chat_id, botKeyOf(m.chat_id)]) {
       const c = conversations.value[key];
       if (!key || !c?.loaded) continue;

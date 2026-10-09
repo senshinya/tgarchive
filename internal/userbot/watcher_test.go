@@ -36,6 +36,7 @@ type watchTG struct {
 	historyN    int // getHistory calls
 	available   tg.ChatReactionsClass
 	emojiDocs   int // getCustomEmojiDocuments calls
+	discussion      // comments (comments_test.go)
 }
 
 func newWatchTG() *watchTG {
@@ -83,6 +84,8 @@ func (w *watchTG) serve(req bin.Encoder) (bin.Encoder, error) {
 				Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeCustomEmoji{Alt: "😀", Stickerset: &tg.InputStickerSetEmpty{}}}})
 		}
 		return &tg.DocumentClassVector{Elems: out}, nil
+	case *tg.MessagesGetRepliesRequest:
+		return w.replies(r)
 	case *tg.MessagesGetAvailableReactionsRequest:
 		return &tg.MessagesAvailableReactions{Reactions: []tg.AvailableReaction{
 			{Reaction: "❤️", StaticIcon: &tg.DocumentEmpty{}, AppearAnimation: &tg.DocumentEmpty{}, SelectAnimation: &tg.DocumentEmpty{},

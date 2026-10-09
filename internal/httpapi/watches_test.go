@@ -32,7 +32,9 @@ type fakeWatcher struct {
 	photos    int
 	avatarDir string
 	backfill  *userbot.BackfillState
-	refreshed chan []int64 // chat id followed by the message ids, per RefreshPosts call
+	refreshed chan []int64      // chat id followed by the message ids, per RefreshPosts call
+	comments  chan [2]int64     // chat id and post, per RefreshComments call
+	commenter map[string]string // "user:<id>" -> avatar file written by CommenterPhoto
 }
 
 var newsInfo = userbot.ChannelInfo{ChannelID: 500, Title: "News", Username: "news", Participants: 10}
@@ -117,6 +119,23 @@ func (f *fakeWatcher) RefreshPosts(_ context.Context, chatID int64, ids []int64)
 	return nil
 }
 
+func (f *fakeWatcher) RefreshComments(_ context.Context, chatID, rootID int64) error {
+	f.comments <- [2]int64{chatID, rootID}
+	return nil
+}
+
+func (f *fakeWatcher) CommenterPhoto(_ context.Context, kind string, id int64) (string, error) {
+	key := fmt.Sprintf("%s:%d", kind, id)
+	rel, ok := f.commenter[key]
+	if !ok {
+		return "", store.ErrNotFound
+	}
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(f.avatarDir, rel)), 0o755); err != nil {
+		return "", err
+	}
+	return rel, os.WriteFile(filepath.Join(f.avatarDir, rel), []byte("jpeg"), 0o644)
+}
+
 func (f *fakeWatcher) Wake() {
 	f.mu.Lock()
 	f.wakes++
@@ -138,7 +157,8 @@ func newWatchEnv(t *testing.T) *watchEnv {
 	t.Cleanup(func() { st.Close() })
 	box, _ := seal.New(bytes.Repeat([]byte{1}, 32))
 	dir := t.TempDir()
-	fw := &fakeWatcher{ready: true, avatarDir: dir, refreshed: make(chan []int64, 4)}
+	fw := &fakeWatcher{ready: true, avatarDir: dir, refreshed: make(chan []int64, 4), comments: make(chan [2]int64, 4),
+		commenter: map[string]string{"user:11": "users/11.jpg", "channel:700": "channels/700.jpg"}}
 	srv := &Server{Cfg: &config.Config{RequireForwardAuth: true}, Store: st, Box: box, Watcher: fw, Hub: events.NewHub(),
 		AvatarDir: dir, MediaDir: t.TempDir(), Now: func() time.Time { return time.Unix(1000, 0) }}
 	return &watchEnv{h: srv.Handler(), st: st, fw: fw}
@@ -377,5 +397,37 @@ func TestRefreshPostStats(t *testing.T) {
 		if w := call(e.h, "POST", c.path, c.body); w.Code != 400 {
 			t.Fatalf("%s %v = %d", c.path, c.body, w.Code)
 		}
+	}
+}
+
+func TestRefreshComments(t *testing.T) {
+	e := newWatchEnv(t)
+	if w := call(e.h, "POST", "/api/chats/7/posts/3/refresh-comments", nil); w.Code != 202 {
+		t.Fatalf("refresh = %d %s", w.Code, w.Body)
+	}
+	select {
+	case got := <-e.fw.comments:
+		if got != [2]int64{7, 3} {
+			t.Fatalf("RefreshComments got %v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RefreshComments was not called")
+	}
+	if w := call(e.h, "POST", "/api/chats/7/posts/x/refresh-comments", nil); w.Code != 400 {
+		t.Fatalf("bad id = %d", w.Code)
+	}
+}
+
+func TestCommenterAvatars(t *testing.T) {
+	e := newWatchEnv(t)
+	if w := do(e.h, "GET", "/avatars/users/11", nil); w.Code != 200 || w.Body.String() != "jpeg" {
+		t.Fatalf("user = %d %q", w.Code, w.Body)
+	}
+	if w := do(e.h, "GET", "/avatars/users/12", nil); w.Code != 404 {
+		t.Fatalf("unknown user = %d", w.Code)
+	}
+	// A channel the watcher cannot fetch as a channel comes through its comment.
+	if w := do(e.h, "GET", "/avatars/channels/700", nil); w.Code != 200 || w.Body.String() != "jpeg" {
+		t.Fatalf("commenting channel = %d %q", w.Code, w.Body)
 	}
 }

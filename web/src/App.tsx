@@ -9,7 +9,7 @@ import { MiddleColumn } from './components/middle/MiddleColumn';
 import { SharedMedia } from './components/right/SharedMedia';
 import { SettingsPanel } from './components/settings/SettingsPanel';
 import { MediaViewer } from './components/viewer/MediaViewer';
-import { convRoute, isSettings, navigate, route, routeArticleId, routeConvKey, routePath, startRouter } from './lib/router';
+import { convRoute, isSettings, navigate, route, routeArticleId, routeCommentsId, routeConvKey, routePath, startRouter } from './lib/router';
 import { connectEvents, type EventSourceFactory } from './lib/sse';
 import { StoreContext, type Store } from './state/store';
 import { Toast } from './ui/Toast';
@@ -89,7 +89,7 @@ export function App({ store, eventSource }: Props) {
         ) : r.name === 'stats' ? (
           <StatsView />
         ) : (
-          <MiddleColumn chatId={chatId} articleId={articleId} />
+          <MiddleColumn chatId={chatId} articleId={articleId} commentsId={routeCommentsId(r)} />
         )}
         <div id="RightColumn" aria-hidden={!rightOpen}>
           {rightOpen && <SharedMedia key={chatId} chatId={chatId} />}

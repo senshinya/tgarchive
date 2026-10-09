@@ -92,8 +92,8 @@ func (w *Watcher) RefreshPosts(ctx context.Context, chatID int64, ids []int64) e
 	})
 }
 
-// refreshPosts re-reads archived posts from the channel and stores their current counters,
-// keeping the hit, and publishes message.updated for those whose counters changed. Albums are
+// refreshPosts re-reads archived posts from the channel and stores their current counters and new
+// comments, keeping the hit, and publishes message.updated for those whose counters changed. Albums are
 // refreshed whole; unless force, only the ones refreshDue says are due. A post gone from the
 // channel keeps what was archived.
 func (w *Watcher) refreshPosts(ctx context.Context, api *tg.Client, ch *tg.Channel, posts []store.WatchPost, force bool) error {
@@ -161,6 +161,12 @@ func (w *Watcher) refreshPosts(ctx context.Context, api *tg.Client, ch *tg.Chann
 		if len(msgs) > 0 {
 			ps = w.postStats(ctx, api, msgs, countersOf(msgs))
 			ps.Hit = g.old.Hit
+			full := !force && now-g.old.Hit.At >= commentsFullAge
+			info, err := w.syncComments(ctx, api, ch, g.posts[0].MessageID, msgs, full)
+			if err != nil {
+				return err
+			}
+			ps.Comments = info
 			changed = !sameCounters(g.old, ps)
 		}
 		ps.RefreshedAt = now

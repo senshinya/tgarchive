@@ -102,8 +102,8 @@ func TestMigration7Backfill(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "t.db")
 	old := openAt(t, path, 6)
 	bot := seedBot(t, old, 777)
-	a := ingest(t, old, bot, textMsg(1, "旧消息")).MessageID
-	b := ingest(t, old, bot, textMsg(2, "另一条")).MessageID
+	a := rawMessage(t, old, bot, 1, "旧消息")
+	b := rawMessage(t, old, bot, 2, "另一条")
 	if _, err := old.db.Exec("UPDATE messages SET deleted_at = 9000 WHERE id = ?", b); err != nil { // as v6 deleted it
 		t.Fatal(err)
 	}
@@ -121,6 +121,26 @@ func TestMigration7Backfill(t *testing.T) {
 		t.Fatalf("last_read_id = %d, %v (want the newest message %d)", lastRead, err, b)
 	}
 	old.db.Close()
+}
+
+// rawMessage stores a text message the way a schema v6 database holds it (Ingest writes columns
+// added since).
+func rawMessage(t *testing.T, s *Store, bot, tgID int64, text string) int64 {
+	t.Helper()
+	if _, err := s.db.Exec(`INSERT INTO senders (tg_user_id, first_name, updated_at) VALUES (?, 'Alice', 1) ON CONFLICT DO NOTHING`, alice.TgUserID); err != nil {
+		t.Fatal(err)
+	}
+	var chat int64
+	if err := s.db.QueryRow(`INSERT INTO chats (bot_id, sender_id) VALUES (?, ?) ON CONFLICT (bot_id, sender_id) DO UPDATE SET bot_id = bot_id
+		RETURNING id`, bot, alice.TgUserID).Scan(&chat); err != nil {
+		t.Fatal(err)
+	}
+	var id int64
+	if err := s.db.QueryRow(`INSERT INTO messages (chat_id, tg_message_id, source, date, kind, text, raw_format, raw_json)
+		VALUES (?, ?, 'bot_update', ?, 'text', ?, 'botapi', '{}') RETURNING id`, chat, tgID, 1000+tgID, text).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 func hitIDs(hs []SearchHit) []int64 {

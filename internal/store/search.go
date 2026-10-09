@@ -121,7 +121,7 @@ const minIndexedTerm = 3
 // non-ASCII case); shorter ones can only be LIKE-scanned, which folds ASCII case only.
 func searchQuery(terms []string, convKey, beforeID int64, limit int) (string, []any) {
 	var phrases []string
-	where := []string{"m.deleted_at = 0", "(? = 0 OR m.id < ?)"}
+	where := []string{"m.deleted_at = 0", "m.thread_root_id = 0", "(? = 0 OR m.id < ?)"}
 	args := []any{beforeID, beforeID}
 	for _, t := range terms {
 		if utf8.RuneCountInString(t) >= minIndexedTerm {

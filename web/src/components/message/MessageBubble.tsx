@@ -9,6 +9,7 @@ import { Album } from '../media/Album';
 import { MessageMedia } from '../media/MessageMedia';
 import { VISUAL_KINDS, displayKind, extraString, mainMedia } from '../media/util';
 import { PostReactions } from '../watch/PostFooter';
+import { CommentButton } from '../comments/CommentButton';
 import { ArrowUpRight } from 'lucide-preact';
 import { safeHref } from '../../lib/entities';
 import { Appendix, ForwardHeader, MessageMeta, OriginHeader, ReplyQuote } from './MessageParts';
@@ -29,6 +30,10 @@ interface Props {
   /** Label the bubble with the sender's name (first bubble of a group in a bot timeline). */
   showName?: boolean;
   onMenu: (x: number, y: number, msg: Message) => void;
+  /** Shown in a post's comments (the post itself, or a comment): no comment bar. */
+  inThread?: boolean;
+  /** Opens a message's media; by default the viewer walks the conversation's media. */
+  onOpenMedia?: (m: Message) => void;
 }
 
 const NO_BUBBLE = ['sticker', 'video_note', 'dice'];
@@ -68,7 +73,15 @@ function UnsupportedNote({ label, href, below }: { label: string; href: string |
   );
 }
 
-export function MessageBubble({ bubble, sender, convKey, showName = false, onMenu }: Props) {
+function OriginButton({ href }: { href: string }) {
+  return (
+    <a class="message-action-button" href={href} target="_blank" rel="noopener noreferrer" title="打开原帖" aria-label="打开原帖">
+      <ArrowUpRight size={20} />
+    </a>
+  );
+}
+
+export function MessageBubble({ bubble, sender, convKey, showName = false, onMenu, inThread = false, onOpenMedia }: Props) {
   const store = useStore();
   const press = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const suppressContextMenuUntil = useRef(0);
@@ -84,11 +97,17 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
   const hasReply = head.reply_to_tg_message_id > 0;
   // A watched channel post: its counters as archived, shown Telegram-channel style.
   const post = head.source === 'channel_watch' ? (last.stats ?? head.stats) : undefined;
+  // A comment shows its own reactions, when it has any.
+  const commentStats = head.source === 'channel_comment' && head.stats?.reactions.length ? head.stats : undefined;
+  const reactions = post ?? commentStats;
   // Web A: reactions sit inside the bubble, sharing their row with the meta, unless the post is
   // only media (or has no bubble), where they hang below it.
-  const reactionsOutside = Boolean(post) && ((visual && !caption) || noBubble);
-  const reactionsInside = Boolean(post) && !reactionsOutside;
-  const mediaOnly = visual && !caption && !hasHeader && !hasReply;
+  const reactionsOutside = Boolean(reactions) && ((visual && !caption) || noBubble);
+  const reactionsInside = Boolean(reactions) && !reactionsOutside;
+  // A post taking comments ends in the comment bar (stickers and round videos: a round button beside).
+  const comments = post?.comments && !inThread ? post : undefined;
+  const bottomComments = Boolean(comments) && !noBubble;
+  const mediaOnly = visual && !caption && !hasHeader && !hasReply && !bottomComments;
   const originHref = post ? safeHref(head.origin_link) : null;
   const unsupported = !album && head.kind === 'other';
   const unsupportedLabel = UNSUPPORTED_LABELS[extraString(head, 'unsupported')];
@@ -97,6 +116,10 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
   const accent = peerColor(sender.peerId);
 
   const open = (m: Message) => {
+    if (onOpenMedia) {
+      onOpenMedia(m);
+      return;
+    }
     const md = mainMedia(m);
     if (md && md.state === 'done') store.viewer.value = { chatId: convKey, messageId: m.id, mediaId: md.id };
   };
@@ -113,6 +136,7 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
     bubble.last && 'last-in-group',
     noBubble && 'no-bubble',
     reactionsOutside && 'with-outside-reactions',
+    comments && noBubble && 'has-action-buttons',
   ]
     .filter(Boolean)
     .join(' ');
@@ -123,6 +147,7 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
     visual && 'has-visual',
     caption || unsupported ? 'has-text' : 'no-text',
     solid && bubble.last && 'has-appendix',
+    bottomComments && 'has-comments',
   ]
     .filter(Boolean)
     .join(' ');
@@ -188,18 +213,22 @@ export function MessageBubble({ bubble, sender, convKey, showName = false, onMen
               {!reactionsInside && <MessageMeta {...metaProps} variant="inline" />}
             </div>
           )}
-          {post && reactionsInside && <PostReactions stats={post} meta={<MessageMeta {...metaProps} variant="reactions" />} />}
+          {reactions && reactionsInside && <PostReactions stats={reactions} meta={<MessageMeta {...metaProps} variant="reactions" />} />}
           {meta}
+          {comments && bottomComments && <CommentButton chatId={head.chat_id} postId={head.id} stats={comments} />}
           {solid && bubble.last && <Appendix />}
         </div>
         {/* Outside the bubble: media-only bubbles clip their content to the rounded corners. */}
-        {originHref && (
-          <a class="message-action-button" href={originHref} target="_blank" rel="noopener noreferrer" title="打开原帖" aria-label="打开原帖">
-            <ArrowUpRight size={20} />
-          </a>
+        {comments && noBubble ? (
+          <div class="message-action-buttons">
+            <CommentButton chatId={head.chat_id} postId={head.id} stats={comments} customShape />
+            {originHref && <OriginButton href={originHref} />}
+          </div>
+        ) : (
+          originHref && <OriginButton href={originHref} />
         )}
       </div>
-      {post && reactionsOutside && <PostReactions stats={post} outside />}
+      {reactions && reactionsOutside && <PostReactions stats={reactions} outside />}
     </div>
   );
 }
