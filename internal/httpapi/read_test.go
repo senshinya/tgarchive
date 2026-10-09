@@ -316,7 +316,7 @@ func TestSSEPeriodicPing(t *testing.T) {
 
 func TestServeMediaContentSafety(t *testing.T) {
 	e := newReadEnv(t)
-	const csp = "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox"
+	const csp = "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'"
 	w := do(e.h, "GET", fmt.Sprintf("/media/%d", e.media), nil)
 	if w.Code != 200 || w.Header().Get("Content-Type") != "image/jpeg" || w.Header().Get("Content-Disposition") != "" ||
 		w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("Content-Security-Policy") != csp {
@@ -380,6 +380,34 @@ func TestHostCheck(t *testing.T) {
 	e.h.ServeHTTP(w, req)
 	if w.Code != 403 || !strings.Contains(w.Body.String(), "host not allowed") {
 		t.Fatalf("healthz on a foreign name = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestFramingAndEmbedding(t *testing.T) {
+	e := newReadEnv(t)
+	media, avatar := fmt.Sprintf("/media/%d", e.media), "/avatars/bots/777"
+	os.MkdirAll(filepath.Join(e.srv.AvatarDir, "bots"), 0o755)
+	os.WriteFile(filepath.Join(e.srv.AvatarDir, "bots", "777.jpg"), []byte("jpg"), 0o644)
+	for _, p := range []string{"/", "/api/bots", "/api/nope", "/healthz", media, avatar, "/media/999999"} {
+		w := do(e.h, "GET", p, nil)
+		if w.Header().Get("X-Frame-Options") != "DENY" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+			t.Fatalf("%s = %d %v", p, w.Code, w.Header())
+		}
+		corp := w.Header().Get("Cross-Origin-Resource-Policy")
+		if wantCORP := strings.HasPrefix(p, "/media/") || strings.HasPrefix(p, "/avatars/"); wantCORP != (corp == "same-origin") {
+			t.Fatalf("%s CORP = %q", p, corp)
+		}
+	}
+	// The SPA page gets nothing beyond frame-ancestors, which would break its scripts and styles.
+	if csp := do(e.h, "GET", "/", nil).Header().Get("Content-Security-Policy"); csp != "frame-ancestors 'none'" {
+		t.Fatalf("index CSP = %q", csp)
+	}
+	// Refused requests carry them too.
+	req := httptest.NewRequest("GET", "/api/bots", nil)
+	w := httptest.NewRecorder()
+	e.h.ServeHTTP(w, req)
+	if w.Code != 401 || w.Header().Get("X-Frame-Options") != "DENY" {
+		t.Fatalf("401 = %d %v", w.Code, w.Header())
 	}
 }
 

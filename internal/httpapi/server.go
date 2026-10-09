@@ -86,8 +86,25 @@ func (s *Server) Handler() http.Handler {
 	s.favoriteRoutes(mux)
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) { writeErr(w, http.StatusNotFound, "not found") })
 	mux.Handle("GET /", s.spa())
-	return s.auth(mux)
+	return secureHeaders(s.auth(mux))
 }
+
+// secureHeaders keeps the archive out of other sites' frames (clickjacking) and its media and
+// avatars out of other sites' pages. The CSP is frame-ancestors alone, so the SPA's scripts and
+// styles are untouched; /media sets a stricter policy that repeats it.
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Content-Security-Policy", frameCSP)
+		if strings.HasPrefix(r.URL.Path, "/media/") || strings.HasPrefix(r.URL.Path, "/avatars/") {
+			h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+const frameCSP = "frame-ancestors 'none'"
 
 // auth is the in-app backstop behind Caddy forward_auth (which strips client-sent Remote-* headers).
 func (s *Server) auth(next http.Handler) http.Handler {

@@ -320,8 +320,9 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "", st.ModTime(), f)
 }
 
-// mediaCSP keeps archived files from running script even if a browser renders them.
-const mediaCSP = "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox"
+// mediaCSP keeps archived files from running script even if a browser renders them, and, as every
+// response does, from being framed.
+const mediaCSP = "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox; " + frameCSP
 
 // inlineSafe reports whether a stored media type may be rendered by the browser. Anything else
 // (SVG, HTML, XHTML, PDF, text, ...) could carry script and is served as an opaque download.
