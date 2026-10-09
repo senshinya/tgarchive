@@ -139,7 +139,8 @@ export interface Api {
   userbotCode(code: string): Promise<UserbotInfo>;
   userbotPassword(password: string): Promise<UserbotInfo>;
   userbotLogout(): Promise<void>;
-  /** Broadcast channels the user account has joined; refresh bypasses the server's cache. */
+  /** Broadcast channels the user account has joined; refresh asks the server to rescan them (it
+   * does so at most every few minutes and otherwise answers from its cache). */
   channels(refresh?: boolean): Promise<ChannelList>;
   searchChannels(q: string): Promise<ChannelInfo[]>;
   resolveChannel(input: string): Promise<ChannelInfo>;
@@ -205,7 +206,7 @@ export const api: Api = {
   userbotCode: (code) => request('POST', '/api/admin/userbot/code', { code }),
   userbotPassword: (password) => request('POST', '/api/admin/userbot/password', { password }),
   userbotLogout: () => request('POST', '/api/admin/userbot/logout'),
-  channels: (refresh = false) => request('GET', `/api/admin/channels${refresh ? '?refresh=1' : ''}`),
+  channels: (refresh = false) => (refresh ? request('POST', '/api/admin/channels/refresh') : request('GET', '/api/admin/channels')),
   searchChannels: (q) => request('GET', `/api/admin/channels/search${qs({ q })}`),
   resolveChannel: (input) => request('POST', '/api/admin/channels/resolve', { input }),
   testWatch: (channelId, cond) => request('POST', '/api/admin/watches/test', { channel_id: channelId, cond }),

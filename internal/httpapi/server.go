@@ -13,6 +13,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"tgarchive/internal/avatars"
@@ -46,6 +47,9 @@ type Server struct {
 	HTTP       *http.Client
 	Now        func() time.Time
 	PingEvery  time.Duration // SSE heartbeat interval; 0 means defaultPingEvery
+
+	channelsMu        sync.Mutex
+	channelsRefreshed time.Time // the last dialogs rescan asked for through POST /api/admin/channels/refresh
 }
 
 const defaultPingEvery = 25 * time.Second

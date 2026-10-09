@@ -80,6 +80,13 @@ describe('api client', () => {
     expect(calls[0].init.body).toBeUndefined();
   });
 
+  it('reads the channel list with GET and asks for a rescan with POST', async () => {
+    const calls = mockFetch(200, { channels: [], loading: false, updated_at: 0, error: '' });
+    await api.channels();
+    await api.channels(true);
+    expect(calls.map((c) => `${c.init.method} ${c.url}`)).toEqual(['GET /api/admin/channels', 'POST /api/admin/channels/refresh']);
+  });
+
   it('adds purge only when asked', async () => {
     const calls = mockFetch(204);
     await api.deleteBot(5, false);
