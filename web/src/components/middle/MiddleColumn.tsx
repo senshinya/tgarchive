@@ -124,7 +124,8 @@ function MiddleHeader({ chatId }: { chatId: number }) {
 }
 
 /** The conversation (a chat id, or -botId for a bot's merged timeline); with articleId, the
- * article reader on top of it; with commentsId, that archived post's comments instead. */
+ * article reader on top of it; with commentsId, that archived post's comments on top of it (the
+ * conversation stays mounted underneath, so going back finds it where it was left). */
 export function MiddleColumn({ chatId, articleId = 0, commentsId = 0 }: { chatId: number; articleId?: number; commentsId?: number }) {
   if (!chatId) {
     return (
@@ -136,20 +137,18 @@ export function MiddleColumn({ chatId, articleId = 0, commentsId = 0 }: { chatId
       </div>
     );
   }
-  if (commentsId) {
-    return (
-      <div id="MiddleColumn">
-        <Wallpaper />
-        <CommentsView key={commentsId} chatId={chatId} postId={commentsId} />
-      </div>
-    );
-  }
   return (
     <div id="MiddleColumn">
       <Wallpaper />
       <MiddleHeader chatId={chatId} />
       <MessageList key={chatId} chatId={chatId} />
       {articleId > 0 && <ArticleReader key={articleId} chatId={chatId} messageId={articleId} />}
+      {commentsId > 0 && (
+        <div class="CommentsLayer">
+          <Wallpaper />
+          <CommentsView key={commentsId} chatId={chatId} postId={commentsId} />
+        </div>
+      )}
     </div>
   );
 }
