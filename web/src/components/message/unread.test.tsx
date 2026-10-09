@@ -44,12 +44,12 @@ describe('opening a channel with unread posts', () => {
     const native = vi.spyOn(Element.prototype, 'scrollIntoView');
     const spy = vi.spyOn(scroll, 'scrollWithin').mockImplementation((_list, el) => void scrolled.push(el));
     const api = fakeApi({
-      chats: vi.fn(async () => [makeChannelChat({ last_read_id: 120, unread: 3 })]),
+      chats: vi.fn(async () => [makeChannelChat({ last_read_pos: 120, unread: 3, first_unread_id: 121 })]),
       messages: pages(range(100, 123), range(74, 123)),
     });
     const { container } = await open(api);
     await screen.findByText('p123');
-    expect(api.messages).toHaveBeenCalledWith(50, 0, 50, { around: 120 });
+    expect(api.messages).toHaveBeenCalledWith(50, 0, 50, { around: 121 });
     const divider = container.querySelector('.unread-divider')!;
     expect(divider.textContent).toBe('以下为新消息');
     const next = divider.nextElementSibling;
@@ -70,7 +70,7 @@ describe('opening a channel with unread posts', () => {
 
   it('opens at the latest post without unread posts', async () => {
     const api = fakeApi({
-      chats: vi.fn(async () => [makeChannelChat({ last_read_id: 123, unread: 0 })]),
+      chats: vi.fn(async () => [makeChannelChat({ last_read_pos: 123, unread: 0 })]),
       messages: pages([], range(100, 123)),
     });
     const { container } = await open(api);
@@ -82,7 +82,7 @@ describe('opening a channel with unread posts', () => {
 
   it('starts from the oldest post when nothing was read yet', async () => {
     const api = fakeApi({
-      chats: vi.fn(async () => [makeChannelChat({ last_read_id: 0, unread: 5 })]),
+      chats: vi.fn(async () => [makeChannelChat({ last_read_pos: 0, unread: 5, first_unread_id: 1 })]),
       messages: pages(range(1, 5), range(1, 5)),
     });
     const { container } = await open(api);
@@ -97,7 +97,7 @@ describe('opening a channel with unread posts', () => {
     const native = vi.spyOn(Element.prototype, 'scrollIntoView');
     const spy = vi.spyOn(scroll, 'scrollWithin').mockImplementation((_list, el) => void scrolled.push(el));
     const api = fakeApi({
-      chats: vi.fn(async () => [makeChannelChat({ last_read_id: 120, unread: 3 })]),
+      chats: vi.fn(async () => [makeChannelChat({ last_read_pos: 120, unread: 3, first_unread_id: 121 })]),
       messages: pages(range(100, 123), range(74, 123)),
     });
     await open(api, 50, async (store) => {
@@ -116,7 +116,7 @@ describe('opening a channel with unread posts', () => {
   it('marks nothing read while the unread posts load, and falls back to the usual list if they fail', async () => {
     let fail: (e: Error) => void = () => {};
     const api = fakeApi({
-      chats: vi.fn(async () => [makeChannelChat({ last_read_id: 120, unread: 3 })]),
+      chats: vi.fn(async () => [makeChannelChat({ last_read_pos: 120, unread: 3, first_unread_id: 121 })]),
       messages: vi.fn(async (_c: number, _b = 0, _l = 50, page: PageParams = {}) =>
         page.around ? new Promise<Message[]>((_, reject) => (fail = reject)) : range(74, 123),
       ),
@@ -137,7 +137,7 @@ describe('opening a channel with unread posts', () => {
 
   it('keeps private chats on the latest message', async () => {
     const api = fakeApi({
-      chats: vi.fn(async () => [makeChat({ id: 10, last_read_id: 1, unread: 4 })]),
+      chats: vi.fn(async () => [makeChat({ id: 10, last_read_pos: 1, unread: 4, first_unread_id: 1 })]),
       messages: pages([], [makeMessage({ id: 1, text: 'hi' })]),
     });
     await open(api, 10);

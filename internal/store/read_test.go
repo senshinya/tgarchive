@@ -13,7 +13,7 @@ func unreadOf(t *testing.T, s *Store, chatID int64) (unread, lastRead int64) {
 	}
 	for _, c := range chats {
 		if c.ID == chatID {
-			return c.Unread, c.LastReadID
+			return c.Unread, c.LastReadPos
 		}
 	}
 	t.Fatalf("chat %d not listed", chatID)
@@ -39,13 +39,13 @@ func TestChannelUnread(t *testing.T) {
 	if err := s.MarkRead(ctx, chat, ids[1]); err != nil {
 		t.Fatal(err)
 	}
-	if n, last := unreadOf(t, s, chat); n != 1 || last != ids[1] {
+	if n, last := unreadOf(t, s, chat); n != 1 || last != 2 {
 		t.Fatalf("after reading 2: %d, %d", n, last)
 	}
 	if err := s.MarkRead(ctx, chat, ids[0]); err != nil {
 		t.Fatal(err)
 	}
-	if _, last := unreadOf(t, s, chat); last != ids[1] {
+	if _, last := unreadOf(t, s, chat); last != 2 {
 		t.Fatalf("reading an older message must not go back: %d", last)
 	}
 	if _, _, err := s.DeleteMessage(ctx, ids[2], 9000); err != nil {

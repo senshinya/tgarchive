@@ -5,6 +5,7 @@ import { avatarUrl, errorMessage, mediaUrl } from '../../api/client';
 import type { Chat, Message } from '../../api/types';
 import { senderName } from '../../lib/format';
 import { groupMessages, type ListEntry } from '../../lib/grouping';
+import { byPosition } from '../../lib/order';
 import { scrollWithin } from '../../lib/scroll';
 import { useStore } from '../../state/store';
 import { Avatar } from '../../ui/Avatar';
@@ -59,7 +60,14 @@ export function MessageList({ chatId }: { chatId: number }) {
     return out;
   }, [entries]);
   const ref = useRef<HTMLDivElement>(null);
-  const snap = useRef({ firstId: 0, lastId: 0, height: 0, top: 0, atBottom: true, hasNewer: false });
+  const snap = useRef<{ first: Message | null; last: Message | null; height: number; top: number; atBottom: boolean; hasNewer: boolean }>({
+    first: null,
+    last: null,
+    height: 0,
+    top: 0,
+    atBottom: true,
+    hasNewer: false,
+  });
   const [showDown, setShowDown] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; msg: Message } | null>(null);
   const [confirm, setConfirm] = useState<Message | null>(null);
@@ -68,12 +76,14 @@ export function MessageList({ chatId }: { chatId: number }) {
   // A channel opened with unread posts shows them from the first one, below a divider that stays
   // put for this visit: what was read when it opened, and whether that window is still loading
   // (until then nothing scrolls and nothing is marked read).
-  const [readBefore] = useState(() => {
+  const [read] = useState(() => {
     const chat = store.chats.value.find((c) => c.id === chatId);
-    return chat?.kind === 'channel' && chat.unread > 0 ? chat.last_read_id : -1;
+    return chat?.kind === 'channel' && chat.unread > 0 && chat.first_unread_id > 0
+      ? { before: chat.last_read_pos, resume: chat.first_unread_id }
+      : null;
   });
-  const unread = useRef({ pending: readBefore >= 0, started: false });
-  const firstUnread = readBefore >= 0 ? conv.items.find((m) => m.id > readBefore)?.id : undefined;
+  const unread = useRef({ pending: read !== null, started: false });
+  const firstUnread = read ? conv.items.find((m) => m.pos > read.before)?.id : undefined;
   const statsAsked = useRef(false);
 
   useEffect(() => {
@@ -83,9 +93,9 @@ export function MessageList({ chatId }: { chatId: number }) {
     const j = store.jumpTo.value;
     if (j && j.key === chatId) unread.current.pending = false;
     if (j && j.key === chatId && !store.conv(chatId).items.some((m) => m.id === j.messageId)) void store.loadAround(chatId, j.messageId);
-    else if (unread.current.pending) {
-      // Nothing read yet: the window around the first post.
-      void store.loadAround(chatId, Math.max(readBefore, 1));
+    else if (read && unread.current.pending) {
+      // The window around the first unread post.
+      void store.loadAround(chatId, read.resume);
       unread.current.started = true;
     } else void store.refreshLatest(chatId);
   }, [chatId]);
@@ -110,8 +120,8 @@ export function MessageList({ chatId }: { chatId: number }) {
     if (!el) return;
     const items = store.conv(chatId).items;
     snap.current = {
-      firstId: items[0]?.id ?? 0,
-      lastId: items[items.length - 1]?.id ?? 0,
+      first: items[0] ?? null,
+      last: items[items.length - 1] ?? null,
       height: el.scrollHeight,
       top: el.scrollTop,
       atBottom: el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX,
@@ -124,8 +134,8 @@ export function MessageList({ chatId }: { chatId: number }) {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const first = conv.items[0]?.id ?? 0;
-    const last = conv.items[conv.items.length - 1]?.id ?? 0;
+    const first = conv.items[0];
+    const last = conv.items[conv.items.length - 1];
     const s = snap.current;
     if (unread.current.pending) {
       if (!unread.current.started || conv.loading) return;
@@ -133,10 +143,11 @@ export function MessageList({ chatId }: { chatId: number }) {
       const divider = el.querySelector<HTMLElement>('.unread-divider');
       if (divider) scrollWithin(el, divider, 'start');
       else el.scrollTop = el.scrollHeight;
-    } else if (s.lastId === 0) el.scrollTop = el.scrollHeight;
-    else if (first < s.firstId && last === s.lastId) el.scrollTop = el.scrollHeight - s.height + s.top;
+    } else if (!s.last) el.scrollTop = el.scrollHeight;
+    else if (first && last && s.first && byPosition(first, s.first) < 0 && last.id === s.last.id)
+      el.scrollTop = el.scrollHeight - s.height + s.top;
     // Following the bottom only while it is the latest: a window being extended stays put.
-    else if (last > s.lastId && s.atBottom && !s.hasNewer) el.scrollTop = el.scrollHeight;
+    else if (last && byPosition(last, s.last) > 0 && s.atBottom && !s.hasNewer) el.scrollTop = el.scrollHeight;
     record();
     readUpTo();
     // A first page shorter than the viewport never fires scroll events: keep filling.
@@ -179,7 +190,7 @@ export function MessageList({ chatId }: { chatId: number }) {
   const readUpTo = () => {
     const c = store.conv(chatId);
     if (unread.current.pending) return; // what is shown is not yet where the reading resumes
-    if (chatId > 0 && snap.current.atBottom && !c.hasNewer && c.items.length) store.markRead(chatId, c.items[c.items.length - 1].id);
+    if (chatId > 0 && snap.current.atBottom && !c.hasNewer && c.items.length) store.markRead(chatId, c.items[c.items.length - 1]);
   };
 
   const onScroll = () => {
@@ -196,7 +207,7 @@ export function MessageList({ chatId }: { chatId: number }) {
   // Back to the latest message: a window short of it is replaced by the latest page first.
   const toBottom = async () => {
     if (store.conv(chatId).hasNewer) {
-      snap.current.lastId = 0; // lands at the bottom like a first load
+      snap.current.last = null; // lands at the bottom like a first load
       await store.refreshLatest(chatId, { reset: true });
       return;
     }

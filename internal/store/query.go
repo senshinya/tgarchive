@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"math"
 	"slices"
 	"strings"
 
@@ -31,9 +32,12 @@ type ChatView struct {
 	LastMessageAt int64        `json:"last_message_at"`
 	LastKind      string       `json:"last_kind"`
 	LastText      string       `json:"last_text"`
-	// LastReadID is the newest message read; Unread counts the newer ones (channels only).
-	LastReadID int64 `json:"last_read_id"`
-	Unread     int64 `json:"unread"`
+	// LastReadPos is the Pos of the last post read; Unread counts the posts after it (channels
+	// only). A post archived late, behind it, is not unread.
+	LastReadPos int64 `json:"last_read_pos"`
+	Unread      int64 `json:"unread"`
+	// FirstUnreadID is the first post after LastReadPos (0: none), where reading resumes.
+	FirstUnreadID int64 `json:"first_unread_id"`
 }
 
 type ChannelView struct {
@@ -105,7 +109,13 @@ type MessageView struct {
 	Favorite *FavoriteInfo `json:"favorite"`
 	// ThreadRootID is the archived post a comment belongs to; 0 for anything but a comment.
 	ThreadRootID int64 `json:"thread_root_id"`
+	// Pos orders a conversation, ties broken by id: a channel's posts and comments by their
+	// Telegram message id (when they were posted), everything else by id (when it arrived).
+	Pos int64 `json:"pos"`
 }
+
+// lastOrder picks a chat's last message (the preview): the latest post of a channel.
+const lastOrder = `CASE WHEN c.kind = 'channel' THEN m.tg_message_id ELSE m.id END DESC, m.id DESC`
 
 // ListChats lists conversations, most recent first: every bot × sender chat of botID (all bots
 // for 0), and with botID 0 also the watched channels' conversations.
@@ -118,11 +128,14 @@ func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) 
 			COALESCE(w.id, 0), COALESCE(w.enabled, 0), COALESCE(w.status, ''), COALESCE(w.last_error, ''),
 			COALESCE(w.window_minutes, 0), COALESCE(w.hits, 0),
 			(SELECT COUNT(*) FROM watch_pending p WHERE p.watch_id = w.id),
-			COALESCE((SELECT m.kind FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.thread_root_id = 0 ORDER BY m.id DESC LIMIT 1), ''),
-			COALESCE((SELECT substr(m.text, 1, 200) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.thread_root_id = 0 ORDER BY m.id DESC LIMIT 1), ''),
-			c.last_read_id,
+			COALESCE((SELECT m.kind FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.thread_root_id = 0 ORDER BY `+lastOrder+` LIMIT 1), ''),
+			COALESCE((SELECT substr(m.text, 1, 200) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.thread_root_id = 0 ORDER BY `+lastOrder+` LIMIT 1), ''),
+			c.last_read_pos,
 			CASE WHEN c.kind = 'channel' THEN
-				(SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.thread_root_id = 0 AND m.id > c.last_read_id) ELSE 0 END
+				(SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.thread_root_id = 0 AND m.tg_message_id > c.last_read_pos) ELSE 0 END,
+			CASE WHEN c.kind = 'channel' THEN
+				COALESCE((SELECT m.id FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.thread_root_id = 0 AND m.tg_message_id > c.last_read_pos
+					ORDER BY m.tg_message_id, m.id LIMIT 1), 0) ELSE 0 END
 		FROM chats c
 			LEFT JOIN senders s ON s.tg_user_id = c.sender_id
 			LEFT JOIN channels ch ON ch.channel_id = c.channel_id
@@ -141,7 +154,7 @@ func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) 
 		var w WatchBrief
 		if err := rows.Scan(&v.ID, &v.Kind, &v.BotID, &v.LastMessageAt, &v.Sender.TgUserID, &v.Sender.FirstName, &v.Sender.LastName,
 			&v.Sender.Username, &avatar, &ch.ChannelID, &ch.Title, &ch.Username, &chAvatar,
-			&w.ID, &w.Enabled, &w.Status, &w.Error, &w.WindowMinutes, &w.Hits, &w.Pending, &v.LastKind, &v.LastText, &v.LastReadID, &v.Unread); err != nil {
+			&w.ID, &w.Enabled, &w.Status, &w.Error, &w.WindowMinutes, &w.Hits, &w.Pending, &v.LastKind, &v.LastText, &v.LastReadPos, &v.Unread, &v.FirstUnreadID); err != nil {
 			return nil, err
 		}
 		v.Sender.HasAvatar = avatar != ""
@@ -172,6 +185,10 @@ func scanMessageView(r scanner) (MessageView, error) {
 	v.ForwardOrigin = rawOrNil(fwd)
 	v.Extra = rawOrNil(extra)
 	v.Stats = rawOrNil(stats)
+	v.Pos = v.ID
+	if v.Source == model.SourceChannelWatch || v.Source == model.SourceChannelComment {
+		v.Pos = v.TgMessageID
+	}
 	return v, err
 }
 
@@ -202,25 +219,40 @@ func collectViews(rows *sql.Rows, err error) ([]MessageView, error) {
 type scope struct {
 	cond string // SQL condition on messages, with one placeholder
 	arg  int64
+	// key is the column the scope is ordered by, ties broken by id: "id" (arrival) or
+	// "tg_message_id" (a channel's posts and comments, in the order they were posted, however
+	// late they were archived). MessageView.Pos is that key.
+	key string
 }
 
 // chatScope is a conversation's timeline: the comments of its posts are not part of it.
-func chatScope(chatID int64) scope { return scope{"chat_id = ? AND thread_root_id = 0", chatID} }
+func (s *Store) chatScope(ctx context.Context, chatID int64) (scope, error) {
+	var kind string
+	err := s.db.QueryRowContext(ctx, "SELECT kind FROM chats WHERE id = ?", chatID).Scan(&kind)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return scope{}, err
+	}
+	key := "id"
+	if kind == "channel" {
+		key = "tg_message_id"
+	}
+	return scope{"chat_id = ? AND thread_root_id = 0", chatID, key}, nil
+}
 
 // threadScope is the comments of one archived post.
-func threadScope(rootID int64) scope { return scope{"thread_root_id = ?", rootID} }
+func threadScope(rootID int64) scope { return scope{"thread_root_id = ?", rootID, "tg_message_id"} }
 
 func botScope(botID int64) scope {
-	return scope{"chat_id IN (SELECT id FROM chats WHERE bot_id = ?)", botID}
+	return scope{"chat_id IN (SELECT id FROM chats WHERE bot_id = ?)", botID, "id"}
 }
 
 // Page picks a conversation page: messages older than Before (the newest page when all are 0),
 // newer than After, or a window around Around (that message and older, plus newer). At most one
-// is set.
+// is set. All are message ids; "older" and "newer" follow the scope's order.
 type Page struct{ Before, After, Around int64 }
 
 func (s *Store) ListMessages(ctx context.Context, chatID, beforeID int64, limit int) ([]MessageView, error) {
-	return s.listMessages(ctx, chatScope(chatID), Page{Before: beforeID}, limit)
+	return s.ListMessagesPage(ctx, chatID, Page{Before: beforeID}, limit)
 }
 
 // ListBotMessages pages through every chat of one bot as a single timeline.
@@ -229,7 +261,11 @@ func (s *Store) ListBotMessages(ctx context.Context, botID, beforeID int64, limi
 }
 
 func (s *Store) ListMessagesPage(ctx context.Context, chatID int64, p Page, limit int) ([]MessageView, error) {
-	return s.listMessages(ctx, chatScope(chatID), p, limit)
+	sc, err := s.chatScope(ctx, chatID)
+	if err != nil {
+		return nil, err
+	}
+	return s.listMessages(ctx, sc, p, limit)
 }
 
 // ListCommentsPage pages through the comments of archived post rootID, which must be a live
@@ -244,29 +280,65 @@ func (s *Store) ListCommentsPage(ctx context.Context, chatID, rootID int64, p Pa
 	if err != nil {
 		return nil, err
 	}
-	return s.listMessages(ctx, threadScope(rootID), p, limit)
+	sc := threadScope(rootID)
+	if p.After == rootID {
+		// After the post itself: from the first comment (they are numbered by the discussion
+		// group, not the channel).
+		views, err := s.newer(ctx, sc, cursor{math.MinInt64, math.MinInt64}, limit)
+		if err == nil {
+			err = s.hydrate(ctx, views)
+		}
+		return views, err
+	}
+	return s.listMessages(ctx, sc, p, limit)
 }
 
 func (s *Store) ListBotMessagesPage(ctx context.Context, botID int64, p Page, limit int) ([]MessageView, error) {
 	return s.listMessages(ctx, botScope(botID), p, limit)
 }
 
-// listMessages returns one page in ascending id order. Albums are never cut at a page edge.
+// cursor is a position in a scope's order: (key, id).
+type cursor struct{ key, id int64 }
+
+// at returns the position of message id in sc's order; ok is false when there is no such message.
+func (s *Store) at(ctx context.Context, sc scope, id int64) (c cursor, ok bool, err error) {
+	if sc.key == "id" {
+		return cursor{id, id}, true, nil
+	}
+	err = s.db.QueryRowContext(ctx, "SELECT "+sc.key+" FROM messages WHERE id = ?", id).Scan(&c.key)
+	if errors.Is(err, sql.ErrNoRows) {
+		return cursor{}, false, nil
+	}
+	return cursor{c.key, id}, err == nil, err
+}
+
+// listMessages returns one page in ascending order. Albums are never cut at a page edge.
 func (s *Store) listMessages(ctx context.Context, sc scope, p Page, limit int) ([]MessageView, error) {
+	ref := max(p.After, p.Around, p.Before)
+	var c cursor
+	if ref > 0 {
+		var ok bool
+		var err error
+		if c, ok, err = s.at(ctx, sc, ref); err != nil || !ok {
+			return []MessageView{}, err
+		}
+	}
 	var views []MessageView
 	var err error
 	switch {
 	case p.After > 0:
-		views, err = s.newer(ctx, sc, p.After, limit)
+		views, err = s.newer(ctx, sc, c, limit)
 	case p.Around > 0:
 		var newer []MessageView
 		// The older half (rounded up) holds the target itself.
-		if views, err = s.older(ctx, sc, p.Around+1, limit-limit/2); err == nil {
-			newer, err = s.newer(ctx, sc, p.Around, limit/2)
+		if views, err = s.older(ctx, sc, &cursor{c.key, c.id + 1}, limit-limit/2); err == nil {
+			newer, err = s.newer(ctx, sc, c, limit/2)
 			views = append(views, newer...)
 		}
+	case p.Before > 0:
+		views, err = s.older(ctx, sc, &c, limit)
 	default:
-		views, err = s.older(ctx, sc, p.Before, limit)
+		views, err = s.older(ctx, sc, nil, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -277,27 +349,36 @@ func (s *Store) listMessages(ctx context.Context, sc scope, p Page, limit int) (
 	return views, nil
 }
 
-// older returns up to limit messages below beforeID (0: the newest), ascending.
-func (s *Store) older(ctx context.Context, sc scope, beforeID int64, limit int) ([]MessageView, error) {
-	views, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
-		WHERE `+sc.cond+` AND deleted_at = 0 AND (? = 0 OR id < ?) ORDER BY id DESC LIMIT ?`, sc.arg, beforeID, beforeID, limit))
+// older returns up to limit messages before c (nil: the newest), ascending.
+func (s *Store) older(ctx context.Context, sc scope, c *cursor, limit int) ([]MessageView, error) {
+	k := sc.key
+	q := `SELECT ` + msgCols + ` FROM messages WHERE ` + sc.cond + ` AND deleted_at = 0`
+	args := []any{sc.arg}
+	if c != nil {
+		q += ` AND (` + k + `, id) < (?, ?)`
+		args = append(args, c.key, c.id)
+	}
+	views, err := collectViews(s.db.QueryContext(ctx, q+` ORDER BY `+k+` DESC, id DESC LIMIT ?`, append(args, limit)...))
 	if err != nil {
 		return nil, err
 	}
-	// Never cut an album at the page boundary: extend the page down to the lowest id of the
-	// oldest message's group (an album lives in one chat). Everything in scope above that id is
+	// Never cut an album at the page boundary: extend the page down to the first message of the
+	// oldest message's group (an album lives in one chat). Everything in scope from there on is
 	// included too, so a merged timeline whose albums interleave with other senders' messages
-	// has no gap for the next page (which starts below this page's oldest id) to skip over.
+	// has no gap for the next page (which starts before this page's oldest message) to skip over.
 	if n := len(views); n > 0 && views[n-1].MediaGroupID != "" {
 		oldest := views[n-1]
-		var low sql.NullInt64
-		if err := s.db.QueryRowContext(ctx, `SELECT MIN(id) FROM messages
-			WHERE chat_id = ? AND deleted_at = 0 AND media_group_id = ? AND id < ?`, oldest.ChatID, oldest.MediaGroupID, oldest.ID).Scan(&low); err != nil {
+		var low cursor
+		err := s.db.QueryRowContext(ctx, `SELECT `+k+`, id FROM messages
+			WHERE chat_id = ? AND deleted_at = 0 AND media_group_id = ? AND (`+k+`, id) < (?, ?) ORDER BY `+k+`, id LIMIT 1`,
+			oldest.ChatID, oldest.MediaGroupID, oldest.Pos, oldest.ID).Scan(&low.key, &low.id)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		if low.Valid {
+		if err == nil {
 			more, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
-				WHERE `+sc.cond+` AND deleted_at = 0 AND id >= ? AND id < ? ORDER BY id DESC`, sc.arg, low.Int64, oldest.ID))
+				WHERE `+sc.cond+` AND deleted_at = 0 AND (`+k+`, id) >= (?, ?) AND (`+k+`, id) < (?, ?) ORDER BY `+k+` DESC, id DESC`,
+				sc.arg, low.key, low.id, oldest.Pos, oldest.ID))
 			if err != nil {
 				return nil, err
 			}
@@ -308,24 +389,28 @@ func (s *Store) older(ctx context.Context, sc scope, beforeID int64, limit int) 
 	return views, nil
 }
 
-// newer returns up to limit messages above afterID, ascending; like older, it completes an album
-// the page edge would cut, along with everything in scope up to the album's last message.
-func (s *Store) newer(ctx context.Context, sc scope, afterID int64, limit int) ([]MessageView, error) {
+// newer returns up to limit messages after c, ascending; like older, it completes an album the
+// page edge would cut, along with everything in scope up to the album's last message.
+func (s *Store) newer(ctx context.Context, sc scope, c cursor, limit int) ([]MessageView, error) {
+	k := sc.key
 	views, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
-		WHERE `+sc.cond+` AND deleted_at = 0 AND id > ? ORDER BY id LIMIT ?`, sc.arg, afterID, limit))
+		WHERE `+sc.cond+` AND deleted_at = 0 AND (`+k+`, id) > (?, ?) ORDER BY `+k+`, id LIMIT ?`, sc.arg, c.key, c.id, limit))
 	if err != nil {
 		return nil, err
 	}
 	if n := len(views); n > 0 && views[n-1].MediaGroupID != "" {
 		newest := views[n-1]
-		var high sql.NullInt64
-		if err := s.db.QueryRowContext(ctx, `SELECT MAX(id) FROM messages
-			WHERE chat_id = ? AND deleted_at = 0 AND media_group_id = ? AND id > ?`, newest.ChatID, newest.MediaGroupID, newest.ID).Scan(&high); err != nil {
+		var high cursor
+		err := s.db.QueryRowContext(ctx, `SELECT `+k+`, id FROM messages
+			WHERE chat_id = ? AND deleted_at = 0 AND media_group_id = ? AND (`+k+`, id) > (?, ?) ORDER BY `+k+` DESC, id DESC LIMIT 1`,
+			newest.ChatID, newest.MediaGroupID, newest.Pos, newest.ID).Scan(&high.key, &high.id)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		if high.Valid {
+		if err == nil {
 			more, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
-				WHERE `+sc.cond+` AND deleted_at = 0 AND id > ? AND id <= ? ORDER BY id`, sc.arg, newest.ID, high.Int64))
+				WHERE `+sc.cond+` AND deleted_at = 0 AND (`+k+`, id) > (?, ?) AND (`+k+`, id) <= (?, ?) ORDER BY `+k+`, id`,
+				sc.arg, newest.Pos, newest.ID, high.key, high.id))
 			if err != nil {
 				return nil, err
 			}
@@ -351,7 +436,11 @@ func (s *Store) GetMessageView(ctx context.Context, id int64) (MessageView, erro
 }
 
 func (s *Store) ListChatMedia(ctx context.Context, chatID int64, typ string, beforeID int64, limit int) ([]MessageView, error) {
-	return s.listMedia(ctx, chatScope(chatID), typ, beforeID, limit)
+	sc, err := s.chatScope(ctx, chatID)
+	if err != nil {
+		return nil, err
+	}
+	return s.listMedia(ctx, sc, typ, beforeID, limit)
 }
 
 // ListBotMedia is ListChatMedia over every chat of one bot.
@@ -373,9 +462,17 @@ func (s *Store) listMedia(ctx context.Context, sc scope, typ string, beforeID in
 	default:
 		return nil, ErrBadMediaType
 	}
-	views, err := collectViews(s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
-		WHERE `+sc.cond+` AND deleted_at = 0 AND (? = 0 OR id < ?) AND `+cond+` ORDER BY id DESC LIMIT ?`,
-		sc.arg, beforeID, beforeID, limit))
+	q := `SELECT ` + msgCols + ` FROM messages WHERE ` + sc.cond + ` AND deleted_at = 0 AND ` + cond
+	args := []any{sc.arg}
+	if beforeID > 0 {
+		c, ok, err := s.at(ctx, sc, beforeID)
+		if err != nil || !ok {
+			return []MessageView{}, err
+		}
+		q += ` AND (` + sc.key + `, id) < (?, ?)`
+		args = append(args, c.key, c.id)
+	}
+	views, err := collectViews(s.db.QueryContext(ctx, q+` ORDER BY `+sc.key+` DESC, id DESC LIMIT ?`, append(args, limit)...))
 	if err != nil {
 		return nil, err
 	}

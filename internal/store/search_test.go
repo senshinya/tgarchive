@@ -107,7 +107,7 @@ func TestMigration7Backfill(t *testing.T) {
 	if _, err := old.db.Exec("UPDATE messages SET deleted_at = 9000 WHERE id = ?", b); err != nil { // as v6 deleted it
 		t.Fatal(err)
 	}
-	if err := old.migrate(ctx, 0); err != nil {
+	if err := old.migrate(ctx, 7); err != nil {
 		t.Fatal(err)
 	}
 	if body, _, _, ok := indexed(t, old, a); !ok || body != "旧消息" {

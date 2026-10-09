@@ -67,6 +67,17 @@ describe('store: channel conversations', () => {
     expect(s.conv(50).items.map((m) => m.id)).toEqual([9]);
     expect(s.conv(-1).items).toEqual([]);
   });
+
+  it('files a post archived late where it was published, not at the bottom', async () => {
+    const { s, api } = await setup();
+    const post = (id: number, pos: number) => makeMessage({ id, pos, chat_id: 50, source: 'channel_watch' });
+    // Archived as 1, 2, 3 but published as 100, 300, 200: the server pages them by publishing.
+    api.messages = vi.fn(async () => [post(1, 100), post(3, 200), post(2, 300)]);
+    await s.refreshLatest(50);
+    api.message = vi.fn(async (id: number) => post(id, 150)); // a backfill hit
+    await s.handleEvent({ type: 'message.created', data: { chat_id: 50, message_id: 9 } });
+    expect(s.conv(50).items.map((m) => m.id)).toEqual([1, 9, 3, 2]);
+  });
 });
 
 describe('store', () => {
@@ -587,7 +598,7 @@ describe('conversation windows', () => {
 
 describe('read marks', () => {
   const setup = async () => {
-    const api = fakeApi({ chats: vi.fn(async () => [makeChannelChat({ id: 50, unread: 4, last_read_id: 10 }), makeChat({ id: 10 })]) });
+    const api = fakeApi({ chats: vi.fn(async () => [makeChannelChat({ id: 50, unread: 4, last_read_pos: 10, first_unread_id: 11 }), makeChat({ id: 10 })]) });
     const s = createStore(api, { chatsReloadDelay: 0 });
     await s.loadChats();
     return { s, api };
@@ -596,11 +607,11 @@ describe('read marks', () => {
   it('reports a channel read up to a message at most once a second, clearing its badge at once', async () => {
     vi.useFakeTimers();
     const { s, api } = await setup();
-    s.markRead(50, 20);
+    s.markRead(50, { id: 20, pos: 20 });
     expect(api.markRead).toHaveBeenCalledWith(50, 20);
-    expect(s.chats.value.find((c) => c.id === 50)).toMatchObject({ unread: 0, last_read_id: 20 });
-    s.markRead(50, 21);
-    s.markRead(50, 22);
+    expect(s.chats.value.find((c) => c.id === 50)).toMatchObject({ unread: 0, last_read_pos: 20 });
+    s.markRead(50, { id: 21, pos: 21 });
+    s.markRead(50, { id: 22, pos: 22 });
     expect(api.markRead).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1000);
     expect(api.markRead).toHaveBeenCalledTimes(2);
@@ -610,8 +621,8 @@ describe('read marks', () => {
 
   it('ignores private chats and messages already read', async () => {
     const { s, api } = await setup();
-    s.markRead(10, 99);
-    s.markRead(50, 5);
+    s.markRead(10, { id: 99, pos: 99 });
+    s.markRead(50, { id: 5, pos: 5 });
     expect(api.markRead).not.toHaveBeenCalled();
   });
 
