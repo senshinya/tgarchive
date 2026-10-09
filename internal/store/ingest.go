@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 
 	"tgarchive/internal/model"
 )
@@ -61,6 +63,7 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 	}
 
 	err = s.withTx(ctx, func(tx *sql.Tx) error {
+		var unlinked []int64 // media an edit unlinked, the only ones it can leave orphaned
 		if in.ChannelID != 0 {
 			var watched, n int
 			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM channel_watches WHERE channel_id = ?", in.ChannelID).Scan(&watched); err != nil {
@@ -129,7 +132,7 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 				return err
 			}
 			// Article media belong to the message's Telegraph snapshot, not to its Telegram content.
-			if _, err := tx.ExecContext(ctx, "DELETE FROM message_media WHERE message_id = ? AND role != 'article'", existing); err != nil {
+			if unlinked, err = queryIDs(ctx, tx, "DELETE FROM message_media WHERE message_id = ? AND role != 'article' RETURNING media_id", existing); err != nil {
 				return err
 			}
 		}
@@ -155,7 +158,7 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 				return err
 			}
 		} else if !res.Created {
-			paths, err := collectOrphans(ctx, tx)
+			paths, err := collectOrphans(ctx, tx, unlinked)
 			if err != nil {
 				return err
 			}
@@ -217,36 +220,70 @@ func upsertMedia(ctx context.Context, tx *sql.Tx, botID int64, md model.Media) (
 	return id, err
 }
 
-// collectOrphans deletes media rows no message (nor custom emoji) links to and returns their stored paths.
-func collectOrphans(ctx context.Context, tx *sql.Tx) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id, kind, path FROM media WHERE NOT EXISTS (SELECT 1 FROM message_media mm WHERE mm.media_id = media.id)
-		AND NOT EXISTS (SELECT 1 FROM custom_emoji ce WHERE ce.media_id = media.id)`)
+// queryIDs returns the single integer column q yields (a SELECT, or a DELETE ... RETURNING).
+func queryIDs(ctx context.Context, tx *sql.Tx, q string, args ...any) ([]int64, error) {
+	rows, err := tx.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	var ids []int64
-	paths := []string{}
 	for rows.Next() {
 		var id int64
-		var kind, p string
-		if err := rows.Scan(&id, &kind, &p); err != nil {
-			rows.Close()
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		ids = append(ids, id)
-		if p == "" {
-			continue
-		}
-		paths = append(paths, p)
-		if kind == "video" || kind == "animation" || kind == "video_note" {
-			// A browser-playable copy, or one a crash left half-written or unrecorded; removing a
-			// file that does not exist is a no-op.
-			paths = append(paths, CompatRel(p), CompatPartRel(p))
-		}
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
+	return ids, rows.Err()
+}
+
+// orphanBatch bounds the ids collectOrphans checks in one query (SQLite's variable limit).
+const orphanBatch = 500
+
+// collectOrphans deletes those of candidates (the media rows this transaction unlinked) that no
+// message (nor custom emoji) links to any more, and returns their stored paths, by media id.
+// Only the candidates are looked at: a media row nothing unlinked cannot have become an orphan.
+func collectOrphans(ctx context.Context, tx *sql.Tx, candidates []int64) ([]string, error) {
+	cand := slices.Compact(slices.Sorted(slices.Values(candidates)))
+	var ids []int64
+	paths := []string{}
+	for len(cand) > 0 {
+		batch := cand[:min(len(cand), orphanBatch)]
+		cand = cand[len(batch):]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT id, kind, path FROM media WHERE id IN (`+
+			strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")+`)
+			AND NOT EXISTS (SELECT 1 FROM message_media mm WHERE mm.media_id = media.id)
+			AND NOT EXISTS (SELECT 1 FROM custom_emoji ce WHERE ce.media_id = media.id) ORDER BY id`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id int64
+			var kind, p string
+			if err := rows.Scan(&id, &kind, &p); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			ids = append(ids, id)
+			if p == "" {
+				continue
+			}
+			paths = append(paths, p)
+			if kind == "video" || kind == "animation" || kind == "video_note" {
+				// A browser-playable copy, or one a crash left half-written or unrecorded; removing a
+				// file that does not exist is a no-op.
+				paths = append(paths, CompatRel(p), CompatPartRel(p))
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 	}
 	for _, id := range ids {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM media WHERE id = ?", id); err != nil {
@@ -273,8 +310,11 @@ func (s *Store) DeleteMessage(ctx context.Context, id, now int64) (int64, []stri
 		}
 		// Unlinking the media (article media included) lets collectOrphans drop unshared files; the
 		// Telegraph snapshot, its job and the favorite go with the message (the FK cascade only fires on a hard delete).
+		unlinked, err := queryIDs(ctx, tx, "DELETE FROM message_media WHERE message_id = ? RETURNING media_id", id)
+		if err != nil {
+			return err
+		}
 		for _, q := range []string{
-			"DELETE FROM message_media WHERE message_id = ?",
 			"DELETE FROM articles WHERE message_id = ?",
 			"DELETE FROM telegraph_jobs WHERE message_id = ?",
 			"DELETE FROM favorites WHERE message_id = ?",
@@ -283,7 +323,7 @@ func (s *Store) DeleteMessage(ctx context.Context, id, now int64) (int64, []stri
 				return err
 			}
 		}
-		orphans, err = collectOrphans(ctx, tx)
+		orphans, err = collectOrphans(ctx, tx, unlinked)
 		return err
 	})
 	return chatID, orphans, err
@@ -293,11 +333,16 @@ func (s *Store) DeleteMessage(ctx context.Context, id, now int64) (int64, []stri
 func (s *Store) PurgeBot(ctx context.Context, id int64) ([]string, error) {
 	var orphans []string
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		// The media of the bot's messages, which the cascade below unlinks.
+		unlinked, err := queryIDs(ctx, tx, `SELECT DISTINCT mm.media_id FROM chats c JOIN messages m ON m.chat_id = c.id
+			JOIN message_media mm ON mm.message_id = m.id WHERE c.bot_id = ?`, id)
+		if err != nil {
+			return err
+		}
 		if err := affected(tx.ExecContext(ctx, "DELETE FROM bots WHERE id = ?", id)); err != nil {
 			return err
 		}
-		var err error
-		orphans, err = collectOrphans(ctx, tx)
+		orphans, err = collectOrphans(ctx, tx, unlinked)
 		return err
 	})
 	return orphans, err

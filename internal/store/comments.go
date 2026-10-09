@@ -18,7 +18,7 @@ type CommentState struct {
 func (s *Store) CommentState(ctx context.Context, rootID int64) (CommentState, error) {
 	var st CommentState
 	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(tg_message_id), 0), COUNT(*) FROM messages
-		WHERE thread_root_id = ? AND deleted_at = 0`, rootID).Scan(&st.MaxTgID, &st.Count)
+		WHERE thread_root_id != 0 AND thread_root_id = ? AND deleted_at = 0`, rootID).Scan(&st.MaxTgID, &st.Count)
 	return st, err
 }
 
@@ -33,7 +33,7 @@ type Commenter struct {
 // RecentCommenters returns the authors of the newest comments of archived post rootID, newest
 // first, each once, at most n.
 func (s *Store) RecentCommenters(ctx context.Context, rootID int64, n int) ([]Commenter, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT extra_json FROM messages WHERE thread_root_id = ? AND deleted_at = 0
+	rows, err := s.db.QueryContext(ctx, `SELECT extra_json FROM messages WHERE thread_root_id != 0 AND thread_root_id = ? AND deleted_at = 0
 		ORDER BY tg_message_id DESC LIMIT 200`, rootID)
 	if err != nil {
 		return nil, err

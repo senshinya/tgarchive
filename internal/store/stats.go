@@ -75,6 +75,7 @@ const liveMedia = `SELECT mm.media_id, mm.role, m.chat_id, m.date FROM message_m
 // east of UTC. Messages and files of deleted messages do not count; a file several messages
 // share counts once.
 func (s *Store) Stats(ctx context.Context, tzMinutes int, now int64) (*Stats, error) {
+	s = s.reader()
 	off := int64(tzMinutes) * 60
 	local := now + off
 	today := local - local%86400
