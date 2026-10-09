@@ -298,6 +298,26 @@ func TestFetchPublicLink(t *testing.T) {
 	}
 }
 
+// Fetching the link of a post deleted from the archive brings it back.
+func TestRefetchRevivesADeletedPost(t *testing.T) {
+	e := newFetchEnv(t)
+	e.tg.post(42, "hello", 0)
+	e.submit(t, 10, "https://t.me/chan/42")
+	e.runOne(t)
+	msgs := e.messages(t)
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %+v", msgs)
+	}
+	if _, _, err := e.st.DeleteMessage(ctx, msgs[0].ID, 9); err != nil {
+		t.Fatal(err)
+	}
+	e.submit(t, 11, "https://t.me/chan/42")
+	e.runOne(t)
+	if got := e.messages(t); len(got) != 1 || got[0].ID != msgs[0].ID || got[0].Text != "hello" {
+		t.Fatalf("messages after refetch = %+v", got)
+	}
+}
+
 func TestFetchTextPostCompletes(t *testing.T) {
 	e := newFetchEnv(t)
 	e.tg.post(42, "hello", 0)

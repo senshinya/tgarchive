@@ -25,13 +25,17 @@ type IngestInput struct {
 	// TelegraphPath, when set, queues a Telegraph job for the message in the same transaction,
 	// but only if the message is newly created (an edit never queues a second snapshot).
 	TelegraphPath string
+	// Revive brings a message deleted in the archive back when it is archived again; without it the
+	// deleted message is left alone. Only a user's own request to archive it sets it (fetching its
+	// link, a backfill): edits and polling must not undo a deletion.
+	Revive bool
 }
 
 type IngestResult struct {
 	MessageID       int64
 	ChatID          int64
 	ChatCreated     bool
-	Created         bool     // false when an existing message was updated (edit)
+	Created         bool     // false when an existing message was updated (edit); true for a revived one
 	OrphanPaths     []string // media files no longer referenced; caller deletes them
 	TelegraphQueued bool     // a Telegraph job was created for this message
 }
@@ -103,7 +107,7 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 			}
 		case err != nil:
 			return err
-		case existingDeletedAt != 0:
+		case existingDeletedAt != 0 && !in.Revive:
 			// Edit of a message already soft-deleted via DeleteMessage: ignore the edit entirely
 			// (no text/kind/media changes, no re-link), but still advance the offset below.
 			res.MessageID = existing
@@ -114,10 +118,13 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 			}
 			return nil
 		default:
-			res.MessageID = existing
+			// An edit, or a deleted message archived again (Revive): DeleteMessage dropped its media
+			// links, Telegraph snapshot and favorite, so it comes back like a new one, re-linking (and
+			// re-queuing) its media below; clearing deleted_at puts it back in the search index.
+			res.MessageID, res.Created = existing, existingDeletedAt != 0
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE messages SET edit_date = ?, kind = ?, text = ?, entities_json = ?, extra_json = ?, raw_json = ?,
-					stats_json = CASE WHEN ? != '' THEN ? ELSE stats_json END WHERE id = ?`,
+					stats_json = CASE WHEN ? != '' THEN ? ELSE stats_json END, deleted_at = 0 WHERE id = ?`,
 				m.EditDate, string(m.Kind), m.Text, string(entJSON), string(m.Extra), string(m.Raw), in.Stats, in.Stats, existing); err != nil {
 				return err
 			}

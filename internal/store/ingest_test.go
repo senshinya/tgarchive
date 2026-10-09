@@ -290,3 +290,53 @@ func TestUserbotFetchesKeyedByOriginChat(t *testing.T) {
 		t.Fatalf("B media after deleting A = %v", ids)
 	}
 }
+
+func TestReviveBringsBackADeletedMessage(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	fetched := func(key, text string) *model.Message {
+		m := photoMsg(350, key)
+		m.Source = model.SourceUserbotFetch
+		m.OriginChatID = -1001
+		m.Text = text
+		return m
+	}
+	r := ingest(t, s, bot, fetched("mt:photo:a", "first fetch"))
+	if _, orphans, err := s.DeleteMessage(ctx, r.MessageID, 9000); err != nil || len(orphans) != 0 {
+		// Never downloaded, so the dropped media row had no file.
+		t.Fatalf("delete = %v, %v", orphans, err)
+	}
+
+	res, err := s.Ingest(ctx, IngestInput{BotID: bot, Sender: alice, Msg: fetched("mt:photo:a", "fetched again 重新存档"), Now: 9500, Revive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Created || res.MessageID != r.MessageID {
+		t.Fatalf("revive = %+v", res)
+	}
+	v, err := s.GetMessageView(ctx, r.MessageID)
+	if err != nil || v.Text != "fetched again 重新存档" {
+		t.Fatalf("view = %+v, %v", v, err)
+	}
+	// The media row went with the deletion; it is created again and queued for download.
+	if len(v.Media) != 1 || v.Media[0].State != StatePending {
+		t.Fatalf("media = %+v", v.Media)
+	}
+	if due, _ := s.DueMedia(ctx, 0, 10); len(due) != 1 || due[0].ID != v.Media[0].ID {
+		t.Fatalf("due = %+v", due)
+	}
+	hits, err := s.Search(ctx, "重新存档", 0, 0, 10)
+	if err != nil || len(hits) != 1 || hits[0].Message.ID != r.MessageID {
+		t.Fatalf("search = %+v, %v", hits, err)
+	}
+	// The conversation moves up as it does for a new fetch.
+	if chats, _ := s.ListChats(ctx, 0); len(chats) != 1 || chats[0].LastMessageAt != 9500 {
+		t.Fatalf("chats = %+v", chats)
+	}
+
+	// Reviving a live message is an ordinary edit.
+	again, err := s.Ingest(ctx, IngestInput{BotID: bot, Sender: alice, Msg: fetched("mt:photo:a", "edited"), Now: 9600, Revive: true})
+	if err != nil || again.Created || again.MessageID != r.MessageID {
+		t.Fatalf("edit = %+v, %v", again, err)
+	}
+}
