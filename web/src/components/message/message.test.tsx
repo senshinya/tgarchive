@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Message } from '../../api/types';
 import type { Bubble } from '../../lib/grouping';
 import { fakeApi, makeBot, makeChat, makeMedia, makeMessage } from '../../test/fixtures';
-import { renderWithStore } from '../../test/render';
+import { renderOpen, renderWithStore } from '../../test/render';
 import { MiddleColumn } from '../middle/MiddleColumn';
 import { MessageBubble } from './MessageBubble';
 
@@ -214,7 +214,7 @@ describe('MiddleColumn', () => {
     const day1 = new Date(2026, 9, 3, 10, 0).getTime() / 1000;
     const day2 = new Date(2026, 9, 4, 9, 0).getTime() / 1000;
     const api = setup([makeMessage({ id: 1, text: 'first', date: day1 }), makeMessage({ id: 2, text: 'second', date: day2 })]);
-    const { container } = renderWithStore(<MiddleColumn chatId={10} />, api);
+    const { container } = renderOpen(<MiddleColumn chatId={10} />, api);
     await screen.findByText('second');
     const groups = container.querySelectorAll('.message-date-group');
     expect(groups).toHaveLength(2);
@@ -227,7 +227,7 @@ describe('MiddleColumn', () => {
   it('loads older history when scrolled near the top', async () => {
     const page = Array.from({ length: 50 }, (_, i) => makeMessage({ id: 100 + i, text: `m${i}` }));
     const api = setup(page);
-    const { container } = renderWithStore(<MiddleColumn chatId={10} />, api);
+    const { container } = renderOpen(<MiddleColumn chatId={10} />, api);
     await screen.findByText('m49');
     const list = container.querySelector('.MessageList')!;
     fireEvent.scroll(list);
@@ -241,14 +241,14 @@ describe('MiddleColumn', () => {
       150: [],
     };
     const api = fakeApi({ messages: vi.fn(async (_c: number, before = 0) => pages[before] ?? []) });
-    renderWithStore(<MiddleColumn chatId={10} />, api);
+    renderOpen(<MiddleColumn chatId={10} />, api);
     await waitFor(() => expect(api.messages).toHaveBeenCalledTimes(3));
     expect(api.messages).toHaveBeenLastCalledWith(10, 150, 50);
   });
 
   it('deletes a message after confirmation from the context menu', async () => {
     const api = setup([makeMessage({ id: 1, text: 'bye' })]);
-    const { container } = renderWithStore(<MiddleColumn chatId={10} />, api);
+    const { container } = renderOpen(<MiddleColumn chatId={10} />, api);
     await screen.findByText('bye');
     fireEvent.contextMenu(container.querySelector('.message-content')!);
     expect(screen.getByRole('menuitem', { name: '复制文本' })).toBeTruthy();
@@ -264,7 +264,7 @@ describe('MiddleColumn', () => {
     const api = setup([makeMessage({ id: 1, text: 'keep me' })]);
     api.favorite = vi.fn(async () => ({ at: 5, tags: [] }));
     api.message = vi.fn(async (id: number) => makeMessage({ id, text: 'keep me', favorite: { at: 5, tags: [] } }));
-    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    const r = renderOpen(<MiddleColumn chatId={10} />, api);
     await screen.findByText('keep me');
     fireEvent.contextMenu(r.container.querySelector('.message-content')!);
     expect(screen.queryByRole('menuitem', { name: '标签…' })).toBeNull();
@@ -282,7 +282,7 @@ describe('MiddleColumn', () => {
 
   it('offers download only for archived media', async () => {
     const api = setup([makeMessage({ id: 1, kind: 'document', text: '', media: [makeMedia({ id: 9, kind: 'document', mime: 'application/octet-stream', file_name: 'a.txt' })] })]);
-    const { container } = renderWithStore(<MiddleColumn chatId={10} />, api);
+    const { container } = renderOpen(<MiddleColumn chatId={10} />, api);
     await screen.findByText('a.txt');
     fireEvent.contextMenu(container.querySelector('.message-content')!);
     expect(screen.getByRole('menuitem', { name: '下载' })).toBeTruthy();

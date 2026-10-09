@@ -25,6 +25,9 @@ const AT_BOTTOM_PX = 100;
 const REFRESH_POSTS = 100;
 const SHOW_DOWN_PX = 300;
 
+/** Whether the user can see the page: a hidden tab reads nothing. */
+const pageVisible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
+
 function download(href: string) {
   const a = document.createElement('a');
   a.href = href;
@@ -75,30 +78,39 @@ export function MessageList({ chatId }: { chatId: number }) {
   const [deleting, setDeleting] = useState(false);
   // A channel opened with unread posts shows them from the first one, below a divider that stays
   // put for this visit: what was read when it opened, and whether that window is still loading
-  // (until then nothing scrolls and nothing is marked read).
-  const [read] = useState(() => {
-    const chat = store.chats.value.find((c) => c.id === chatId);
-    return chat?.kind === 'channel' && chat.unread > 0 && chat.first_unread_id > 0
-      ? { before: chat.last_read_pos, resume: chat.first_unread_id }
-      : null;
-  });
-  const unread = useRef({ pending: read !== null, started: false });
+  // (until then nothing scrolls and nothing is marked read). A chat's unread posts are known from
+  // the chat list, so a chat waits for it before opening (a page loaded at the chat starts both at
+  // once); a bot timeline has none.
+  const [read, setRead] = useState<{ before: number; resume: number } | null>(null);
+  const unread = useRef({ pending: chatId > 0, started: false });
   const firstUnread = read ? conv.items.find((m) => m.pos > read.before)?.id : undefined;
   const statsAsked = useRef(false);
+  const opened = useRef(false);
+  const chatsReady = chatId < 0 || store.chatsLoaded.value;
 
   useEffect(() => {
+    if (opened.current) return;
     // A jump asked before the conversation opened (search, favorites, downloads) loads the window
     // around its message instead of the latest page, unless that message is already loaded.
-    // A jump wins over the unread posts.
+    // A jump wins over the unread posts, and needs no chat list.
     const j = store.jumpTo.value;
-    if (j && j.key === chatId) unread.current.pending = false;
-    if (j && j.key === chatId && !store.conv(chatId).items.some((m) => m.id === j.messageId)) void store.loadAround(chatId, j.messageId);
-    else if (read && unread.current.pending) {
+    const jumping = !!j && j.key === chatId;
+    if (!jumping && !chatsReady) return;
+    opened.current = true;
+    const chat = store.chats.value.find((c) => c.id === chatId);
+    const r =
+      !jumping && chat?.kind === 'channel' && chat.unread > 0 && chat.first_unread_id > 0
+        ? { before: chat.last_read_pos, resume: chat.first_unread_id }
+        : null;
+    setRead(r);
+    unread.current.pending = r !== null;
+    if (jumping && !store.conv(chatId).items.some((m) => m.id === j.messageId)) void store.loadAround(chatId, j.messageId);
+    else if (r) {
       // The window around the first unread post.
-      void store.loadAround(chatId, read.resume);
+      void store.loadAround(chatId, r.resume);
       unread.current.started = true;
     } else void store.refreshLatest(chatId);
-  }, [chatId]);
+  }, [chatId, chatsReady]);
 
   // The unread posts failing to load leave the list as it is, working as usual.
   useEffect(() => {
@@ -146,8 +158,10 @@ export function MessageList({ chatId }: { chatId: number }) {
     } else if (!s.last) el.scrollTop = el.scrollHeight;
     else if (first && last && s.first && byPosition(first, s.first) < 0 && last.id === s.last.id)
       el.scrollTop = el.scrollHeight - s.height + s.top;
-    // Following the bottom only while it is the latest: a window being extended stays put.
-    else if (last && byPosition(last, s.last) > 0 && s.atBottom && !s.hasNewer) el.scrollTop = el.scrollHeight;
+    // Following the bottom only while it is the latest: a window being extended stays put. A
+    // channel in a hidden tab stays put too, so its new posts wait below, unread.
+    else if (last && byPosition(last, s.last) > 0 && s.atBottom && !s.hasNewer && (pageVisible() || !isChannel()))
+      el.scrollTop = el.scrollHeight;
     record();
     readUpTo();
     // A first page shorter than the viewport never fires scroll events: keep filling.
@@ -186,12 +200,32 @@ export function MessageList({ chatId }: { chatId: number }) {
     [],
   );
 
-  // A channel's newest message in view marks it read (the left column's badge).
+  const isChannel = () => store.chats.value.find((c) => c.id === chatId)?.kind === 'channel';
+
+  // A channel's newest message in view marks it read (the left column's badge), while the page is
+  // visible.
   const readUpTo = () => {
     const c = store.conv(chatId);
     if (unread.current.pending) return; // what is shown is not yet where the reading resumes
+    if (!pageVisible()) return;
     if (chatId > 0 && snap.current.atBottom && !c.hasNewer && c.items.length) store.markRead(chatId, c.items[c.items.length - 1]);
   };
+
+  // Back to a hidden tab: posts that came in meanwhile were not read, so the divider moves above
+  // them (as when opening the channel), and what is in view is read now.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (!pageVisible()) return;
+      const chat = store.chats.value.find((c) => c.id === chatId);
+      if (chat?.kind === 'channel' && !unread.current.pending) {
+        const first = store.conv(chatId).items.find((m) => m.pos > chat.last_read_pos);
+        if (first) setRead((r) => (r?.before === chat.last_read_pos ? r : { before: chat.last_read_pos, resume: first.id }));
+      }
+      readUpTo();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
 
   const onScroll = () => {
     const el = ref.current;
@@ -272,7 +306,7 @@ export function MessageList({ chatId }: { chatId: number }) {
               </button>
             </div>
           )}
-          {!conv.loaded && conv.loading && (
+          {!conv.loaded && (conv.loading || !chatsReady) && (
             <div class="history-notice">
               <Spinner size={32} />
             </div>

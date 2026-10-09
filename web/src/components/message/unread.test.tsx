@@ -135,6 +135,75 @@ describe('opening a channel with unread posts', () => {
     });
   });
 
+  it('keeps the unread posts in place through a resync', async () => {
+    vi.spyOn(scroll, 'scrollWithin').mockImplementation(() => {});
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChannelChat({ last_read_pos: 120, unread: 80, first_unread_id: 121 })]),
+      messages: pages(range(97, 146), range(151, 200)), // newer posts exist below the window
+    });
+    const { container, store } = await open(api);
+    await screen.findByText('p146');
+    await act(() => store.resync());
+    expect(screen.queryByText('p200')).toBeNull();
+    expect(container.querySelector('.unread-divider')?.nextElementSibling?.getAttribute('data-message-id')).toBe('121');
+    const list = container.querySelector('.MessageList') as HTMLElement;
+    Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 1500 });
+    fireEvent.scroll(list);
+    expect(api.markRead).not.toHaveBeenCalled();
+    vi.mocked(scroll.scrollWithin).mockRestore();
+  });
+
+  it('waits for the chat list before deciding where to open (a page loaded at the chat)', async () => {
+    const scrolled: Element[] = [];
+    const spy = vi.spyOn(scroll, 'scrollWithin').mockImplementation((_list, el) => void scrolled.push(el));
+    let release: () => void = () => {};
+    const api = fakeApi({
+      chats: vi.fn(
+        () =>
+          new Promise<ReturnType<typeof makeChannelChat>[]>(
+            (r) => (release = () => r([makeChannelChat({ last_read_pos: 120, unread: 3, first_unread_id: 121 })])),
+          ),
+      ),
+      messages: pages(range(100, 123), range(74, 123)),
+    });
+    const store = createStore(api, { chatsReloadDelay: 0 });
+    const chats = store.loadChats(); // App starts it along with the list
+    const { container } = render(
+      <StoreContext.Provider value={store}>
+        <MessageList chatId={50} />
+      </StoreContext.Provider>,
+    );
+    await act(async () => {});
+    expect(api.messages).not.toHaveBeenCalled();
+    await act(async () => {
+      release();
+      await chats;
+    });
+    await screen.findByText('p123');
+    expect(api.messages).toHaveBeenCalledWith(50, 0, 50, { around: 121 });
+    expect(vi.mocked(api.messages).mock.calls.some((c) => !c[3])).toBe(false);
+    const divider = container.querySelector('.unread-divider');
+    expect(divider?.nextElementSibling?.getAttribute('data-message-id')).toBe('121');
+    expect(scrolled).toContain(divider);
+    expect(api.markRead).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('opens a bot timeline without waiting for the chat list', async () => {
+    const api = fakeApi({
+      chats: vi.fn(() => new Promise<never>(() => {})),
+      botMessages: vi.fn(async () => [makeMessage({ id: 1, text: 'hi' })]),
+    });
+    const store = createStore(api);
+    void store.loadChats();
+    render(
+      <StoreContext.Provider value={store}>
+        <MessageList chatId={-1} />
+      </StoreContext.Provider>,
+    );
+    await screen.findByText('hi');
+  });
+
   it('keeps private chats on the latest message', async () => {
     const api = fakeApi({
       chats: vi.fn(async () => [makeChat({ id: 10, last_read_pos: 1, unread: 4, first_unread_id: 1 })]),
@@ -158,5 +227,65 @@ describe('opening a channel', () => {
     await waitFor(() => expect(api.refreshPostStats).toHaveBeenCalledWith(50, [1, 2, 3]));
     await act(async () => {});
     expect(api.refreshPostStats).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a channel left open in a hidden tab', () => {
+  let state: DocumentVisibilityState = 'visible';
+  beforeAll(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+  });
+  afterAll(() => {
+    delete (document as { visibilityState?: unknown }).visibilityState;
+  });
+  const setVisibility = (s: DocumentVisibilityState) =>
+    act(() => {
+      state = s;
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+  // Open at the latest post (123, all read) and scrolled to the bottom.
+  async function openAtBottom() {
+    state = 'visible';
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChannelChat({ last_read_pos: 123, unread: 0 })]),
+      messages: pages([], range(100, 123)),
+      message: vi.fn(async (id: number) => post(id)),
+    });
+    const r = await open(api);
+    await screen.findByText('p123');
+    const list = r.container.querySelector('.MessageList') as HTMLElement;
+    Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 1500 });
+    fireEvent.scroll(list);
+    return { ...r, api, list };
+  }
+
+  it('marks nothing read while hidden, and the post in view once the page is back', async () => {
+    const { api, store, container } = await openAtBottom();
+    await setVisibility('hidden');
+    await act(() => store.handleEvent({ type: 'message.created', data: { chat_id: 50, message_id: 124 } }));
+    await screen.findByText('p124');
+    expect(api.markRead).not.toHaveBeenCalled();
+    await setVisibility('visible');
+    expect(api.markRead).toHaveBeenCalledWith(50, 124);
+    expect(container.querySelector('.unread-divider')?.nextElementSibling?.getAttribute('data-message-id')).toBe('124');
+  });
+
+  it('stays put above posts that came in while hidden, below the divider, until they are read', async () => {
+    const { api, store, container, list } = await openAtBottom();
+    await setVisibility('hidden');
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, get: () => 2600 }); // they take room
+    await act(async () => {
+      await store.handleEvent({ type: 'message.created', data: { chat_id: 50, message_id: 124 } });
+      await store.handleEvent({ type: 'message.created', data: { chat_id: 50, message_id: 125 } });
+    });
+    await screen.findByText('p125');
+    expect(list.scrollTop).toBe(1500); // not following the bottom past them
+    await setVisibility('visible');
+    expect(api.markRead).not.toHaveBeenCalled();
+    expect(container.querySelector('.unread-divider')?.nextElementSibling?.getAttribute('data-message-id')).toBe('124');
+    list.scrollTop = 2100;
+    fireEvent.scroll(list);
+    expect(api.markRead).toHaveBeenCalledWith(50, 125);
   });
 });

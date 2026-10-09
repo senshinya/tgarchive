@@ -10,3 +10,11 @@ export function renderWithStore(ui: ComponentChildren, api: Api = fakeApi()) {
   const result = render(<StoreContext.Provider value={store}>{ui}</StoreContext.Provider>);
   return { ...result, store, api };
 }
+
+/** Renders a conversation the way the app opens it: with the chat list loading alongside (a chat
+ * waits for it to know its unread posts). */
+export function renderOpen(ui: ComponentChildren, api: Api = fakeApi()) {
+  const r = renderWithStore(ui, api);
+  void r.store.loadChats();
+  return r;
+}
