@@ -1,10 +1,13 @@
 package userbot
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gotd/td/tg"
 
 	"tgarchive/internal/linkparse"
 	"tgarchive/internal/store"
@@ -136,5 +139,53 @@ func TestPickerScanClearsAbsentChannels(t *testing.T) {
 	eventually(t, "scan done", func() bool { l, _ := e.w.Channels(ctx, false); return !l.Loading })
 	if e.w.Absent.has(2002, e.now) {
 		t.Fatal("a channel the picker scan found is still taken as absent")
+	}
+}
+
+// TestUserLookupsScanDespiteAbsentChannel: after rejoining, what the user does directly (create a
+// watch, test a condition, backfill, open a channel's photo) looks the channel up again at once,
+// while the record from the poll has not expired; the poll itself keeps leaving it alone.
+func TestUserLookupsScanDespiteAbsentChannel(t *testing.T) {
+	actions := map[string]func(e *watchEnv) error{
+		"create watch":   func(e *watchEnv) error { _, err := e.w.InitialLastSeen(ctx, 500); return err },
+		"test condition": func(e *watchEnv) error { _, err := e.w.Test(ctx, 500, nil); return err },
+		"backfill": func(e *watchEnv) error {
+			if _, err := e.w.Backfill(ctx, e.watch, 24); err != nil {
+				return err
+			}
+			eventually(t, "backfill done", func() bool { return !e.w.BackfillState(e.watch).Running })
+			if msg := e.w.BackfillState(e.watch).Error; msg != "" {
+				return errors.New(msg)
+			}
+			return nil
+		},
+		"channel photo": func(e *watchEnv) error {
+			_, err := e.w.ChannelPhoto(ctx, 500)
+			return err
+		},
+	}
+	for name, act := range actions {
+		t.Run(name, func(t *testing.T) {
+			e := privateWatchEnv(t)
+			e.tg.ch.Photo = &tg.ChatPhoto{PhotoID: 9}
+			e.tg.reacted(5, 0, false, 1, nil)
+			e.w.PollOnce(ctx)
+			if !e.w.Absent.has(500, e.now) {
+				t.Fatal("the poll did not record the channel")
+			}
+			// Rejoined.
+			e.tg.chanErr = ""
+			e.tg.set(func(*fakeTG) { e.tg.member = true })
+			e.w.PollOnce(ctx)
+			if n := e.dialogScans(); n != 1 {
+				t.Fatalf("the poll scanned again within the record (%d calls)", n)
+			}
+			if err := act(e); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if e.dialogScans() != 2 || e.w.Absent.has(500, e.now) {
+				t.Fatalf("%s did not look again (%d scans) or kept the record", name, e.dialogScans())
+			}
+		})
 	}
 }

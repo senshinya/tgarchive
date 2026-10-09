@@ -125,7 +125,7 @@ func (w *Watcher) backfill(ctx context.Context, wv store.WatchView, cond *watchc
 	var ch *tg.Channel
 	if err := w.withFlood(ctx, func(api *tg.Client) error {
 		var err error
-		ch, err = w.channel(ctx, api, wv.ChannelID)
+		ch, err = w.channel(ctx, api, wv.ChannelID, true)
 		return err
 	}); err != nil {
 		return err

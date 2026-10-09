@@ -388,7 +388,7 @@ func (w *Watcher) RefreshComments(ctx context.Context, chatID, rootID int64) err
 		return ErrNotReady
 	}
 	return w.with(ctx, func(api *tg.Client) error {
-		ch, err := w.channel(ctx, api, channel)
+		ch, err := w.channel(ctx, api, channel, true)
 		if err != nil {
 			return err
 		}
@@ -447,7 +447,7 @@ func (w *Watcher) backfillComments(ctx context.Context) error {
 			continue
 		}
 		err = w.with(ctx, func(api *tg.Client) error {
-			ch, err := w.channel(ctx, api, wv.ChannelID)
+			ch, err := w.channel(ctx, api, wv.ChannelID, false)
 			if err != nil {
 				return err
 			}

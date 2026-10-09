@@ -87,7 +87,7 @@ func (w *Watcher) RefreshPosts(ctx context.Context, chatID int64, ids []int64) e
 		return ErrNotReady
 	}
 	return w.with(ctx, func(api *tg.Client) error {
-		ch, err := w.channel(ctx, api, channel)
+		ch, err := w.channel(ctx, api, channel, true)
 		if err != nil {
 			return err
 		}

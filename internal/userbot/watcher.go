@@ -333,7 +333,7 @@ func (w *Watcher) publish(watchID int64) {
 
 // poll fetches new posts into the pending set and judges every pending post.
 func (w *Watcher) poll(ctx context.Context, api *tg.Client, wv store.WatchView, cond *watchcond.Node) (changed bool, err error) {
-	ch, err := w.channel(ctx, api, wv.ChannelID)
+	ch, err := w.channel(ctx, api, wv.ChannelID, false)
 	if err != nil {
 		return false, err
 	}
@@ -792,11 +792,12 @@ func (w *Watcher) archiveComments(ctx context.Context, api *tg.Client, ch *tg.Ch
 }
 
 // channel resolves a stored channel id to a full channel (with access hash): from the peer
-// cache, else by its username, else by a dialogs scan, unless a recent scan already missed it
-// (errNotMember then, see AbsentChannels). A cached hash Telegram rejects is evicted and resolved
-// again once.
-func (w *Watcher) channel(ctx context.Context, api *tg.Client, id int64) (*tg.Channel, error) {
-	ch, err := w.lookup(ctx, api, id)
+// cache, else by its username, else by a dialogs scan. Background work (user false) skips the scan
+// when a recent one already missed the channel (errNotMember then, see AbsentChannels); what the
+// user asks for directly scans regardless, as they may have just rejoined. A cached hash Telegram
+// rejects is evicted and resolved again once.
+func (w *Watcher) channel(ctx context.Context, api *tg.Client, id int64, user bool) (*tg.Channel, error) {
+	ch, err := w.lookup(ctx, api, id, user)
 	if err != nil {
 		return nil, err
 	}
@@ -805,7 +806,7 @@ func (w *Watcher) channel(ctx context.Context, api *tg.Client, id int64) (*tg.Ch
 		if derr := w.st.DeletePeer(ctx, id); derr != nil && !errors.Is(derr, store.ErrNotFound) {
 			log.Printf("watch: invalidate stale peer %d: %v", id, derr)
 		}
-		if ch, err = w.lookup(ctx, api, id); err != nil {
+		if ch, err = w.lookup(ctx, api, id, user); err != nil {
 			return nil, err
 		}
 		full, err = getChannel(ctx, api, ch)
@@ -813,7 +814,7 @@ func (w *Watcher) channel(ctx context.Context, api *tg.Client, id int64) (*tg.Ch
 	return full, err
 }
 
-func (w *Watcher) lookup(ctx context.Context, api *tg.Client, id int64) (*tg.Channel, error) {
+func (w *Watcher) lookup(ctx context.Context, api *tg.Client, id int64, user bool) (*tg.Channel, error) {
 	if p, err := w.st.GetPeer(ctx, id); err == nil {
 		return &tg.Channel{ID: p.ChannelID, AccessHash: p.AccessHash, Title: p.Title, Username: p.Username}, nil
 	} else if !errors.Is(err, store.ErrNotFound) {
@@ -823,7 +824,7 @@ func (w *Watcher) lookup(ctx context.Context, api *tg.Client, id int64) (*tg.Cha
 	if c, err := w.st.GetChannel(ctx, id); err == nil && c.Username != "" {
 		link = linkparse.Link{Username: c.Username}
 	}
-	if link.Username == "" && w.Absent.has(id, w.Now()) {
+	if link.Username == "" && !user && w.Absent.has(id, w.Now()) {
 		return nil, errNotMember
 	}
 	ch, _, err := resolveChannel(ctx, api, w.st, w.Now, w.Absent, link)
@@ -855,7 +856,7 @@ func getChannel(ctx context.Context, api *tg.Client, ch *tg.Channel) (*tg.Channe
 func (w *Watcher) InitialLastSeen(ctx context.Context, channelID int64) (int64, error) {
 	var top int64
 	err := w.with(ctx, func(api *tg.Client) error {
-		ch, err := w.channel(ctx, api, channelID)
+		ch, err := w.channel(ctx, api, channelID, true)
 		if err != nil {
 			return err
 		}
@@ -1246,7 +1247,7 @@ func (w *Watcher) recentPosts(ctx context.Context, api *tg.Client, id int64) (*r
 	if r != nil && w.Now().Sub(r.at) < w.RecentTTL {
 		return r, nil
 	}
-	ch, err := w.channel(ctx, api, id)
+	ch, err := w.channel(ctx, api, id, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1351,7 +1352,8 @@ func (w *Watcher) ChannelPhoto(ctx context.Context, id int64) (string, error) {
 	return w.channelPhoto(ctx, id, false)
 }
 
-// channelPhoto is ChannelPhoto; force refetches a photo already on disk (daily refresh).
+// channelPhoto is ChannelPhoto; force refetches a photo already on disk and, being background work,
+// leaves alone a channel a recent dialogs scan missed (daily refresh).
 func (w *Watcher) channelPhoto(ctx context.Context, id int64, force bool) (string, error) {
 	w.mu.Lock()
 	if t, ok := w.photoMiss[id]; ok && w.Now().Sub(t) < 10*time.Minute {
@@ -1378,7 +1380,7 @@ func (w *Watcher) channelPhoto(ctx context.Context, id int64, force bool) (strin
 	}
 	has := false
 	err := w.with(ctx, func(api *tg.Client) error {
-		ch, err := w.channel(ctx, api, id)
+		ch, err := w.channel(ctx, api, id, !force) // force: the daily refresh
 		if err != nil {
 			return err
 		}
