@@ -66,6 +66,9 @@ func newReadEnv(t *testing.T) *readEnv {
 func do(h http.Handler, method, path string, hdr map[string]string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, nil)
 	req.Header.Set("Remote-User", "shinya")
+	if method != "GET" && method != "HEAD" {
+		req.Header.Set("Content-Type", "application/json") // as the WebUI sends every write
+	}
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
@@ -358,6 +361,15 @@ func TestCrossSiteWritesRejected(t *testing.T) {
 		"form post":         send("POST", retry, "a=1", map[string]string{"Content-Type": "application/x-www-form-urlencoded"}),
 		"text post":         send("POST", retry, "{}", map[string]string{"Content-Type": "text/plain"}),
 		"post no type":      send("POST", retry, "{}", nil),
+		// Without Sec-Fetch-Site (an untrusted plain-HTTP origin), an empty no-cors POST or a
+		// fieldless form must not get through for lack of a body.
+		"empty post":      send("POST", retry, "", nil),
+		"empty form post": send("POST", retry, "", map[string]string{"Content-Type": "application/x-www-form-urlencoded"}),
+		"delete no type":  send("DELETE", del, "", nil),
+		"foreign origin":  send("POST", retry, "{}", map[string]string{"Content-Type": "application/json", "Origin": "http://evil.example"}),
+		"other port":      send("POST", retry, "{}", map[string]string{"Content-Type": "application/json", "Origin": "http://example.com:8081"}),
+		"null origin":     send("POST", retry, "{}", map[string]string{"Content-Type": "application/json", "Origin": "null"}),
+		"bad origin":      send("POST", retry, "{}", map[string]string{"Content-Type": "application/json", "Origin": "::"}),
 	} {
 		if w.Code != 403 || !strings.Contains(w.Body.String(), `"error":"cross-site request rejected"`) {
 			t.Fatalf("%s = %d %s", name, w.Code, w.Body)
@@ -369,7 +381,11 @@ func TestCrossSiteWritesRejected(t *testing.T) {
 	if w := send("POST", retry, "{}", map[string]string{"Sec-Fetch-Site": "same-origin", "Content-Type": "application/json; charset=utf-8"}); w.Code != 409 {
 		t.Fatalf("same-origin JSON post = %d %s", w.Code, w.Body)
 	}
-	if w := send("DELETE", del, "", map[string]string{"Sec-Fetch-Site": "same-origin"}); w.Code != 204 {
+	// httptest requests are for example.com; the browser's own Origin matches Host.
+	if w := send("POST", retry, "{}", map[string]string{"Content-Type": "application/json", "Origin": "http://EXAMPLE.com"}); w.Code != 409 {
+		t.Fatalf("same-origin post with Origin = %d %s", w.Code, w.Body)
+	}
+	if w := send("DELETE", del, "", map[string]string{"Sec-Fetch-Site": "same-origin", "Content-Type": "application/json"}); w.Code != 204 {
 		t.Fatalf("same-origin delete = %d %s", w.Code, w.Body)
 	}
 }

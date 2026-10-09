@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -101,8 +102,11 @@ func (s *Server) auth(next http.Handler) http.Handler {
 	})
 }
 
-// crossSite is a CSRF backstop for state-changing requests: browsers label cross-origin requests
-// with Sec-Fetch-Site, and a form or no-cors fetch cannot send an application/json body.
+// crossSite is a CSRF backstop for state-changing requests. Browsers label cross-origin requests
+// with Sec-Fetch-Site, but only from trustworthy origins: over plain HTTP to a LAN address they
+// leave it out. So every write must also say application/json, body or not (a form or a no-cors
+// fetch cannot, and a cross-origin fetch that does needs a CORS preflight this server never
+// grants), and an Origin, when sent, must name this host.
 func crossSite(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
@@ -111,12 +115,12 @@ func crossSite(r *http.Request) bool {
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" {
 		return true
 	}
-	switch r.Method {
-	case http.MethodPost, http.MethodPut, http.MethodPatch:
-		if r.ContentLength != 0 {
-			mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-			return err != nil || mt != "application/json"
-		}
+	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+		return true
+	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		u, err := url.Parse(origin)
+		return err != nil || u.Host == "" || !strings.EqualFold(u.Host, r.Host)
 	}
 	return false
 }

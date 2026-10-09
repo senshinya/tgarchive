@@ -53,9 +53,10 @@ export const NETWORK_ERROR = '网络错误或登录已过期，请刷新页面';
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method, credentials: 'same-origin', redirect: 'error' };
-  if (body !== undefined) {
+  // The server's CSRF guard takes a write only as JSON, so one without a body sends {}.
+  if (method !== 'GET' && method !== 'HEAD') {
     init.headers = { 'Content-Type': 'application/json' };
-    init.body = JSON.stringify(body);
+    init.body = JSON.stringify(body ?? {});
   }
   let res: Response;
   try {
