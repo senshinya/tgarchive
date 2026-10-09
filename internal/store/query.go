@@ -239,8 +239,11 @@ func (s *Store) chatScope(ctx context.Context, chatID int64) (scope, error) {
 	return scope{"chat_id = ? AND thread_root_id = 0", chatID, key}, nil
 }
 
-// threadScope is the comments of one archived post.
-func threadScope(rootID int64) scope { return scope{"thread_root_id = ?", rootID, "tg_message_id"} }
+// threadScope is the comments of one archived post. The thread indexes cover comments only
+// (thread_root_id != 0), and SQLite uses them only when the query states that condition itself.
+func threadScope(rootID int64) scope {
+	return scope{"thread_root_id != 0 AND thread_root_id = ?", rootID, "tg_message_id"}
+}
 
 func botScope(botID int64) scope {
 	return scope{"chat_id IN (SELECT id FROM chats WHERE bot_id = ?)", botID, "id"}
