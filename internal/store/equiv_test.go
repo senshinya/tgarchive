@@ -3,7 +3,10 @@ package store
 // Queries rewritten for speed return what the queries they replaced did.
 
 import (
+	"database/sql"
 	"fmt"
+	"reflect"
+	"slices"
 	"testing"
 
 	"tgarchive/internal/model"
@@ -88,5 +91,76 @@ func TestListChatsPreviewMatchesOrderByCase(t *testing.T) {
 		if !texts[w] {
 			t.Errorf("no chat previews %q: %v", w, texts)
 		}
+	}
+}
+
+// collectOrphans given every media row finds what the old whole-table sweep found, across
+// several batches, whatever order and repeats the candidates come in; given some, only those.
+func TestCollectOrphansMatchesFullSweep(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	msg := ingest(t, s, bot, textMsg(1, "holder")).MessageID
+	var all []int64
+	for i := range 1200 {
+		var id int64
+		kind := []string{"photo", "video", "document"}[i%3]
+		if err := s.db.QueryRow(`INSERT INTO media (dedupe_key, kind, path) VALUES (?, ?, ?) RETURNING id`,
+			fmt.Sprint("k", i), kind, fmt.Sprintf("p/%d", i)).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		switch i % 5 {
+		case 0:
+			s.db.Exec("INSERT INTO message_media (message_id, media_id, role, position) VALUES (?, ?, 'main', ?)", msg, id, i)
+		case 1:
+			s.db.Exec("INSERT INTO custom_emoji (document_id, media_id) VALUES (?, ?)", i, id)
+		case 2:
+			s.db.Exec("UPDATE media SET path = '' WHERE id = ?", id)
+		}
+		all = append(all, id)
+	}
+	var want []string
+	rows, err := s.db.Query(`SELECT kind, path FROM media WHERE NOT EXISTS (SELECT 1 FROM message_media mm WHERE mm.media_id = media.id)
+		AND NOT EXISTS (SELECT 1 FROM custom_emoji ce WHERE ce.media_id = media.id)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var kind, p string
+		rows.Scan(&kind, &p)
+		if p == "" {
+			continue
+		}
+		want = append(want, p)
+		if kind == "video" {
+			want = append(want, CompatRel(p), CompatPartRel(p))
+		}
+	}
+	rows.Close()
+
+	collect := func(cand []int64) []string {
+		var got []string
+		err := s.withTx(ctx, func(tx *sql.Tx) error {
+			var err error
+			got, err = collectOrphans(ctx, tx, cand)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := collect(all[:4]); !reflect.DeepEqual(got, []string{"p/3"}) {
+		t.Fatalf("some = %v", got)
+	}
+	want = want[1:] // p/3 is gone
+	shuffled := append(slices.Clone(all), all[:100]...)
+	slices.Reverse(shuffled)
+	if got := collect(shuffled); !reflect.DeepEqual(got, want) {
+		t.Fatalf("all: %d paths, full sweep %d", len(got), len(want))
+	}
+	var left int
+	s.db.QueryRow("SELECT COUNT(*) FROM media").Scan(&left)
+	if left != 1200/5*2 {
+		t.Fatalf("%d media left", left)
 	}
 }

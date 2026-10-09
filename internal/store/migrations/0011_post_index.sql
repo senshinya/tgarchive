@@ -9,3 +9,6 @@ CREATE INDEX messages_posts ON messages (chat_id, thread_root_id, deleted_at, tg
 
 -- messages_thread_pos (thread_root_id, tg_message_id, id) answers everything messages_thread did.
 DROP INDEX messages_thread;
+
+-- Collecting orphaned media checks whether a custom emoji still uses each candidate.
+CREATE INDEX custom_emoji_media ON custom_emoji (media_id);

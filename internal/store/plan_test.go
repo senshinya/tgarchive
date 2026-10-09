@@ -94,3 +94,12 @@ func TestTimelineQueriesUsePostIndex(t *testing.T) {
 		}
 	}
 }
+
+// Collecting orphans looks up the candidates by id and their links through indexes.
+func TestCollectOrphansPlan(t *testing.T) {
+	s := newStore(t)
+	wantPlan(t, s, "orphans", `SELECT id, kind, path FROM media WHERE id IN (?, ?)
+		AND NOT EXISTS (SELECT 1 FROM message_media mm WHERE mm.media_id = media.id)
+		AND NOT EXISTS (SELECT 1 FROM custom_emoji ce WHERE ce.media_id = media.id) ORDER BY id`,
+		[]string{"message_media_media", "custom_emoji_media"}, 1, 2)
+}
