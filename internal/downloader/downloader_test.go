@@ -314,6 +314,59 @@ func TestWebDownloadsDoNotStarveBotSlots(t *testing.T) {
 	}
 }
 
+// A backlog of web media older than the due batch must not hide newer Telegram media from Run:
+// with 40 web items due ahead of it, a bot item used to fall outside the first 32 rows Run
+// looked at, so free slots sat idle until the whole web backlog drained.
+func TestWebBacklogDoesNotHideBotMedia(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	bot, _ := st.UpsertBot(ctx, &store.Bot{TgBotID: 777, TokenEnc: []byte("x"), CreatedAt: 1})
+	ingest := func(tgID int64, key string) {
+		t.Helper()
+		msg := &model.Message{TgMessageID: tgID, Source: model.SourceBotUpdate, Date: 1, Kind: model.KindPhoto, RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`),
+			Media: []model.Media{{DedupeKey: key, SourceRef: "x", Kind: "photo", Role: model.RoleMain}}}
+		if _, err := st.Ingest(ctx, store.IngestInput{BotID: bot, Sender: model.Sender{TgUserID: 42}, Msg: msg, Now: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 40; i++ {
+		ingest(int64(i+1), fmt.Sprintf("web:%d", i))
+	}
+	ingest(41, "bot:k")
+	due, err := st.DueMedia(ctx, 0, 100)
+	if err != nil || len(due) != 41 || due[40].DedupeKey != "bot:k" {
+		t.Fatalf("due = %d %v", len(due), err)
+	}
+	botMediaID := due[40].ID
+
+	d := New(st, t.TempDir(), 0, func(int64) {})
+	d.Now = func() time.Time { return time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC) }
+	block := make(chan struct{})
+	d.Register("web", &fakeSource{hook: func() { <-block }})
+	d.Register("bot", &fakeSource{})
+
+	c, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { d.Run(c); close(done) }()
+	defer func() { close(block); cancel(); <-done }() // Run waits for the web fetches to return
+
+	// Run's first pass happens at once; the next would only come with the 5s tick.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, _ := st.GetMedia(ctx, botMediaID)
+		if got.State == store.StateDone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("bot media was not claimed while a web backlog filled the due batch")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestPermanentErrorFailsAtOnce(t *testing.T) {
 	f, _, m := setup(t, 4)
 	d := f.newDL(0)

@@ -103,7 +103,7 @@ func (d *Downloader) Run(ctx context.Context) {
 		}()
 	}
 	for {
-		due, err := d.st.DueMedia(ctx, d.Now().Unix(), 32)
+		due, err := d.due(ctx)
 		if err != nil && ctx.Err() == nil {
 			log.Printf("downloader: list due media: %v", err)
 		}
@@ -135,6 +135,24 @@ func (d *Downloader) Run(ctx context.Context) {
 		case <-tick.C:
 		}
 	}
+}
+
+// due lists the media to dispatch this pass: Telegram media first, then web media. They are
+// listed separately because web downloads run at most maxWebInFlight at a time: in one shared
+// list a web backlog with lower ids would fill every row, and Telegram media behind it would
+// wait for the backlog to drain however many slots were free. Listing maxWebInFlight web items
+// is enough: any beyond that could not be claimed this pass anyway.
+func (d *Downloader) due(ctx context.Context) ([]store.Media, error) {
+	now := d.Now().Unix()
+	tg, err := d.st.DueTelegramMedia(ctx, now, 32)
+	if err != nil {
+		return nil, err
+	}
+	web, err := d.st.DueWebMedia(ctx, now, maxWebInFlight)
+	if err != nil {
+		return tg, err
+	}
+	return append(tg, web...), nil
 }
 
 func (d *Downloader) reportProgress(ctx context.Context) {
