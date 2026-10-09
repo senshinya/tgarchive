@@ -130,6 +130,7 @@ type Watcher struct {
 	MaxFlood   time.Duration // longest FLOOD_WAIT waited out
 	DialogsTTL time.Duration
 	RecentTTL  time.Duration
+	Absent     *AbsentChannels // channels a dialogs scan did not find; shared with the Fetcher
 
 	mu         sync.Mutex
 	dialogsAt  time.Time
@@ -152,7 +153,7 @@ type Watcher struct {
 
 func NewWatcher(api API, st *store.Store, hub *events.Hub, n notify.Notifier, wakeDL func(), avatarDir string) *Watcher {
 	return &Watcher{api: api, st: st, hub: hub, notifier: n, wakeDL: wakeDL, avatarDir: avatarDir, wake: make(chan struct{}, 1),
-		Now: time.Now, MaxFlood: 300 * time.Second, DialogsTTL: 30 * time.Minute, RecentTTL: time.Minute,
+		Now: time.Now, MaxFlood: 300 * time.Second, DialogsTTL: 30 * time.Minute, RecentTTL: time.Minute, Absent: NewAbsentChannels(),
 		recent: map[int64]*recent{}, photoMiss: map[int64]time.Time{}, photoSlots: make(chan struct{}, 2), backfills: map[int64]*BackfillState{},
 		opened: map[int64]time.Time{}, commentsOpened: map[int64]time.Time{}, commenterMiss: map[string]time.Time{}}
 }
@@ -756,8 +757,9 @@ func (w *Watcher) archiveComments(ctx context.Context, api *tg.Client, ch *tg.Ch
 }
 
 // channel resolves a stored channel id to a full channel (with access hash): from the peer
-// cache, else by its username, else by a dialogs scan. A cached hash Telegram rejects is evicted
-// and resolved again once.
+// cache, else by its username, else by a dialogs scan, unless a recent scan already missed it
+// (errNotMember then, see AbsentChannels). A cached hash Telegram rejects is evicted and resolved
+// again once.
 func (w *Watcher) channel(ctx context.Context, api *tg.Client, id int64) (*tg.Channel, error) {
 	ch, err := w.lookup(ctx, api, id)
 	if err != nil {
@@ -786,7 +788,10 @@ func (w *Watcher) lookup(ctx context.Context, api *tg.Client, id int64) (*tg.Cha
 	if c, err := w.st.GetChannel(ctx, id); err == nil && c.Username != "" {
 		link = linkparse.Link{Username: c.Username}
 	}
-	ch, _, err := resolveChannel(ctx, api, w.st, w.Now, link)
+	if link.Username == "" && w.Absent.has(id, w.Now()) {
+		return nil, errNotMember
+	}
+	ch, _, err := resolveChannel(ctx, api, w.st, w.Now, w.Absent, link)
 	if err == nil && ch.ID != id {
 		return nil, errNoChat // the username now belongs to another channel
 	}
@@ -938,6 +943,7 @@ func (w *Watcher) collectDialogs(ctx context.Context) ([]ChannelInfo, error) {
 			}
 		}
 		var keep []*tg.Channel
+		var ids []int64
 		for _, dc := range dlgs {
 			d, ok := dc.(*tg.Dialog)
 			if !ok {
@@ -953,9 +959,11 @@ func (w *Watcher) collectDialogs(ctx context.Context) ([]ChannelInfo, error) {
 			}
 			seen[c.ID] = true
 			keep = append(keep, c)
+			ids = append(ids, c.ID)
 			out = append(out, infoOf(c))
 		}
 		savePeers(ctx, w.st, w.Now, keep...)
+		w.Absent.remove(ids...)
 		w.mu.Lock()
 		w.partial = append([]ChannelInfo{}, out...)
 		w.mu.Unlock()
@@ -1094,7 +1102,7 @@ func (w *Watcher) Resolve(ctx context.Context, input string) (*ChannelInfo, erro
 	}
 	var info *ChannelInfo
 	err := w.api.With(ctx, func(api *tg.Client) error {
-		ch, _, err := resolveChannel(ctx, api, w.st, w.Now, link)
+		ch, _, err := resolveChannel(ctx, api, w.st, w.Now, w.Absent, link)
 		if err != nil {
 			return err
 		}
