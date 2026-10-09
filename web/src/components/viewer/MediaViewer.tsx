@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { convMedia, errorMessage } from '../../api/client';
 import type { Message } from '../../api/types';
 import { chatName } from '../../lib/format';
+import { byPosition, type Ordered } from '../../lib/order';
 import { useStore, type ViewerItem, type ViewerTarget } from '../../state/store';
 import { Spinner } from '../../ui/Spinner';
 import { VISUAL_KINDS, displayKind, mainMedia, readyThumb } from '../media/util';
@@ -33,8 +34,13 @@ function newViewerToken(): string {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
 
-export function toViewerItems(msgs: Message[]): ViewerItem[] {
-  const out: { id: number; item: ViewerItem }[] = [];
+/** Archive order, for the media wall: it spans conversations, so positions do not compare. */
+export const byArchive = (a: Ordered, b: Ordered) => a.id - b.id;
+
+/** The viewable media of msgs, in conversation order (`order` by default; the wall passes
+ * byArchive). */
+export function toViewerItems(msgs: Message[], order: (a: Ordered, b: Ordered) => number = byPosition): ViewerItem[] {
+  const out: { id: number; pos: number; item: ViewerItem }[] = [];
   for (const msg of msgs) {
     const media = mainMedia(msg);
     const kind = displayKind(msg);
@@ -42,6 +48,7 @@ export function toViewerItems(msgs: Message[]): ViewerItem[] {
       const thumb = readyThumb(msg);
       out.push({
         id: msg.id,
+        pos: msg.pos,
         item: {
           mediaId: media.id,
           kind,
@@ -58,7 +65,7 @@ export function toViewerItems(msgs: Message[]): ViewerItem[] {
       });
     }
   }
-  return out.sort((a, b) => a.id - b.id).map((x) => x.item);
+  return out.sort(order).map((x) => x.item);
 }
 
 function ViewerInner({ target }: { target: ViewerTarget }) {
@@ -130,7 +137,7 @@ function ViewerInner({ target }: { target: ViewerTarget }) {
         before = page[page.length - 1].id;
       }
       if (cancelled) return;
-      const list = wall ? toViewerItems(all).reverse() : toViewerItems(all);
+      const list = wall ? toViewerItems(all, byArchive).reverse() : toViewerItems(all);
       if (list.some((it) => it.mediaId === target.mediaId)) setItems(list);
       else if (seed.length === 0) close();
     })().catch((err) => {

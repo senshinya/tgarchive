@@ -10,7 +10,7 @@ import { Tabs } from '../../ui/Tabs';
 import { mainMedia, playUrl, readyThumb } from '../media/util';
 import { ViewHeader } from '../middle/ViewHeader';
 import { Wallpaper } from '../middle/Wallpaper';
-import { toViewerItems } from '../viewer/MediaViewer';
+import { byArchive, toViewerItems } from '../viewer/MediaViewer';
 import './wall.scss';
 
 const TYPES: { key: WallType; label: string }[] = [
@@ -183,7 +183,7 @@ export function MediaWall() {
 
   const open = (msg: Message) => {
     const md = mainMedia(msg)!;
-    store.viewer.value = { wall: { type, source }, seed: toViewerItems(shown.current), mediaId: md.id };
+    store.viewer.value = { wall: { type, source }, seed: toViewerItems(shown.current, byArchive), mediaId: md.id };
   };
 
   return (
