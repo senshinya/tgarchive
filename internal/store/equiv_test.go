@@ -164,3 +164,95 @@ func TestCollectOrphansMatchesFullSweep(t *testing.T) {
 		t.Fatalf("%d media left", left)
 	}
 }
+
+// A chat's (or a bot's) shared media and files, page by page, are the messages the old
+// id IN (subquery) filter picked.
+func TestListMediaMatchesInSubquery(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	seedWatch(t, s)
+	kinds := []string{"photo", "video", "animation", "document", "audio", "voice", "sticker"}
+	var chat, channel, root int64
+	for i := range 60 {
+		snd := alice
+		if i%4 == 3 {
+			snd = model.Sender{TgUserID: 43, FirstName: "Bob"}
+		}
+		kind := kinds[i%len(kinds)]
+		m := textMsg(int64(i+1), "x")
+		if i%5 != 4 {
+			role := model.RoleMain
+			if i%6 == 5 {
+				role = model.RoleThumb
+			}
+			m.Media = []model.Media{{DedupeKey: fmt.Sprint("m", i), Kind: kind, Role: role}}
+		}
+		res, err := s.Ingest(ctx, IngestInput{BotID: bot, Sender: snd, Msg: m, Now: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snd == alice {
+			chat = res.ChatID
+		}
+		if i%9 == 8 {
+			s.DeleteMessage(ctx, res.MessageID, 2)
+		}
+		post := channelPost(int64(100-i), "", fmt.Sprint("c", i)) // posted in the reverse of archive order
+		post.Media[0].Kind = kind
+		pr, err := s.Ingest(ctx, IngestInput{ChannelID: chanID, Msg: post, Now: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		channel = pr.ChatID
+		if root == 0 {
+			root = pr.MessageID
+		}
+		if _, err := s.Ingest(ctx, IngestInput{ChannelID: chanID, Msg: comment(int64(1000+i), "c", fmt.Sprint("mc", i), `{}`), ThreadRootID: root, Now: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := map[string]string{
+		"media": `id IN (SELECT mm.message_id FROM message_media mm JOIN media md ON md.id = mm.media_id
+			WHERE mm.role = 'main' AND md.kind IN ('photo', 'video', 'animation'))`,
+		"file": `id IN (SELECT mm.message_id FROM message_media mm JOIN media md ON md.id = mm.media_id
+			WHERE mm.role = 'main' AND md.kind IN ('document', 'audio'))`,
+	}
+	chatSc, _ := s.chatScope(ctx, chat)
+	channelSc, _ := s.chatScope(ctx, channel)
+	for name, sc := range map[string]scope{"chat": chatSc, "channel": channelSc, "bot": botScope(bot)} {
+		for typ, cond := range old {
+			var want []int64
+			rows, err := s.db.Query(`SELECT id FROM messages WHERE `+sc.cond+` AND deleted_at = 0 AND `+cond+
+				` ORDER BY `+sc.key+` DESC, id DESC`, sc.arg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rows.Next() {
+				var id int64
+				rows.Scan(&id)
+				want = append(want, id)
+			}
+			rows.Close()
+			if len(want) < 6 {
+				t.Fatalf("%s %s: only %d to page through", name, typ, len(want))
+			}
+			var got []int64
+			for before := int64(0); ; {
+				page, err := s.listMedia(ctx, sc, typ, before, 4)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(page) == 0 {
+					break
+				}
+				for _, v := range page {
+					got = append(got, v.ID)
+				}
+				before = page[len(page)-1].ID
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("%s %s = %v, old filter %v", name, typ, got, want)
+			}
+		}
+	}
+}

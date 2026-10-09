@@ -460,14 +460,16 @@ func (s *Store) ListBotMedia(ctx context.Context, botID int64, typ string, befor
 }
 
 func (s *Store) listMedia(ctx context.Context, sc scope, typ string, beforeID int64, limit int) ([]MessageView, error) {
+	// Media are checked per message as the page is walked: an IN (subquery) would first gather
+	// every message of the archive that has such media.
 	var cond string
 	switch typ {
 	case "media":
-		cond = `id IN (SELECT mm.message_id FROM message_media mm JOIN media md ON md.id = mm.media_id
-			WHERE mm.role = 'main' AND md.kind IN ('photo', 'video', 'animation'))`
+		cond = `EXISTS (SELECT 1 FROM message_media mm JOIN media md ON md.id = mm.media_id
+			WHERE mm.message_id = messages.id AND mm.role = 'main' AND md.kind IN ('photo', 'video', 'animation'))`
 	case "file":
-		cond = `id IN (SELECT mm.message_id FROM message_media mm JOIN media md ON md.id = mm.media_id
-			WHERE mm.role = 'main' AND md.kind IN ('document', 'audio'))`
+		cond = `EXISTS (SELECT 1 FROM message_media mm JOIN media md ON md.id = mm.media_id
+			WHERE mm.message_id = messages.id AND mm.role = 'main' AND md.kind IN ('document', 'audio'))`
 	case "link":
 		cond = `(entities_json LIKE '%"type":"url"%' OR entities_json LIKE '%"type":"text_link"%')`
 	default:
