@@ -16,8 +16,11 @@ function setup(items: ViewerItem[], index: number) {
   const onPick = vi.fn();
   const onClose = vi.fn();
   const onZoom = vi.fn();
-  const r = render(<ViewerOverlay items={items} index={index} title="Alice" onPick={onPick} onClose={onClose} onZoom={onZoom} />);
-  return { ...r, onPick, onClose, onZoom };
+  const onRotate = vi.fn();
+  const r = render(
+    <ViewerOverlay items={items} index={index} title="Alice" onPick={onPick} onClose={onClose} onZoom={onZoom} onRotate={onRotate} />,
+  );
+  return { ...r, onPick, onClose, onZoom, onRotate };
 }
 
 describe('ViewerOverlay', () => {
@@ -48,6 +51,15 @@ describe('ViewerOverlay', () => {
     rerender(<ViewerOverlay items={[item(1, 'video')]} index={0} title="A" onPick={vi.fn()} onClose={vi.fn()} onZoom={onZoom} />);
     expect(screen.queryByRole('button', { name: '放大' })).toBeNull();
     expect(screen.getByRole('link', { name: '下载' }).getAttribute('href')).toBe('/media/1?download=1');
+  });
+
+  it('offers rotating both ways on photos and videos', () => {
+    const { onRotate, rerender } = setup([item(1)], 0);
+    fireEvent.click(screen.getByRole('button', { name: '向右旋转' }));
+    expect(onRotate).toHaveBeenLastCalledWith(1);
+    rerender(<ViewerOverlay items={[item(1, 'video')]} index={0} title="A" onPick={vi.fn()} onClose={vi.fn()} onRotate={onRotate} />);
+    fireEvent.click(screen.getByRole('button', { name: '向左旋转' }));
+    expect(onRotate).toHaveBeenLastCalledWith(-1);
   });
 
   it('tells the video controls how tall the caption and strip are, so they sit above them', () => {

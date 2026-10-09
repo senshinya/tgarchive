@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Download, Film, X, ZoomIn, ZoomOut } from 'lucide-preact';
+import { ChevronLeft, ChevronRight, Download, Film, RotateCcw, RotateCw, X, ZoomIn, ZoomOut } from 'lucide-preact';
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { mediaUrl } from '../../api/client';
 import { formatFullDate } from '../../lib/format';
@@ -13,6 +13,8 @@ interface Props {
   onClose: () => void;
   onPick: (index: number) => void;
   onZoom?: (dir: 1 | -1) => void;
+  /** Turn the current item a quarter clockwise (1) or counter-clockwise (-1). */
+  onRotate?: (dir: 1 | -1) => void;
   /** The caption-and-strip block changed height (desktop videos are laid out clear of it). */
   onFoot?: (height: number) => void;
 }
@@ -73,9 +75,9 @@ function useFootHeight(onFoot?: (height: number) => void) {
   return ref;
 }
 
-/** Header (title, date, position, zoom, download, close), caption and thumbnail strip drawn over
+/** Header (title, date, position, rotate, zoom, download, close), caption and thumbnail strip drawn over
  * the gallery. Fades with PhotoSwipe's UI visibility (see viewer.scss). */
-export function ViewerOverlay({ items, index, title, onClose, onPick, onZoom, onFoot }: Props) {
+export function ViewerOverlay({ items, index, title, onClose, onPick, onZoom, onRotate, onFoot }: Props) {
   const foot = useFootHeight(onFoot);
   const item = items[index];
   if (!item) return null;
@@ -90,6 +92,16 @@ export function ViewerOverlay({ items, index, title, onClose, onPick, onZoom, on
           </span>
         </div>
         <div class="MediaViewer-actions">
+          {onRotate && (
+            <>
+              <IconButton label="向左旋转" class="translucent-white" onClick={() => onRotate(-1)}>
+                <RotateCcw size={24} />
+              </IconButton>
+              <IconButton label="向右旋转" class="translucent-white" onClick={() => onRotate(1)}>
+                <RotateCw size={24} />
+              </IconButton>
+            </>
+          )}
           {item.kind === 'photo' && onZoom && (
             <>
               <IconButton label="缩小" class="translucent-white zoom-btn" onClick={() => onZoom(-1)}>

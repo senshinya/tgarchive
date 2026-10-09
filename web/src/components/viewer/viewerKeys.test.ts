@@ -33,6 +33,11 @@ describe('viewerKeyAction', () => {
     expect(viewerKeyAction(k('+'), 'video')).toBeNull();
   });
 
+  it('rotates with R (clockwise) and Shift+R, videos too', () => {
+    expect(viewerKeyAction(k('r'), 'photo')).toBe('rotateCw');
+    expect(viewerKeyAction(k('R', { shiftKey: true }), 'video')).toBe('rotateCcw');
+  });
+
   it('ignores modified keys and typing in a field', () => {
     expect(viewerKeyAction(k('ArrowLeft', { metaKey: true }), 'photo')).toBeNull();
     const input = document.createElement('input');

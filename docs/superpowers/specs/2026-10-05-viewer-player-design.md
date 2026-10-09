@@ -41,7 +41,8 @@
 ### 3.2 图片与翻页（PhotoSwipe）
 - 选项：`wheelToZoom: true`、`maxZoomLevel: 4`、`secondaryZoomLevel: 2`、`bgOpacity: 0.9`、`closeOnVerticalDrag: true`、`showHideAnimationType: 'fade'`、`arrowKeys: false`（自管，见 §3.4）、`escKey: false`（自管）、`loop: false`、`preload: [1, 2]`
 - 尺寸：用媒体的 `width/height`；缺失时先用 `naturalWidth/Height`（图片加载后 `updateSize`）
-- 顶栏：用 `uiRegister` 注册自定义元素替代默认顶栏——发送人/标题、日期、`n / N`、下载链接、关闭；图片额外有缩小/放大（≤600px 隐藏）
+- 顶栏：用 `uiRegister` 注册自定义元素替代默认顶栏——发送人/标题、日期、`n / N`、向左/向右旋转、下载链接、关闭；图片额外有缩小/放大（≤600px 隐藏）
+- 旋转：图片、GIF、视频都可按 90° 左右旋转，按媒体记住角度直到关闭查看器（不落库）。图片页交换 slide 宽高后重排并回到初始缩放，`<img>` 以交换后的尺寸绘制再绕中心转回；视频只转画面（`<video>`），控件不转；旋转后的缩略图占位隐藏
 - 说明文字：自定义底部元素，RichText，随界面显隐
 - GIF/动画：`<video autoplay loop muted playsinline>`，无控件
 
@@ -61,6 +62,7 @@
 | Shift+←/→、PageUp/PageDown | 翻页 | 翻页 |
 | 空格/K、J/L、↑/↓、M、F、`<` `>`、0–9 | — | Vidstack 快捷键（`keyTarget="document"` 仅当前活动视频） |
 | +/- | 缩放 | — |
+| R / Shift+R | 向右 / 向左旋转 | 向右 / 向左旋转 |
 
 输入框聚焦时不处理。
 

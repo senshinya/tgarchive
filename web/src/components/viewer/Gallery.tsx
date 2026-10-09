@@ -9,7 +9,7 @@ import { silent } from '../../lib/silent';
 import { playUrl } from '../media/util';
 import type { ViewerItem } from '../../state/store';
 import { createVideoSlide, onPlayerControl, type VideoSlide } from './videoSlide';
-import { NARROW, slidePadding, videoSlideSize } from './viewerLayout';
+import { NARROW, slidePadding, turn, turned, videoSlideSize } from './viewerLayout';
 import { viewerKeyAction } from './viewerKeys';
 import { ViewerOverlay } from './ViewerOverlay';
 
@@ -34,9 +34,15 @@ const ZOOM_FACTOR = 1.5;
 
 const viewport = () => ({ x: window.innerWidth, y: window.innerHeight });
 
-function slideOf(it: ViewerItem): SlideData {
+/** A video slide's size for the current viewport, with the picture turned `quarters` times. */
+function videoSize(it: ViewerItem, quarters: number) {
+  const { width, height } = turned(it.width ?? 0, it.height ?? 0, quarters);
+  return videoSlideSize(viewport(), width, height);
+}
+
+function slideOf(it: ViewerItem, quarters: number): SlideData {
   if (it.kind !== 'photo') {
-    const { width, height } = videoSlideSize(viewport(), it.width ?? 0, it.height ?? 0);
+    const { width, height } = videoSize(it, quarters);
     return {
       width,
       height,
@@ -44,18 +50,23 @@ function slideOf(it: ViewerItem): SlideData {
       msrc: it.thumbId ? mediaUrl(it.thumbId) : undefined,
       type: 'video',
       item: it,
+      quarters,
       sized: true,
     };
   }
-  const w = it.width && it.width > 0 ? it.width : FALLBACK_W;
-  const h = it.height && it.height > 0 ? it.height : FALLBACK_H;
+  const { width, height } = turned(
+    it.width && it.width > 0 ? it.width : FALLBACK_W,
+    it.height && it.height > 0 ? it.height : FALLBACK_H,
+    quarters,
+  );
   return {
-    width: w,
-    height: h,
+    width,
+    height,
     src: mediaUrl(it.mediaId),
     msrc: it.thumbId ? mediaUrl(it.thumbId) : undefined,
     type: 'image',
     item: it,
+    quarters,
     sized: !!(it.width && it.height),
   };
 }
@@ -69,6 +80,8 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
   const foot = useRef(0);
   const onClosedRef = useRef(onClosed);
   onClosedRef.current = onClosed;
+  // Quarter turns per media id, kept while the viewer is open (also across a rebuild).
+  const turns = useRef(new Map<number, number>());
 
   // One PhotoSwipe per item list. The list normally changes once, when the whole chat's media
   // arrives after opening on the tapped item; PhotoSwipe can't re-index a live gallery, so it is
@@ -79,7 +92,7 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
     const videos = new Map<number, VideoSlide>(); // slide index → player
     let tearingDown = false;
 
-    const slides = items.map(slideOf);
+    const slides = items.map((it) => slideOf(it, turns.current.get(it.mediaId) ?? 0));
     const p = new PhotoSwipe({
       dataSource: slides,
       appendToEl: container,
@@ -146,24 +159,25 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
       const img = content.element as HTMLImageElement | undefined;
       if (!slide || content.data.sized || !img || img.tagName !== 'IMG' || !img.naturalWidth) return;
       content.data.sized = true;
-      content.width = img.naturalWidth;
-      content.height = img.naturalHeight;
-      content.data.width = img.naturalWidth;
-      content.data.height = img.naturalHeight;
-      slide.width = img.naturalWidth;
-      slide.height = img.naturalHeight;
-      slide.calculateSize();
-      slide.zoomAndPanToInitial();
-      slide.applyCurrentZoomPan();
+      const { width, height } = turned(img.naturalWidth, img.naturalHeight, content.data.quarters ?? 0);
+      content.data.width = width;
+      content.data.height = height;
+      resizeSlide(slide);
     };
     p.on('loadComplete', ({ content, slide }) => fit(content, slide));
-    p.on('contentAppend', ({ content }) => fit(content, content.slide));
+    p.on('contentAppend', ({ content }) => {
+      showTurn(content);
+      fit(content, content.slide);
+    });
+    // A turned photo's <img> is drawn upright at the swapped size and turned to fill the box
+    // PhotoSwipe gives it (viewer.scss), which needs that box's size.
+    p.on('contentResize', ({ content, width, height }) => {
+      content.element?.style.setProperty('--box-w', `${width}px`);
+      content.element?.style.setProperty('--box-h', `${height}px`);
+    });
     // Video slides follow the viewport across the phone breakpoint (rotating, resizing).
     p.on('beforeResize', () => {
-      const sizeOf = (d: SlideData) => {
-        const it = d.item as ViewerItem;
-        return videoSlideSize(viewport(), it.width ?? 0, it.height ?? 0);
-      };
+      const sizeOf = (d: SlideData) => videoSize(d.item as ViewerItem, d.quarters ?? 0);
       for (const d of slides) {
         if (d.type === 'video') Object.assign(d, sizeOf(d));
       }
@@ -223,6 +237,7 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
       if (action === 'close') closeGallery(pswp);
       else if (action === 'prev') pswp.prev();
       else if (action === 'next') pswp.next();
+      else if (action === 'rotateCw' || action === 'rotateCcw') rotate(pswp, turns.current, action === 'rotateCw' ? 1 : -1);
       else zoom(pswp, action === 'zoomIn' ? 1 : -1);
     };
     window.addEventListener('keydown', onKey);
@@ -239,6 +254,7 @@ export function Gallery({ items, mediaId, container, titleOf, onClosed }: Galler
       onClose={() => closeGallery(pswp)}
       onPick={(i) => pswp.goTo(i)}
       onZoom={(dir) => zoom(pswp, dir)}
+      onRotate={(dir) => rotate(pswp, turns.current, dir)}
       onFoot={(h) => {
         if (h === foot.current) return;
         foot.current = h;
@@ -261,4 +277,42 @@ function zoom(p: PhotoSwipe, dir: 1 | -1) {
   const { initial, max } = s.zoomLevels;
   const next = dir > 0 ? Math.min(max, s.currZoomLevel * ZOOM_FACTOR) : Math.max(initial, s.currZoomLevel / ZOOM_FACTOR);
   s.zoomTo(next, undefined, 250);
+}
+
+/** Marks a slide's media with its quarter turns for viewer.scss. The thumbnail placeholder
+ * (scaled by PhotoSwipe's own transform) can't be turned, so it is hidden instead. */
+function showTurn(content: Content) {
+  const quarters = content.data.quarters ?? 0;
+  const el = content.element;
+  if (el && el.tagName !== 'IMG' && !el.classList.contains('ViewerVideo')) return; // error message
+  if (quarters) el?.setAttribute('data-turn', String(quarters));
+  else el?.removeAttribute('data-turn');
+  const ph = content.placeholder?.element;
+  if (ph) ph.style.visibility = quarters ? 'hidden' : '';
+}
+
+/** Re-lays a slide out at its data's size, back at the initial zoom. */
+function resizeSlide(slide: Slide) {
+  const { data, content } = slide;
+  slide.width = content.width = data.width ?? 0;
+  slide.height = content.height = data.height ?? 0;
+  slide.calculateSize();
+  slide.currentResolution = 0;
+  slide.zoomAndPanToInitial();
+  slide.applyCurrentZoomPan();
+  slide.updateContentSize(true);
+}
+
+/** Turns the current item a quarter (clockwise for 1); the turn lasts while the viewer is open. */
+function rotate(p: PhotoSwipe, turns: Map<number, number>, dir: 1 | -1) {
+  const s = p.currSlide;
+  const it = s?.data.item as ViewerItem | undefined;
+  if (!s || !it) return;
+  const quarters = turn(s.data.quarters ?? 0, dir);
+  turns.set(it.mediaId, quarters);
+  s.data.quarters = quarters;
+  if (s.data.type === 'video') Object.assign(s.data, videoSize(it, quarters));
+  else [s.data.width, s.data.height] = [s.data.height, s.data.width];
+  showTurn(s.content);
+  resizeSlide(s);
 }

@@ -300,3 +300,48 @@
     opacity: 1;
   }
 }
+
+// Turned media (the rotate buttons, Gallery.tsx). A photo's slide already has the turned size:
+// the <img> is drawn upright at the swapped size (--box-w/--box-h is the box PhotoSwipe gives it)
+// and turned about its centre to fill that box. A video's or GIF's <video> is letterboxed the
+// same way inside its player or slide.
+$turns: (1: 90deg, 2: 180deg, 3: 270deg);
+
+.MediaViewer {
+  .pswp__img[data-turn='1'],
+  .pswp__img[data-turn='3'] {
+    width: var(--box-h) !important;
+    height: var(--box-w) !important;
+    translate: calc((var(--box-w) - var(--box-h)) / 2) calc((var(--box-h) - var(--box-w)) / 2);
+  }
+
+  .ViewerVideo[data-turn] {
+    container-type: size;
+
+    media-provider {
+      container-type: size;
+    }
+
+    video {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      translate: -50% -50%;
+    }
+  }
+
+  .ViewerVideo[data-turn='1'],
+  .ViewerVideo[data-turn='3'] {
+    video {
+      width: 100cqh;
+      height: 100cqw;
+    }
+  }
+
+  @each $q, $deg in $turns {
+    .pswp__img[data-turn='#{$q}'],
+    .ViewerVideo[data-turn='#{$q}'] video {
+      rotate: $deg;
+    }
+  }
+}
