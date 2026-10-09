@@ -135,6 +135,24 @@ describe('opening a channel with unread posts', () => {
     });
   });
 
+  it('keeps the unread posts in place through a resync', async () => {
+    vi.spyOn(scroll, 'scrollWithin').mockImplementation(() => {});
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChannelChat({ last_read_pos: 120, unread: 80, first_unread_id: 121 })]),
+      messages: pages(range(97, 146), range(151, 200)), // newer posts exist below the window
+    });
+    const { container, store } = await open(api);
+    await screen.findByText('p146');
+    await act(() => store.resync());
+    expect(screen.queryByText('p200')).toBeNull();
+    expect(container.querySelector('.unread-divider')?.nextElementSibling?.getAttribute('data-message-id')).toBe('121');
+    const list = container.querySelector('.MessageList') as HTMLElement;
+    Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 1500 });
+    fireEvent.scroll(list);
+    expect(api.markRead).not.toHaveBeenCalled();
+    vi.mocked(scroll.scrollWithin).mockRestore();
+  });
+
   it('keeps private chats on the latest message', async () => {
     const api = fakeApi({
       chats: vi.fn(async () => [makeChat({ id: 10, last_read_pos: 1, unread: 4, first_unread_id: 1 })]),
