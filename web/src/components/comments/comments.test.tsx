@@ -5,6 +5,7 @@ import { groupMessages } from '../../lib/grouping';
 import { parseRoute, route, routePath } from '../../lib/router';
 import { fakeApi, makeChannelChat, makeMedia, makeMessage } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
+import { StoreContext } from '../../state/store';
 import { MessageBubble } from '../message/MessageBubble';
 import { MiddleColumn } from '../middle/MiddleColumn';
 import { CommentButton, commentsLabel } from './CommentButton';
@@ -121,12 +122,13 @@ describe('comments', () => {
     await waitFor(() => expect(container.textContent).toContain('hi'));
     expect(api.comments).toHaveBeenCalledWith(50, 1, { after: 1 }, 50);
     expect(api.refreshComments).toHaveBeenCalledWith(50, 1);
-    expect(screen.getByText('3 条评论')).toBeTruthy();
+    const layer = container.querySelector('.CommentsLayer')!;
+    expect(layer.querySelector('.CommentsHeader .MiddleHeader-title')!.textContent).toBe('3 条评论');
     expect(screen.getByText('讨论开始')).toBeTruthy();
     // The post has no comment bar here, and stands without an avatar.
-    expect(container.querySelector('.CommentButton')).toBeNull();
-    expect(container.querySelector('.comment-thread-top .message-group-avatar')).toBeNull();
-    const groups = container.querySelectorAll('.message-group.with-avatar');
+    expect(layer.querySelector('.CommentButton')).toBeNull();
+    expect(layer.querySelector('.comment-thread-top .message-group-avatar')).toBeNull();
+    const groups = layer.querySelectorAll('.message-group.with-avatar');
     expect(groups).toHaveLength(2);
     expect(groups[0].querySelectorAll('.sender-title')).toHaveLength(1);
     expect(groups[0].querySelector('.sender-title')!.textContent).toBe('Ann');
@@ -139,6 +141,26 @@ describe('comments', () => {
     });
     await waitFor(() => expect(container.textContent).toContain('late'));
     expect(api.comments).toHaveBeenLastCalledWith(50, 1, { after: 4 }, 50);
+  });
+
+  it('covers the conversation, which stays as it was when they close', async () => {
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChannelChat({ id: 50 })]),
+      messages: vi.fn(async () => [post()]),
+      comments: vi.fn(async () => [comment(2, ann, 'first!')]),
+    });
+    const { container, rerender, store } = renderWithStore(<MiddleColumn chatId={50} />, api);
+    await waitFor(() => expect(store.conv(50).loaded).toBe(true));
+    const list = container.querySelector('.MessageList')!;
+    rerender(<StoreContext.Provider value={store}><MiddleColumn chatId={50} commentsId={1} /></StoreContext.Provider>);
+    await waitFor(() => expect(container.textContent).toContain('first!'));
+    expect(container.querySelector('.CommentsLayer')).toBeTruthy();
+    const loads = (api.messages as ReturnType<typeof vi.fn>).mock.calls.length;
+    rerender(<StoreContext.Provider value={store}><MiddleColumn chatId={50} /></StoreContext.Provider>);
+    expect(container.querySelector('.CommentsLayer')).toBeNull();
+    // The very same list element: not rebuilt, so its scroll position is kept, and not reloaded.
+    expect(container.querySelector('.MessageList')).toBe(list);
+    expect((api.messages as ReturnType<typeof vi.fn>).mock.calls.length).toBe(loads);
   });
 
   it('says so when there are no comments', async () => {
