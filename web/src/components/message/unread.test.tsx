@@ -229,3 +229,63 @@ describe('opening a channel', () => {
     expect(api.refreshPostStats).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('a channel left open in a hidden tab', () => {
+  let state: DocumentVisibilityState = 'visible';
+  beforeAll(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+  });
+  afterAll(() => {
+    delete (document as { visibilityState?: unknown }).visibilityState;
+  });
+  const setVisibility = (s: DocumentVisibilityState) =>
+    act(() => {
+      state = s;
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+  // Open at the latest post (123, all read) and scrolled to the bottom.
+  async function openAtBottom() {
+    state = 'visible';
+    const api = fakeApi({
+      chats: vi.fn(async () => [makeChannelChat({ last_read_pos: 123, unread: 0 })]),
+      messages: pages([], range(100, 123)),
+      message: vi.fn(async (id: number) => post(id)),
+    });
+    const r = await open(api);
+    await screen.findByText('p123');
+    const list = r.container.querySelector('.MessageList') as HTMLElement;
+    Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 1500 });
+    fireEvent.scroll(list);
+    return { ...r, api, list };
+  }
+
+  it('marks nothing read while hidden, and the post in view once the page is back', async () => {
+    const { api, store, container } = await openAtBottom();
+    await setVisibility('hidden');
+    await act(() => store.handleEvent({ type: 'message.created', data: { chat_id: 50, message_id: 124 } }));
+    await screen.findByText('p124');
+    expect(api.markRead).not.toHaveBeenCalled();
+    await setVisibility('visible');
+    expect(api.markRead).toHaveBeenCalledWith(50, 124);
+    expect(container.querySelector('.unread-divider')?.nextElementSibling?.getAttribute('data-message-id')).toBe('124');
+  });
+
+  it('stays put above posts that came in while hidden, below the divider, until they are read', async () => {
+    const { api, store, container, list } = await openAtBottom();
+    await setVisibility('hidden');
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, get: () => 2600 }); // they take room
+    await act(async () => {
+      await store.handleEvent({ type: 'message.created', data: { chat_id: 50, message_id: 124 } });
+      await store.handleEvent({ type: 'message.created', data: { chat_id: 50, message_id: 125 } });
+    });
+    await screen.findByText('p125');
+    expect(list.scrollTop).toBe(1500); // not following the bottom past them
+    await setVisibility('visible');
+    expect(api.markRead).not.toHaveBeenCalled();
+    expect(container.querySelector('.unread-divider')?.nextElementSibling?.getAttribute('data-message-id')).toBe('124');
+    list.scrollTop = 2100;
+    fireEvent.scroll(list);
+    expect(api.markRead).toHaveBeenCalledWith(50, 125);
+  });
+});

@@ -25,6 +25,9 @@ const AT_BOTTOM_PX = 100;
 const REFRESH_POSTS = 100;
 const SHOW_DOWN_PX = 300;
 
+/** Whether the user can see the page: a hidden tab reads nothing. */
+const pageVisible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
+
 function download(href: string) {
   const a = document.createElement('a');
   a.href = href;
@@ -155,8 +158,10 @@ export function MessageList({ chatId }: { chatId: number }) {
     } else if (!s.last) el.scrollTop = el.scrollHeight;
     else if (first && last && s.first && byPosition(first, s.first) < 0 && last.id === s.last.id)
       el.scrollTop = el.scrollHeight - s.height + s.top;
-    // Following the bottom only while it is the latest: a window being extended stays put.
-    else if (last && byPosition(last, s.last) > 0 && s.atBottom && !s.hasNewer) el.scrollTop = el.scrollHeight;
+    // Following the bottom only while it is the latest: a window being extended stays put. A
+    // channel in a hidden tab stays put too, so its new posts wait below, unread.
+    else if (last && byPosition(last, s.last) > 0 && s.atBottom && !s.hasNewer && (pageVisible() || !isChannel()))
+      el.scrollTop = el.scrollHeight;
     record();
     readUpTo();
     // A first page shorter than the viewport never fires scroll events: keep filling.
@@ -195,12 +200,32 @@ export function MessageList({ chatId }: { chatId: number }) {
     [],
   );
 
-  // A channel's newest message in view marks it read (the left column's badge).
+  const isChannel = () => store.chats.value.find((c) => c.id === chatId)?.kind === 'channel';
+
+  // A channel's newest message in view marks it read (the left column's badge), while the page is
+  // visible.
   const readUpTo = () => {
     const c = store.conv(chatId);
     if (unread.current.pending) return; // what is shown is not yet where the reading resumes
+    if (!pageVisible()) return;
     if (chatId > 0 && snap.current.atBottom && !c.hasNewer && c.items.length) store.markRead(chatId, c.items[c.items.length - 1]);
   };
+
+  // Back to a hidden tab: posts that came in meanwhile were not read, so the divider moves above
+  // them (as when opening the channel), and what is in view is read now.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (!pageVisible()) return;
+      const chat = store.chats.value.find((c) => c.id === chatId);
+      if (chat?.kind === 'channel' && !unread.current.pending) {
+        const first = store.conv(chatId).items.find((m) => m.pos > chat.last_read_pos);
+        if (first) setRead((r) => (r?.before === chat.last_read_pos ? r : { before: chat.last_read_pos, resume: first.id }));
+      }
+      readUpTo();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
 
   const onScroll = () => {
     const el = ref.current;
