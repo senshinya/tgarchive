@@ -76,6 +76,8 @@ type ReplyView struct {
 	ID   int64  `json:"id"`
 	Kind string `json:"kind"`
 	Text string `json:"text"`
+	// Extra carries the quoted comment's author (extra.from); bot chats leave it out.
+	Extra json.RawMessage `json:"extra,omitempty"`
 }
 
 type MessageView struct {
@@ -101,6 +103,8 @@ type MessageView struct {
 	Stats json.RawMessage `json:"stats,omitempty"`
 	// Favorite is set when the message is a favorite.
 	Favorite *FavoriteInfo `json:"favorite"`
+	// ThreadRootID is the archived post a comment belongs to; 0 for anything but a comment.
+	ThreadRootID int64 `json:"thread_root_id"`
 }
 
 // ListChats lists conversations, most recent first: every bot × sender chat of botID (all bots
@@ -114,11 +118,11 @@ func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) 
 			COALESCE(w.id, 0), COALESCE(w.enabled, 0), COALESCE(w.status, ''), COALESCE(w.last_error, ''),
 			COALESCE(w.window_minutes, 0), COALESCE(w.hits, 0),
 			(SELECT COUNT(*) FROM watch_pending p WHERE p.watch_id = w.id),
-			COALESCE((SELECT m.kind FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 ORDER BY m.id DESC LIMIT 1), ''),
-			COALESCE((SELECT substr(m.text, 1, 200) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 ORDER BY m.id DESC LIMIT 1), ''),
+			COALESCE((SELECT m.kind FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.thread_root_id = 0 ORDER BY m.id DESC LIMIT 1), ''),
+			COALESCE((SELECT substr(m.text, 1, 200) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.thread_root_id = 0 ORDER BY m.id DESC LIMIT 1), ''),
 			c.last_read_id,
 			CASE WHEN c.kind = 'channel' THEN
-				(SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.id > c.last_read_id) ELSE 0 END
+				(SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.thread_root_id = 0 AND m.id > c.last_read_id) ELSE 0 END
 		FROM chats c
 			LEFT JOIN senders s ON s.tg_user_id = c.sender_id
 			LEFT JOIN channels ch ON ch.channel_id = c.channel_id
@@ -154,13 +158,13 @@ func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) 
 }
 
 const msgCols = `id, chat_id, tg_message_id, source, media_group_id, date, edit_date, kind, text, entities_json, forward_origin_json,
-	reply_to_tg_message_id, origin_chat_title, origin_link, extra_json, stats_json`
+	reply_to_tg_message_id, origin_chat_title, origin_link, extra_json, stats_json, thread_root_id`
 
 func scanMessageView(r scanner) (MessageView, error) {
 	var v MessageView
 	var ents, fwd, extra, stats string
 	err := r.Scan(&v.ID, &v.ChatID, &v.TgMessageID, &v.Source, &v.MediaGroupID, &v.Date, &v.EditDate, &v.Kind, &v.Text, &ents, &fwd,
-		&v.ReplyToTgMessageID, &v.OriginChatTitle, &v.OriginLink, &extra, &stats)
+		&v.ReplyToTgMessageID, &v.OriginChatTitle, &v.OriginLink, &extra, &stats, &v.ThreadRootID)
 	if ents == "" {
 		ents = "[]"
 	}
@@ -200,7 +204,11 @@ type scope struct {
 	arg  int64
 }
 
-func chatScope(chatID int64) scope { return scope{"chat_id = ?", chatID} }
+// chatScope is a conversation's timeline: the comments of its posts are not part of it.
+func chatScope(chatID int64) scope { return scope{"chat_id = ? AND thread_root_id = 0", chatID} }
+
+// threadScope is the comments of one archived post.
+func threadScope(rootID int64) scope { return scope{"thread_root_id = ?", rootID} }
 
 func botScope(botID int64) scope {
 	return scope{"chat_id IN (SELECT id FROM chats WHERE bot_id = ?)", botID}
@@ -222,6 +230,21 @@ func (s *Store) ListBotMessages(ctx context.Context, botID, beforeID int64, limi
 
 func (s *Store) ListMessagesPage(ctx context.Context, chatID int64, p Page, limit int) ([]MessageView, error) {
 	return s.listMessages(ctx, chatScope(chatID), p, limit)
+}
+
+// ListCommentsPage pages through the comments of archived post rootID, which must be a live
+// channel post of chat chatID (ErrNotFound otherwise).
+func (s *Store) ListCommentsPage(ctx context.Context, chatID, rootID int64, p Page, limit int) ([]MessageView, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM messages WHERE id = ? AND chat_id = ? AND source = 'channel_watch' AND deleted_at = 0`,
+		rootID, chatID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.listMessages(ctx, threadScope(rootID), p, limit)
 }
 
 func (s *Store) ListBotMessagesPage(ctx context.Context, botID int64, p Page, limit int) ([]MessageView, error) {
@@ -408,10 +431,19 @@ func (s *Store) hydrate(ctx context.Context, views []MessageView) error {
 		if r == 0 {
 			continue
 		}
+		// A bot chat's replies quote its own updates; a comment quotes another comment.
+		src := model.SourceBotUpdate
+		if views[i].Source == model.SourceChannelComment {
+			src = model.SourceChannelComment
+		}
 		var rv ReplyView
-		err := s.db.QueryRowContext(ctx, `SELECT id, kind, substr(text, 1, 200) FROM messages
-			WHERE chat_id = ? AND source = ? AND tg_message_id = ? AND deleted_at = 0`, views[i].ChatID, model.SourceBotUpdate, r).Scan(&rv.ID, &rv.Kind, &rv.Text)
+		var extra string
+		err := s.db.QueryRowContext(ctx, `SELECT id, kind, substr(text, 1, 200), extra_json FROM messages
+			WHERE chat_id = ? AND source = ? AND tg_message_id = ? AND deleted_at = 0`, views[i].ChatID, src, r).Scan(&rv.ID, &rv.Kind, &rv.Text, &extra)
 		if err == nil {
+			if src == model.SourceChannelComment {
+				rv.Extra = rawOrNil(extra)
+			}
 			views[i].Reply = &rv
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return err

@@ -114,6 +114,7 @@ func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer, w
 	dl.Register("web", downloader.NewWebSource(cfg.MediaMaxBytes, webDialCheck))
 	fetcher := userbot.NewFetcher(ub, st, rc, clients, hub, dl.Wake, mediaDir)
 	watcher := userbot.NewWatcher(ub, st, hub, notifier, dl.Wake, avatarDir)
+	watcher.MediaDir = mediaDir
 	tw := telegraph.NewWorker(st, telegraph.NewClient(cfg.TelegraphAPIURL), rc, hub, dl.Wake)
 	av := &avatars.Refresher{Store: st, Clients: clients, Mapper: mapper, Dir: avatarDir}
 	mgr := collector.New(ctx, collector.Deps{
@@ -138,8 +139,9 @@ func (a *App) Start() error {
 	a.wg.Add(2)
 	go func() { defer a.wg.Done(); a.dl.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.maintain() }()
-	a.wg.Add(4)
+	a.wg.Add(5)
 	go func() { defer a.wg.Done(); a.ub.Run(a.ctx) }()
+	go func() { defer a.wg.Done(); a.watcher.BackfillComments(a.ctx) }()
 	go func() { defer a.wg.Done(); a.fetcher.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.watcher.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.tw.Run(a.ctx) }()

@@ -16,9 +16,12 @@ type IngestInput struct {
 	// bot × sender chat (BotID and Sender are then unused); Stats is its stats_json.
 	ChannelID int64
 	Stats     string
-	Msg       *model.Message
-	Offset    int64 // when > 0, bots.update_offset advances to it in the same transaction
-	Now       int64
+	// ThreadRootID files the message as a comment on that archived post of the channel: kept out
+	// of the conversation's timeline, and not moving the conversation up the list.
+	ThreadRootID int64
+	Msg          *model.Message
+	Offset       int64 // when > 0, bots.update_offset advances to it in the same transaction
+	Now          int64
 	// TelegraphPath, when set, queues a Telegraph job for the message in the same transaction,
 	// but only if the message is newly created (an edit never queues a second snapshot).
 	TelegraphPath string
@@ -82,11 +85,11 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 			if err := tx.QueryRowContext(ctx, `
 				INSERT INTO messages (chat_id, tg_message_id, source, media_group_id, date, edit_date, kind, text, entities_json,
 					forward_origin_json, reply_to_tg_message_id, origin_chat_id, origin_chat_title, origin_link, extra_json, raw_format, raw_json,
-					stats_json)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+					stats_json, thread_root_id)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 				res.ChatID, m.TgMessageID, m.Source, m.MediaGroupID, m.Date, m.EditDate, string(m.Kind), m.Text, string(entJSON),
 				fwd, m.ReplyToTgMessageID, m.OriginChatID, m.OriginChatTitle, m.OriginLink, string(m.Extra), m.RawFormat, string(m.Raw),
-				in.Stats,
+				in.Stats, in.ThreadRootID,
 			).Scan(&res.MessageID); err != nil {
 				return err
 			}
@@ -135,7 +138,8 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 			}
 		}
 
-		if res.Created {
+		// A comment leaves the conversation where it is in the list.
+		if res.Created && in.ThreadRootID == 0 {
 			lastAt := m.Date
 			if m.Source == model.SourceUserbotFetch || m.Source == model.SourceChannelWatch {
 				lastAt = in.Now
@@ -143,7 +147,7 @@ func (s *Store) Ingest(ctx context.Context, in IngestInput) (*IngestResult, erro
 			if _, err := tx.ExecContext(ctx, "UPDATE chats SET last_message_at = ? WHERE id = ? AND last_message_at < ?", lastAt, res.ChatID, lastAt); err != nil {
 				return err
 			}
-		} else {
+		} else if !res.Created {
 			paths, err := collectOrphans(ctx, tx)
 			if err != nil {
 				return err

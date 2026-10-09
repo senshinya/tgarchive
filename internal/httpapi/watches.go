@@ -28,6 +28,8 @@ type WatchService interface {
 	ChannelPhoto(ctx context.Context, id int64) (string, error)
 	Backfill(ctx context.Context, watchID int64, hours int) (*userbot.BackfillState, error)
 	RefreshPosts(ctx context.Context, chatID int64, ids []int64) error
+	RefreshComments(ctx context.Context, chatID, rootID int64) error
+	CommenterPhoto(ctx context.Context, kind string, id int64) (string, error)
 	BackfillState(watchID int64) *userbot.BackfillState
 	Wake()
 }
@@ -56,6 +58,27 @@ func (s *Server) watchRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/watch-settings", s.getWatchSettings)
 	mux.HandleFunc("PUT /api/admin/watch-settings", s.putWatchSettings)
 	mux.HandleFunc("POST /api/chats/{id}/refresh-stats", s.refreshPostStats)
+	mux.HandleFunc("POST /api/chats/{id}/posts/{mid}/refresh-comments", s.refreshComments)
+}
+
+// refreshComments asks the watcher to re-read an archived post and its new comments (its comments
+// are being opened). It answers at once; what changed arrives as message.updated and comments.updated.
+func (s *Server) refreshComments(w http.ResponseWriter, r *http.Request) {
+	chatID, ok := pathID(r, "id")
+	rootID, ok2 := pathID(r, "mid")
+	if !ok || !ok2 {
+		writeErr(w, http.StatusBadRequest, "bad chat id or message id")
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), watchCallTimeout)
+		defer cancel()
+		err := s.Watcher.RefreshComments(ctx, chatID, rootID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) && !errors.Is(err, userbot.ErrNotReady) {
+			log.Printf("refresh comments of message %d: %v", rootID, err)
+		}
+	}()
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // refreshPostStats asks the watcher to re-read the counters of the archived posts a conversation

@@ -83,7 +83,7 @@ func (s *Store) Stats(ctx context.Context, tzMinutes int, now int64) (*Stats, er
 		MediaStates: map[string]int64{StateDone: 0, StatePending: 0, StateFailed: 0, StateTooLarge: 0},
 	}
 	t := &st.Totals
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages WHERE deleted_at = 0").Scan(&t.Messages); err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages WHERE deleted_at = 0 AND thread_root_id = 0").Scan(&t.Messages); err != nil {
 		return nil, err
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(kind = 'private'), 0), COALESCE(SUM(kind = 'channel'), 0) FROM chats`).
@@ -105,7 +105,7 @@ func (s *Store) Stats(ctx context.Context, tzMinutes int, now int64) (*Stats, er
 		}
 		st.Daily = append(st.Daily, d)
 		return nil
-	}, `SELECT date(date + ?, 'unixepoch') AS d, COUNT(*) FROM messages WHERE deleted_at = 0 AND date + ? >= ?
+	}, `SELECT date(date + ?, 'unixepoch') AS d, COUNT(*) FROM messages WHERE deleted_at = 0 AND thread_root_id = 0 AND date + ? >= ?
 		GROUP BY d ORDER BY d`, off, off, today-(statsDays-1)*86400)
 	if err != nil {
 		return nil, err
@@ -126,7 +126,7 @@ func (s *Store) Stats(ctx context.Context, tzMinutes int, now int64) (*Stats, er
 		}
 		month(k).Messages = n
 		return nil
-	}, `SELECT strftime('%Y-%m', date + ?, 'unixepoch') AS k, COUNT(*) FROM messages WHERE deleted_at = 0 GROUP BY k`, off)
+	}, `SELECT strftime('%Y-%m', date + ?, 'unixepoch') AS k, COUNT(*) FROM messages WHERE deleted_at = 0 AND thread_root_id = 0 GROUP BY k`, off)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func (s *Store) Stats(ctx context.Context, tzMinutes int, now int64) (*Stats, er
 		}
 		st.TopChats = append(st.TopChats, c)
 		return nil
-	}, `SELECT chat_id, COUNT(*) AS n FROM messages WHERE deleted_at = 0 GROUP BY chat_id ORDER BY n DESC, chat_id LIMIT ?`, statsTopChats)
+	}, `SELECT chat_id, COUNT(*) AS n FROM messages WHERE deleted_at = 0 AND thread_root_id = 0 GROUP BY chat_id ORDER BY n DESC, chat_id LIMIT ?`, statsTopChats)
 	if err != nil {
 		return nil, err
 	}

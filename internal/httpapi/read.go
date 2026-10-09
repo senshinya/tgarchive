@@ -75,6 +75,24 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msgs)
 }
 
+// listComments pages through the comments of an archived channel post.
+func (s *Server) listComments(w http.ResponseWriter, r *http.Request) {
+	chatID, ok := pathID(r, "id")
+	rootID, ok1 := pathID(r, "mid")
+	page, ok2 := pageParams(r)
+	limit, ok3 := queryInt(r, "limit", 50, 1, 100)
+	if !ok || !ok1 || !ok2 || !ok3 {
+		writeErr(w, http.StatusBadRequest, "bad chat id, message id, before, after, around or limit")
+		return
+	}
+	msgs, err := s.Store.ListCommentsPage(r.Context(), chatID, rootID, page, int(limit))
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
 // pageParams reads a conversation page: at most one of before, after and around.
 func pageParams(r *http.Request) (store.Page, bool) {
 	before, ok1 := queryInt(r, "before", 0, 0, 1<<62)
@@ -322,16 +340,26 @@ func inlineSafe(ct string) bool {
 func (s *Server) serveAvatar(w http.ResponseWriter, r *http.Request) {
 	kind := r.PathValue("kind")
 	id, ok := pathID(r, "id")
-	if !ok || (kind != "bots" && kind != "senders" && kind != "channels") {
+	if !ok || (kind != "bots" && kind != "senders" && kind != "channels" && kind != "users") {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
 	p := filepath.Join(s.AvatarDir, kind, fmt.Sprintf("%d.jpg", id))
+	if kind == "users" && s.Watcher != nil {
+		// Commenters' photos are fetched when first shown, and again once they change.
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		_, _ = s.Watcher.CommenterPhoto(ctx, "user", id)
+		cancel()
+	}
 	f, err := os.Open(p)
 	if err != nil && kind == "channels" && s.Watcher != nil {
-		// Channel photos are fetched on first use (the picker shows channels never seen before).
+		// Channel photos are fetched on first use (the picker shows channels never seen before);
+		// a channel known only as a commenter is fetched through the comment it wrote.
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		_, ferr := s.Watcher.ChannelPhoto(ctx, id)
+		if ferr != nil {
+			_, ferr = s.Watcher.CommenterPhoto(ctx, "channel", id)
+		}
 		cancel()
 		if ferr == nil {
 			f, err = os.Open(p)

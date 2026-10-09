@@ -20,7 +20,7 @@ func allMediaQuery(typ, source string, beforeID int64, limit int) (string, []any
 	if !ok {
 		return "", nil, ErrBadMediaType
 	}
-	where := []string{"m.deleted_at = 0", `EXISTS (SELECT 1 FROM message_media mm JOIN media md ON md.id = mm.media_id
+	where := []string{"m.deleted_at = 0", "m.thread_root_id = 0", `EXISTS (SELECT 1 FROM message_media mm JOIN media md ON md.id = mm.media_id
 		WHERE mm.message_id = m.id AND mm.role = 'main' AND md.kind IN (` + kinds + `))`}
 	var args []any
 	switch source {

@@ -28,6 +28,8 @@ const (
 	SourceBotUpdate    = "bot_update"
 	SourceUserbotFetch = "userbot_fetch"
 	SourceChannelWatch = "channel_watch"
+	// SourceChannelComment is a comment on an archived channel post, from its discussion group.
+	SourceChannelComment = "channel_comment"
 
 	RawBotAPI  = "botapi"
 	RawMTProto = "mtproto"

@@ -530,3 +530,40 @@ func TestMarkRead(t *testing.T) {
 		}
 	}
 }
+
+func TestListComments(t *testing.T) {
+	e := newReadEnv(t)
+	if err := e.st.UpsertChannel(bg, store.Channel{ChannelID: 500, Title: "News"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.CreateWatch(bg, &store.Watch{ChannelID: 500, WindowMinutes: 30, Cond: "{}", Enabled: true, CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	msg := func(id int64, src string) *model.Message {
+		return &model.Message{TgMessageID: id, Source: src, Date: id, Kind: model.KindText, Text: fmt.Sprint("m", id), RawFormat: model.RawMTProto, Raw: json.RawMessage(`{}`)}
+	}
+	post, err := e.st.Ingest(bg, store.IngestInput{ChannelID: 500, Msg: msg(1, model.SourceChannelWatch), Now: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := int64(10); i < 13; i++ {
+		if _, err := e.st.Ingest(bg, store.IngestInput{ChannelID: 500, Msg: msg(i, model.SourceChannelComment), Now: 6, ThreadRootID: post.MessageID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := fmt.Sprintf("/api/chats/%d/posts/%d/comments?limit=2", post.ChatID, post.MessageID)
+	w := do(e.h, "GET", path, nil)
+	var got []store.MessageView
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &got) != nil || len(got) != 2 || got[1].Text != "m12" || got[1].ThreadRootID != post.MessageID {
+		t.Fatalf("comments = %d %s", w.Code, w.Body)
+	}
+	if w := do(e.h, "GET", fmt.Sprintf("/api/chats/%d/messages", post.ChatID), nil); !strings.Contains(w.Body.String(), `"m1"`) || strings.Contains(w.Body.String(), `"m10"`) {
+		t.Fatalf("timeline = %s", w.Body)
+	}
+	if w := do(e.h, "GET", fmt.Sprintf("/api/chats/%d/posts/%d/comments", post.ChatID, got[0].ID), nil); w.Code != 404 {
+		t.Fatalf("comments of a comment = %d", w.Code)
+	}
+	if w := do(e.h, "GET", fmt.Sprintf("/api/chats/%d/posts/%d/comments?before=1&after=1", post.ChatID, post.MessageID), nil); w.Code != 400 {
+		t.Fatalf("two cursors = %d", w.Code)
+	}
+}
