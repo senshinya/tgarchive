@@ -114,8 +114,16 @@ type MessageView struct {
 	Pos int64 `json:"pos"`
 }
 
-// lastOrder picks a chat's last message (the preview): the latest post of a channel.
-const lastOrder = `CASE WHEN c.kind = 'channel' THEN m.tg_message_id ELSE m.id END DESC, m.id DESC`
+// lastMessage finds a chat's last message (the preview): the latest post of a channel, the
+// latest arrival elsewhere. Each branch is a plain ORDER BY its index answers with one row (an
+// ORDER BY CASE could not use one), and only the branch the chat's kind takes is run.
+const lastMessage = `CASE WHEN c.kind = 'channel' THEN
+		(SELECT m.id FROM messages m WHERE m.chat_id = c.id AND m.thread_root_id = 0 AND m.deleted_at = 0
+			ORDER BY m.tg_message_id DESC, m.id DESC LIMIT 1)
+	ELSE
+		(SELECT m.id FROM messages m WHERE m.chat_id = c.id AND m.thread_root_id = 0 AND m.deleted_at = 0
+			ORDER BY m.id DESC LIMIT 1)
+	END`
 
 // ListChats lists conversations, most recent first: every bot × sender chat of botID (all bots
 // for 0), and with botID 0 also the watched channels' conversations.
@@ -128,8 +136,7 @@ func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) 
 			COALESCE(w.id, 0), COALESCE(w.enabled, 0), COALESCE(w.status, ''), COALESCE(w.last_error, ''),
 			COALESCE(w.window_minutes, 0), COALESCE(w.hits, 0),
 			(SELECT COUNT(*) FROM watch_pending p WHERE p.watch_id = w.id),
-			COALESCE((SELECT m.kind FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.thread_root_id = 0 ORDER BY `+lastOrder+` LIMIT 1), ''),
-			COALESCE((SELECT substr(m.text, 1, 200) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.thread_root_id = 0 ORDER BY `+lastOrder+` LIMIT 1), ''),
+			COALESCE(lm.kind, ''), COALESCE(substr(lm.text, 1, 200), ''),
 			c.last_read_pos,
 			CASE WHEN c.kind = 'channel' THEN
 				(SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.id AND m.deleted_at = 0 AND m.thread_root_id = 0 AND m.tg_message_id > c.last_read_pos) ELSE 0 END,
@@ -140,6 +147,7 @@ func (s *Store) ListChats(ctx context.Context, botID int64) ([]ChatView, error) 
 			LEFT JOIN senders s ON s.tg_user_id = c.sender_id
 			LEFT JOIN channels ch ON ch.channel_id = c.channel_id
 			LEFT JOIN channel_watches w ON w.channel_id = c.channel_id
+			LEFT JOIN messages lm ON lm.id = `+lastMessage+`
 		WHERE (? = 0 OR c.bot_id = ?)
 		ORDER BY c.last_message_at DESC, c.id DESC`, botID, botID)
 	if err != nil {
