@@ -103,7 +103,7 @@ func (d *Downloader) Run(ctx context.Context) {
 		}()
 	}
 	for {
-		due, err := d.st.DueMedia(ctx, d.Now().Unix(), 32)
+		due, err := d.due(ctx)
 		if err != nil && ctx.Err() == nil {
 			log.Printf("downloader: list due media: %v", err)
 		}
@@ -135,6 +135,24 @@ func (d *Downloader) Run(ctx context.Context) {
 		case <-tick.C:
 		}
 	}
+}
+
+// due lists the media to dispatch this pass: Telegram media first, then web media. They are
+// listed separately because web downloads run at most maxWebInFlight at a time: in one shared
+// list a web backlog with lower ids would fill every row, and Telegram media behind it would
+// wait for the backlog to drain however many slots were free. Listing maxWebInFlight web items
+// is enough: any beyond that could not be claimed this pass anyway.
+func (d *Downloader) due(ctx context.Context) ([]store.Media, error) {
+	now := d.Now().Unix()
+	tg, err := d.st.DueTelegramMedia(ctx, now, 32)
+	if err != nil {
+		return nil, err
+	}
+	web, err := d.st.DueWebMedia(ctx, now, maxWebInFlight)
+	if err != nil {
+		return tg, err
+	}
+	return append(tg, web...), nil
 }
 
 func (d *Downloader) reportProgress(ctx context.Context) {
@@ -230,7 +248,7 @@ func (d *Downloader) Process(ctx context.Context, m *store.Media) {
 			log.Printf("downloader: hevc tag fix for media %d: %v", m.ID, err)
 		}
 	}
-	ok, err := d.st.MarkMediaDone(ctx, m.ID, rel, size)
+	ok, err := d.st.MarkMediaDone(ctx, m.ID, m.DedupeKey, rel, size)
 	if err != nil {
 		log.Printf("downloader: mark media %d done: %v", m.ID, err)
 		return
@@ -249,13 +267,13 @@ func (d *Downloader) retry(ctx context.Context, m *store.Media, cause error) {
 		return
 	}
 	next := d.Now().Add(d.Delays[n-1]).Unix()
-	if err := d.st.MarkMediaRetry(ctx, m.ID, n, next, botapifs.RedactPath(cause.Error())); err != nil {
+	if err := d.st.MarkMediaRetry(ctx, m.ID, m.DedupeKey, n, next, botapifs.RedactPath(cause.Error())); err != nil {
 		log.Printf("downloader: schedule retry for media %d: %v", m.ID, err)
 	}
 }
 
 func (d *Downloader) fail(ctx context.Context, m *store.Media, attempts int, cause error) {
-	if err := d.st.MarkMediaFailed(ctx, m.ID, attempts, botapifs.RedactPath(cause.Error())); err != nil {
+	if err := d.st.MarkMediaFailed(ctx, m.ID, m.DedupeKey, attempts, botapifs.RedactPath(cause.Error())); err != nil {
 		log.Printf("downloader: mark media %d failed: %v", m.ID, err)
 		return
 	}
@@ -263,7 +281,7 @@ func (d *Downloader) fail(ctx context.Context, m *store.Media, attempts int, cau
 }
 
 func (d *Downloader) tooLarge(ctx context.Context, m *store.Media) {
-	if err := d.st.MarkMediaTooLarge(ctx, m.ID); err != nil {
+	if err := d.st.MarkMediaTooLarge(ctx, m.ID, m.DedupeKey); err != nil {
 		log.Printf("downloader: mark media %d too large: %v", m.ID, err)
 		return
 	}
@@ -276,7 +294,11 @@ func (d *Downloader) settle(id int64) {
 	}
 }
 
-// relBase is <bucket>/<yyyy>/<mm>/<sha1(dedupe_key)> where bucket is the bot id for "bot:" keys.
+// relBase is <bucket>/<yyyy>/<mm>/<sha1(dedupe_key)>-<media id> where bucket is the bot id for
+// "bot:" keys. The id keeps each row's file (and its .part) its own: a row deleted mid-download
+// and the row a resend creates share the dedupe key, and the stale download, finishing last,
+// would otherwise overwrite the new row's file and then remove it. Paths are stored, so files
+// named before the id was added are unaffected.
 func (d *Downloader) relBase(m *store.Media) string {
 	prefix, _, _ := strings.Cut(m.DedupeKey, ":")
 	bucket := prefix
@@ -285,7 +307,8 @@ func (d *Downloader) relBase(m *store.Media) string {
 	}
 	now := d.Now().UTC()
 	sum := sha1.Sum([]byte(m.DedupeKey))
-	return filepath.Join(bucket, fmt.Sprintf("%04d", now.Year()), fmt.Sprintf("%02d", int(now.Month())), hex.EncodeToString(sum[:]))
+	name := hex.EncodeToString(sum[:]) + "-" + strconv.FormatInt(m.ID, 10)
+	return filepath.Join(bucket, fmt.Sprintf("%04d", now.Year()), fmt.Sprintf("%02d", int(now.Month())), name)
 }
 
 // RemoveFiles deletes archive files given as paths relative to mediaDir, refusing anything outside it.

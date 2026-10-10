@@ -52,7 +52,22 @@ func (s *Store) GetMedia(ctx context.Context, id int64) (*Media, error) {
 }
 
 func (s *Store) DueMedia(ctx context.Context, now int64, limit int) ([]Media, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+mediaCols+" FROM media WHERE state = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?", now, limit)
+	return s.dueMedia(ctx, "", now, limit)
+}
+
+// DueTelegramMedia is DueMedia without the "web:" (Telegraph article) media, and DueWebMedia is
+// only those. The downloader takes them separately so a web backlog with lower ids can never
+// crowd Telegram media out of the rows it looks at.
+func (s *Store) DueTelegramMedia(ctx context.Context, now int64, limit int) ([]Media, error) {
+	return s.dueMedia(ctx, " AND dedupe_key NOT GLOB 'web:*'", now, limit)
+}
+
+func (s *Store) DueWebMedia(ctx context.Context, now int64, limit int) ([]Media, error) {
+	return s.dueMedia(ctx, " AND dedupe_key GLOB 'web:*'", now, limit)
+}
+
+func (s *Store) dueMedia(ctx context.Context, filter string, now int64, limit int) ([]Media, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+mediaCols+" FROM media WHERE state = 'pending' AND next_attempt_at <= ?"+filter+" ORDER BY id LIMIT ?", now, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -68,27 +83,33 @@ func (s *Store) DueMedia(ctx context.Context, now int64, limit int) ([]Media, er
 	return out, rows.Err()
 }
 
-// MarkMediaDone returns false when the row no longer exists (deleted while downloading).
-func (s *Store) MarkMediaDone(ctx context.Context, id int64, path string, size int64) (bool, error) {
-	err := affected(s.db.ExecContext(ctx, "UPDATE media SET state = 'done', path = ?, size = ?, error = '' WHERE id = ?", path, size, id))
+// The MarkMedia* updates name the media by id and dedupe key together. media.id is a plain
+// INTEGER PRIMARY KEY, so once the newest row is deleted (its message gone mid-download) the next
+// insert takes its id; a download that outlived its row must not settle that unrelated media.
+// An update whose row is gone or now holds another key does nothing.
+
+// MarkMediaDone returns false when the row no longer exists or now holds other media (deleted
+// while downloading).
+func (s *Store) MarkMediaDone(ctx context.Context, id int64, key string, path string, size int64) (bool, error) {
+	err := affected(s.db.ExecContext(ctx, "UPDATE media SET state = 'done', path = ?, size = ?, error = '' WHERE id = ? AND dedupe_key = ?", path, size, id, key))
 	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
 	return err == nil, err
 }
 
-func (s *Store) MarkMediaRetry(ctx context.Context, id int64, attempts int, nextAt int64, errMsg string) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE media SET attempts = ?, next_attempt_at = ?, error = ? WHERE id = ?", attempts, nextAt, errMsg, id)
+func (s *Store) MarkMediaRetry(ctx context.Context, id int64, key string, attempts int, nextAt int64, errMsg string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE media SET attempts = ?, next_attempt_at = ?, error = ? WHERE id = ? AND dedupe_key = ?", attempts, nextAt, errMsg, id, key)
 	return err
 }
 
-func (s *Store) MarkMediaFailed(ctx context.Context, id int64, attempts int, errMsg string) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE media SET state = 'failed', attempts = ?, error = ? WHERE id = ?", attempts, errMsg, id)
+func (s *Store) MarkMediaFailed(ctx context.Context, id int64, key string, attempts int, errMsg string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE media SET state = 'failed', attempts = ?, error = ? WHERE id = ? AND dedupe_key = ?", attempts, errMsg, id, key)
 	return err
 }
 
-func (s *Store) MarkMediaTooLarge(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE media SET state = 'too_large', error = '' WHERE id = ?", id)
+func (s *Store) MarkMediaTooLarge(ctx context.Context, id int64, key string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE media SET state = 'too_large', error = '' WHERE id = ? AND dedupe_key = ?", id, key)
 	return err
 }
 

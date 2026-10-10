@@ -84,7 +84,7 @@ func newUserbotEnv(t *testing.T) (http.Handler, *fakeUserbot) {
 	t.Cleanup(func() { st.Close() })
 	box, _ := seal.New(bytes.Repeat([]byte{1}, 32))
 	fu := &fakeUserbot{state: userbot.StateLoggedOut}
-	srv := &Server{Cfg: &config.Config{RequireForwardAuth: true}, Store: st, Box: box, TgApp: tgapp.New(st, box), Userbot: fu, Now: time.Now}
+	srv := &Server{Cfg: &config.Config{RequireForwardAuth: true, AllowedHosts: []string{"example.com"}}, Store: st, Box: box, TgApp: tgapp.New(st, box), Userbot: fu, Now: time.Now}
 	return srv.Handler(), fu
 }
 

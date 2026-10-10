@@ -55,7 +55,7 @@ func TestJobSeenThenDone(t *testing.T) {
 	if got := v.tr.(*rec).take(); len(got) != 0 {
 		t.Fatalf("fetched with pending media = %v", got)
 	}
-	v.st.MarkMediaDone(ctx, mids[0], "p", 1)
+	v.st.MarkMediaDone(ctx, mids[0], v.key(t, mids[0]), "p", 1)
 	v.e.MediaSettled(ctx, mids[0])
 	v.e.MediaSettled(ctx, mids[0])
 	if got := v.tr.(*rec).take(); !reflect.DeepEqual(got, []string{"react 42 10 👌"}) {
@@ -92,7 +92,7 @@ func TestJobMediaFailureUsesArchiveText(t *testing.T) {
 	v.e.EvaluateJob(ctx, job)
 	_, mids := v.fetched(t, job, 500, "mt:photo:1")
 	v.st.FinishFetchJob(ctx, job, store.JobFetched, "", 2)
-	v.st.MarkMediaFailed(ctx, mids[0], 4, "network down")
+	v.st.MarkMediaFailed(ctx, mids[0], v.key(t, mids[0]), 4, "network down")
 	v.e.MediaSettled(ctx, mids[0])
 	want := []string{"react 42 10 👀", "reply 42 10 ⚠️ 存档失败：network down"}
 	if got := v.tr.(*rec).take(); !reflect.DeepEqual(got, want) {

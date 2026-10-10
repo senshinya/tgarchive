@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/preact
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { navigate, route } from '../../lib/router';
 import { fakeApi, makeBot, makeChannelChat, makeChat, makeMessage } from '../../test/fixtures';
-import { renderWithStore } from '../../test/render';
+import { renderOpen, renderWithStore } from '../../test/render';
 import { createStore, StoreContext } from '../../state/store';
 import { MiddleColumn } from './MiddleColumn';
 
@@ -85,7 +85,7 @@ describe('MiddleColumn bot timeline', () => {
       chats: vi.fn(async () => [makeChat({ id: 10 })]),
       messages: vi.fn(async () => [makeMessage({ id: 1, chat_id: 10, text: 'hi' })]),
     });
-    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    const r = renderOpen(<MiddleColumn chatId={10} />, api);
     await screen.findByText('hi');
     expect(r.container.querySelector('.sender-title')).toBeNull();
     expect(r.container.querySelector('.message-group-avatar')).toBeNull();
@@ -116,7 +116,7 @@ describe('jump from the downloads panel', () => {
 
   it('loads a window around a message that is not loaded, then clears the request', async () => {
     const api = fakeApi({ chats: vi.fn(async () => [makeChat({ id: 10 })]), messages: serve });
-    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    const r = renderOpen(<MiddleColumn chatId={10} />, api);
     await screen.findByText('m100');
     r.store.jumpTo.value = { key: 10, messageId: 5 };
     await screen.findByText('m5');
@@ -142,7 +142,7 @@ describe('jump from the downloads panel', () => {
 
   it('goes back to the latest messages from a window', async () => {
     const api = fakeApi({ chats: vi.fn(async () => [makeChat({ id: 10 })]), messages: serve });
-    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    const r = renderOpen(<MiddleColumn chatId={10} />, api);
     await screen.findByText('m100');
     r.store.jumpTo.value = { key: 10, messageId: 5 };
     await screen.findByText('m5');
@@ -157,7 +157,7 @@ describe('jump from the downloads panel', () => {
       chats: vi.fn(async () => [makeChat({ id: 10 })]),
       messages: vi.fn(async () => pageOf(1, 3)),
     });
-    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    const r = renderOpen(<MiddleColumn chatId={10} />, api);
     r.store.jumpTo.value = { key: 10, messageId: 999 };
     await screen.findByText('m3');
     await waitFor(() => expect(r.store.jumpTo.value).toBeNull());
@@ -165,7 +165,7 @@ describe('jump from the downloads panel', () => {
 
   it('ignores a request meant for another conversation', async () => {
     const api = fakeApi({ chats: vi.fn(async () => [makeChat({ id: 10 })]), messages: vi.fn(async () => pageOf(1, 3)) });
-    const r = renderWithStore(<MiddleColumn chatId={10} />, api);
+    const r = renderOpen(<MiddleColumn chatId={10} />, api);
     r.store.jumpTo.value = { key: -1, messageId: 2 };
     await screen.findByText('m3');
     expect(r.store.jumpTo.value).toEqual({ key: -1, messageId: 2 });

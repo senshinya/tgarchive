@@ -44,7 +44,7 @@ func newReadEnv(t *testing.T) *readEnv {
 	mediaDir, avatarDir := t.TempDir(), t.TempDir()
 	hub := events.NewHub()
 	srv := &Server{
-		Cfg: &config.Config{RequireForwardAuth: true}, Store: st, Hub: hub,
+		Cfg: &config.Config{RequireForwardAuth: true, AllowedHosts: []string{"example.com"}}, Store: st, Hub: hub,
 		Downloader: downloader.New(st, mediaDir, 0, nil),
 		Web:        fstest.MapFS{"index.html": {Data: []byte("<html>app</html>")}, "assets/app.js": {Data: []byte("js!")}},
 		MediaDir:   mediaDir, AvatarDir: avatarDir, Now: time.Now,
@@ -59,13 +59,16 @@ func newReadEnv(t *testing.T) *readEnv {
 	due, _ := st.DueMedia(bg, 0, 10)
 	os.MkdirAll(filepath.Join(mediaDir, "1"), 0o755)
 	os.WriteFile(filepath.Join(mediaDir, "1", "p.jpg"), []byte("photo-bytes"), 0o644)
-	st.MarkMediaDone(bg, due[0].ID, "1/p.jpg", 11)
+	st.MarkMediaDone(bg, due[0].ID, due[0].DedupeKey, "1/p.jpg", 11)
 	return &readEnv{srv: srv, h: srv.Handler(), st: st, hub: hub, chat: r1.ChatID, photoMsg: r1.MessageID, media: due[0].ID}
 }
 
 func do(h http.Handler, method, path string, hdr map[string]string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, nil)
 	req.Header.Set("Remote-User", "shinya")
+	if method != "GET" && method != "HEAD" {
+		req.Header.Set("Content-Type", "application/json") // as the WebUI sends every write
+	}
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
@@ -313,7 +316,7 @@ func TestSSEPeriodicPing(t *testing.T) {
 
 func TestServeMediaContentSafety(t *testing.T) {
 	e := newReadEnv(t)
-	const csp = "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox"
+	const csp = "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'"
 	w := do(e.h, "GET", fmt.Sprintf("/media/%d", e.media), nil)
 	if w.Code != 200 || w.Header().Get("Content-Type") != "image/jpeg" || w.Header().Get("Content-Disposition") != "" ||
 		w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("Content-Security-Policy") != csp {
@@ -329,12 +332,82 @@ func TestServeMediaContentSafety(t *testing.T) {
 		t.Fatalf("due = %+v", due)
 	}
 	os.WriteFile(filepath.Join(e.srv.MediaDir, "1", "h.html"), []byte("<script>alert(1)</script>"), 0o644)
-	e.st.MarkMediaDone(bg, due[0].ID, "1/h.html", 25)
+	e.st.MarkMediaDone(bg, due[0].ID, due[0].DedupeKey, "1/h.html", 25)
 	w = do(e.h, "GET", fmt.Sprintf("/media/%d", due[0].ID), nil)
 	if w.Code != 200 || w.Header().Get("Content-Type") != "application/octet-stream" ||
 		!strings.HasPrefix(w.Header().Get("Content-Disposition"), "attachment") || !strings.Contains(w.Header().Get("Content-Disposition"), "evil.html") ||
 		w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("Content-Security-Policy") != csp {
 		t.Fatalf("html = %d %v", w.Code, w.Header())
+	}
+}
+
+func TestHostCheck(t *testing.T) {
+	e := newReadEnv(t)
+	get := func(host string) int {
+		req := httptest.NewRequest("GET", "/api/bots", nil)
+		req.Host = host
+		req.Header.Set("Remote-User", "shinya")
+		w := httptest.NewRecorder()
+		e.h.ServeHTTP(w, req)
+		return w.Code
+	}
+	// A DNS rebinding attack needs a name of its own; addresses and localhost cannot be rebound.
+	e.srv.Cfg.AllowedHosts = nil
+	for _, h := range []string{"192.168.7.146:8090", "192.168.7.146", "127.0.0.1:8080", "[::1]:8080", "[fe80::1%25eth0]:80", "localhost:5173", "LocalHost"} {
+		if c := get(h); c != 200 {
+			t.Fatalf("host %s = %d", h, c)
+		}
+	}
+	for _, h := range []string{"evil.example:8090", "example.com", "192.168.7.146.nip.io", "localhost.evil.example", ""} {
+		if c := get(h); c != 403 {
+			t.Fatalf("host %q = %d, want 403", h, c)
+		}
+	}
+	e.srv.Cfg.AllowedHosts = []string{"tg.example.com"}
+	for h, want := range map[string]int{"TG.example.com:443": 200, "tg.example.com.": 200, "tg.example.com": 200, "other.example.com": 403, "10.0.0.1": 200} {
+		if c := get(h); c != want {
+			t.Fatalf("allowed host %s = %d, want %d", h, c, want)
+		}
+	}
+	e.srv.Cfg.AllowedHosts = []string{"*"}
+	if c := get("anything.example"); c != 200 {
+		t.Fatalf("* = %d", c)
+	}
+	// healthz goes through the same check; the container's own healthcheck uses 127.0.0.1.
+	e.srv.Cfg.AllowedHosts = nil
+	req := httptest.NewRequest("GET", "/healthz", nil)
+	w := httptest.NewRecorder()
+	e.h.ServeHTTP(w, req)
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "host not allowed") {
+		t.Fatalf("healthz on a foreign name = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestFramingAndEmbedding(t *testing.T) {
+	e := newReadEnv(t)
+	media, avatar := fmt.Sprintf("/media/%d", e.media), "/avatars/bots/777"
+	os.MkdirAll(filepath.Join(e.srv.AvatarDir, "bots"), 0o755)
+	os.WriteFile(filepath.Join(e.srv.AvatarDir, "bots", "777.jpg"), []byte("jpg"), 0o644)
+	for _, p := range []string{"/", "/api/bots", "/api/nope", "/healthz", media, avatar, "/media/999999"} {
+		w := do(e.h, "GET", p, nil)
+		if w.Header().Get("X-Frame-Options") != "DENY" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+			t.Fatalf("%s = %d %v", p, w.Code, w.Header())
+		}
+		corp := w.Header().Get("Cross-Origin-Resource-Policy")
+		if wantCORP := strings.HasPrefix(p, "/media/") || strings.HasPrefix(p, "/avatars/"); wantCORP != (corp == "same-origin") {
+			t.Fatalf("%s CORP = %q", p, corp)
+		}
+	}
+	// The SPA page gets nothing beyond frame-ancestors, which would break its scripts and styles.
+	if csp := do(e.h, "GET", "/", nil).Header().Get("Content-Security-Policy"); csp != "frame-ancestors 'none'" {
+		t.Fatalf("index CSP = %q", csp)
+	}
+	// Refused requests carry them too.
+	req := httptest.NewRequest("GET", "/api/bots", nil)
+	w := httptest.NewRecorder()
+	e.h.ServeHTTP(w, req)
+	if w.Code != 401 || w.Header().Get("X-Frame-Options") != "DENY" {
+		t.Fatalf("401 = %d %v", w.Code, w.Header())
 	}
 }
 
@@ -358,6 +431,15 @@ func TestCrossSiteWritesRejected(t *testing.T) {
 		"form post":         send("POST", retry, "a=1", map[string]string{"Content-Type": "application/x-www-form-urlencoded"}),
 		"text post":         send("POST", retry, "{}", map[string]string{"Content-Type": "text/plain"}),
 		"post no type":      send("POST", retry, "{}", nil),
+		// Without Sec-Fetch-Site (an untrusted plain-HTTP origin), an empty no-cors POST or a
+		// fieldless form must not get through for lack of a body.
+		"empty post":      send("POST", retry, "", nil),
+		"empty form post": send("POST", retry, "", map[string]string{"Content-Type": "application/x-www-form-urlencoded"}),
+		"delete no type":  send("DELETE", del, "", nil),
+		"foreign origin":  send("POST", retry, "{}", map[string]string{"Content-Type": "application/json", "Origin": "http://evil.example"}),
+		"other port":      send("POST", retry, "{}", map[string]string{"Content-Type": "application/json", "Origin": "http://example.com:8081"}),
+		"null origin":     send("POST", retry, "{}", map[string]string{"Content-Type": "application/json", "Origin": "null"}),
+		"bad origin":      send("POST", retry, "{}", map[string]string{"Content-Type": "application/json", "Origin": "::"}),
 	} {
 		if w.Code != 403 || !strings.Contains(w.Body.String(), `"error":"cross-site request rejected"`) {
 			t.Fatalf("%s = %d %s", name, w.Code, w.Body)
@@ -369,7 +451,11 @@ func TestCrossSiteWritesRejected(t *testing.T) {
 	if w := send("POST", retry, "{}", map[string]string{"Sec-Fetch-Site": "same-origin", "Content-Type": "application/json; charset=utf-8"}); w.Code != 409 {
 		t.Fatalf("same-origin JSON post = %d %s", w.Code, w.Body)
 	}
-	if w := send("DELETE", del, "", map[string]string{"Sec-Fetch-Site": "same-origin"}); w.Code != 204 {
+	// httptest requests are for example.com; the browser's own Origin matches Host.
+	if w := send("POST", retry, "{}", map[string]string{"Content-Type": "application/json", "Origin": "http://EXAMPLE.com"}); w.Code != 409 {
+		t.Fatalf("same-origin post with Origin = %d %s", w.Code, w.Body)
+	}
+	if w := send("DELETE", del, "", map[string]string{"Sec-Fetch-Site": "same-origin", "Content-Type": "application/json"}); w.Code != 204 {
 		t.Fatalf("same-origin delete = %d %s", w.Code, w.Body)
 	}
 }
@@ -428,7 +514,7 @@ func TestDownloadsEndpoint(t *testing.T) {
 	for _, m := range due {
 		byKey[m.DedupeKey] = m
 	}
-	e.st.MarkMediaFailed(bg, byKey["bot:failed"].ID, 3, "HTTP 500")
+	e.st.MarkMediaFailed(bg, byKey["bot:failed"].ID, "bot:failed", 3, "HTTP 500")
 
 	src := heldSource{started: make(chan struct{})}
 	e.srv.Downloader.Register("bot", src)

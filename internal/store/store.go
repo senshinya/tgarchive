@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,10 +15,23 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db *sql.DB
+	// ro is the same store over a pool of read-only connections, so that the reads the WebUI
+	// makes (conversations, pages, search, stats, the media wall, favorites) neither wait behind
+	// writes on db's single connection nor hold it up. A read method starts with s = s.reader().
+	// In WAL mode a read sees every write committed before it starts.
+	ro *Store
+}
+
+// connPragmas are the per-connection settings of every connection, writer and readers alike.
+const connPragmas = "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
+
+// readConns bounds the read-only pool.
+const readConns = 4
 
 func Open(path string) (*Store, error) {
-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
+	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&" + connPragmas
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -30,10 +44,37 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// An in-memory database is private to its connection: there the reads share the writer.
+	if path != ":memory:" && !strings.Contains(path, "mode=memory") {
+		rdb, err := sql.Open("sqlite", "file:"+path+"?"+connPragmas+"&_pragma=query_only(1)")
+		if err == nil {
+			err = rdb.Ping()
+		}
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		rdb.SetMaxOpenConns(readConns)
+		s.ro = &Store{db: rdb}
+	}
 	return s, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+// reader returns the store to read through: the read-only pool when there is one.
+func (s *Store) reader() *Store {
+	if s.ro != nil {
+		return s.ro
+	}
+	return s
+}
+
+func (s *Store) Close() error {
+	err := s.db.Close()
+	if s.ro != nil {
+		err = errors.Join(err, s.ro.db.Close())
+	}
+	return err
+}
 
 // migrate applies pending migrations, up to and including number limit (0 = all; tests stop early
 // to build an older database).
@@ -51,6 +92,11 @@ func (s *Store) migrate(ctx context.Context, limit int) error {
 		names = append(names, e.Name())
 	}
 	sort.Strings(names)
+	if ver > len(names) {
+		// Written by a newer build: this one does not know its schema, and running against it
+		// could corrupt it.
+		return fmt.Errorf("database schema version %d is newer than this build supports (%d)", ver, len(names))
+	}
 	for i, name := range names {
 		n := i + 1
 		if !strings.HasPrefix(name, fmt.Sprintf("%04d_", n)) {

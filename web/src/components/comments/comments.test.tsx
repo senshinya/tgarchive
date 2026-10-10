@@ -150,6 +150,7 @@ describe('comments', () => {
       comments: vi.fn(async () => [comment(2, ann, 'first!')]),
     });
     const { container, rerender, store } = renderWithStore(<MiddleColumn chatId={50} />, api);
+    void store.loadChats();
     await waitFor(() => expect(store.conv(50).loaded).toBe(true));
     const list = container.querySelector('.MessageList')!;
     rerender(<StoreContext.Provider value={store}><MiddleColumn chatId={50} commentsId={1} /></StoreContext.Provider>);

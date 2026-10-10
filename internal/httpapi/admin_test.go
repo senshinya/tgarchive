@@ -50,7 +50,7 @@ func newAdminEnv(t *testing.T) *adminEnv {
 	mgr := collector.New(ctx, collector.Deps{Store: st, Clients: reg, Downloader: dl, Receipts: receipt.New(st, reg), Hub: hub, MediaDir: mediaDir, PollTimeoutSec: 1})
 	t.Cleanup(func() { mgr.StopAll(); cancel(); st.Close() })
 	srv := &Server{
-		Cfg:   &config.Config{RequireForwardAuth: true, BotAPIURL: fake.URL(), CloudAPIURL: fake.URL()},
+		Cfg:   &config.Config{RequireForwardAuth: true, AllowedHosts: []string{"example.com"}, BotAPIURL: fake.URL(), CloudAPIURL: fake.URL()},
 		Store: st, Box: box, Clients: reg, Manager: mgr, Downloader: dl, Hub: hub,
 		TgApp:    tgapp.New(st, box),
 		MediaDir: mediaDir, AvatarDir: t.TempDir(), Now: time.Now,
@@ -233,5 +233,31 @@ func TestWhitelistAndRejected(t *testing.T) {
 	}
 	if w := call(e.h, "PUT", "/api/admin/bots/9999/whitelist/1", map[string]any{}); w.Code != 404 {
 		t.Fatalf("put on missing bot = %d", w.Code)
+	}
+}
+
+// Admin bodies are a few fields; an oversized one is refused before it is read in full.
+func TestAdminBodiesLimited(t *testing.T) {
+	e := newAdminEnv(t)
+	var r addResp
+	json.Unmarshal(call(e.h, "POST", "/api/admin/bots", map[string]string{"token": goodToken}).Body.Bytes(), &r)
+	waitStatus(t, e.st, r.BotID, store.StatusRunning)
+	pad := strings.Repeat("x", 8<<10)
+	bot := fmt.Sprintf("/api/admin/bots/%d", r.BotID)
+	for _, c := range []struct {
+		method, path string
+		body         map[string]any
+	}{
+		{"POST", "/api/admin/bots", map[string]any{"token": goodToken, "pad": pad}},
+		{"PATCH", bot, map[string]any{"enabled": true, "pad": pad}},
+		{"PUT", bot + "/whitelist/99", map[string]any{"note": pad}},
+		{"PUT", "/api/admin/telegram-app", map[string]any{"api_id": 4242, "api_hash": "0123456789abcdef0123456789abcdef", "pad": pad}},
+	} {
+		if w := call(e.h, c.method, c.path, c.body); w.Code != 400 || !strings.Contains(w.Body.String(), "invalid json") {
+			t.Errorf("%s %s = %d %s", c.method, c.path, w.Code, w.Body)
+		}
+	}
+	if w := call(e.h, "PATCH", bot, map[string]any{}); w.Code != 400 || !strings.Contains(w.Body.String(), `{\"enabled\": bool}`) {
+		t.Fatalf("patch without enabled = %d %s", w.Code, w.Body)
 	}
 }

@@ -37,6 +37,7 @@ cd web && npm run dev   # Vite 开发服务器，/api、/media、/avatars 代理
 | `LISTEN` | `:8080` | HTTP 监听地址 |
 | `DATA_DIR` | `/data` | 数据根目录（`db/`、`media/`、`avatars/`、`botapi/`、`botapi-tmp/`） |
 | `REQUIRE_FORWARD_AUTH` | `true` | 除 `/healthz` 外要求请求带 `Remote-User`，否则 401 |
+| `ALLOWED_HOSTS` | 空 | 防 DNS rebinding：`Host` 为 IP 地址或 `localhost` 时总是放行，其余域名须列在此处（逗号分隔，不含协议与端口，大小写不敏感），否则 403（`/healthz` 同样）。经反代用域名访问时填该域名，`*` 关闭检查 |
 | `BARK_NOTIFY_FILE` | 空 | Bark 配置（`endpoint` + `device_keys`），机器人或 userbot 出错时推送；空则不推 |
 | `MEDIA_MAX_BYTES` | `0` | 单文件存档上限，0 为不限；Telegraph 文章的网页媒体此时仍有 2 GiB 的默认上限（作者不可信） |
 | `BOT_API_MANAGED` | `true` | 是否托管 `telegram-bot-api` 子进程 |
@@ -82,6 +83,7 @@ services:
 - 容器以 UID/GID 10001 运行，镜像自带健康检查 `GET /healthz`
 - 硬件转码：compose 加 `devices: [/dev/dri:/dev/dri]`，并用 `group_add` 加入宿主 render 节点所属的组（`stat -c %g /dev/dri/renderD128`）
 - 前面必须有反代做认证并写入 `Remote-User`，且先剥掉客户端自带的 `Remote-*` 头；SSE 路径 `/api/events` 不要缓冲
+- 反代须原样转发 `Host`（Caddy 默认如此），用域名访问时把该域名写进 `ALLOWED_HOSTS`；写请求一律要求 `Content-Type: application/json`，带 `Origin` 时须与 `Host` 一致，自写脚本调用 API 时注意
 - 首次使用：管理 → API 凭据填 [my.telegram.org](https://my.telegram.org) 的 `api_id` / `api_hash` → 添加机器人并设置白名单 →（可选）用户账号登录
 
 ## 许可

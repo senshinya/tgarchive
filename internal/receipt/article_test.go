@@ -56,12 +56,12 @@ func TestArticleSeenUntilMediaSettle(t *testing.T) {
 	if got := v.tr.(*rec).take(); len(got) != 0 {
 		t.Fatalf("fetched with pending media: calls = %v", got)
 	}
-	v.st.MarkMediaDone(ctx, mids[0], "web/a.jpg", 1)
+	v.st.MarkMediaDone(ctx, mids[0], v.key(t, mids[0]), "web/a.jpg", 1)
 	v.e.MediaSettled(ctx, mids[0])
 	if got := v.tr.(*rec).take(); len(got) != 0 {
 		t.Fatalf("one media still pending: calls = %v", got)
 	}
-	v.st.MarkMediaFailed(ctx, mids[1], 1, "地址不允许")
+	v.st.MarkMediaFailed(ctx, mids[1], v.key(t, mids[1]), 1, "地址不允许")
 	v.e.MediaSettled(ctx, mids[1])
 	if got := v.tr.(*rec).take(); !reflect.DeepEqual(got, []string{"react 42 10 👌"}) {
 		t.Fatalf("settled calls = %v (a failed article image must not block 👌 or reply)", got)

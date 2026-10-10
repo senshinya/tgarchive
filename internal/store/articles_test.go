@@ -78,7 +78,7 @@ func TestSaveAndGetArticle(t *testing.T) {
 	if v.Article.State != TelegraphFetched || v.Article.Title != "Title Sample" || v.Article.AuthorName != "Author" || v.Article.ImageMediaID != 0 {
 		t.Fatalf("summary before cover download = %+v", v.Article)
 	}
-	if _, err := s.MarkMediaDone(ctx, a.Media[0].ID, "web/2026/10/x.jpg", 3); err != nil {
+	if _, err := s.MarkMediaDone(ctx, a.Media[0].ID, mediaKey(t, s, a.Media[0].ID), "web/2026/10/x.jpg", 3); err != nil {
 		t.Fatal(err)
 	}
 	v, _ = s.GetMessageView(ctx, res.MessageID)
@@ -111,7 +111,7 @@ func TestArticleMediaSharedAcrossSnapshots(t *testing.T) {
 		t.Fatalf("media rows = %d, want 1 (deduped)", n)
 	}
 	a, _ := s.GetArticle(ctx, r1.MessageID)
-	s.MarkMediaDone(ctx, a.Media[0].ID, "web/2026/10/a.jpg", 3)
+	s.MarkMediaDone(ctx, a.Media[0].ID, mediaKey(t, s, a.Media[0].ID), "web/2026/10/a.jpg", 3)
 
 	if _, orphans, err := s.DeleteMessage(ctx, r1.MessageID, 7000); err != nil || len(orphans) != 0 {
 		t.Fatalf("delete first snapshot: orphans %v, %v", orphans, err)

@@ -58,12 +58,15 @@ type Fetcher struct {
 	ReadyWait time.Duration // how long a job waits for a connecting account
 	RetryWait time.Duration // pause before retrying after a transient connection error
 	Now       func() time.Time
+	// Absent is updated by every dialogs scan but never consulted: a link is sent when the user
+	// wants it, possibly right after joining. Shared with the Watcher.
+	Absent *AbsentChannels
 }
 
 func NewFetcher(api API, st *store.Store, rc JobReceipts, tr receipt.Transport, hub *events.Hub, wake func(), mediaDir string) *Fetcher {
 	return &Fetcher{api: api, st: st, receipts: rc, transport: tr, hub: hub, wakeDL: wake, mediaDir: mediaDir,
 		wake: make(chan struct{}, 1), Gap: 3 * time.Second, MaxFlood: 300 * time.Second, FloodPad: time.Second,
-		ReadyWait: 30 * time.Second, RetryWait: time.Second, Now: time.Now}
+		ReadyWait: 30 * time.Second, RetryWait: time.Second, Now: time.Now, Absent: NewAbsentChannels()}
 }
 
 // TryHandle implements collector.LinkHandler. It only enqueues; Run does the fetching.
@@ -286,12 +289,15 @@ func (f *Fetcher) fetchMessages(ctx context.Context, api *tg.Client, ch *tg.Chan
 // userbot_peers cache (as opposed to a fresh username resolve or dialogs scan): only a cached hit
 // might be stale, so only it is worth invalidating and retrying on CHANNEL_INVALID/CHANNEL_PRIVATE.
 func (f *Fetcher) resolve(ctx context.Context, api *tg.Client, link linkparse.Link) (ch *tg.Channel, cached bool, err error) {
-	return resolveChannel(ctx, api, f.st, f.Now, link)
+	return resolveChannel(ctx, api, f.st, f.Now, f.Absent, link)
 }
 
 // resolveChannel finds the channel a link refers to: by username, else from the userbot_peers
-// cache, else by scanning the account's dialogs (caching every channel seen).
-func resolveChannel(ctx context.Context, api *tg.Client, st *store.Store, now func() time.Time, link linkparse.Link) (ch *tg.Channel, cached bool, err error) {
+// cache, else by scanning the account's dialogs (caching every channel seen). A scan clears the
+// channels it saw from absent and records the linked one there when the whole scan missed it;
+// whether to scan at all is the caller's call.
+func resolveChannel(ctx context.Context, api *tg.Client, st *store.Store, now func() time.Time, absent *AbsentChannels,
+	link linkparse.Link) (ch *tg.Channel, cached bool, err error) {
 	if link.Username != "" {
 		r, err := api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: link.Username})
 		if err != nil {
@@ -335,13 +341,17 @@ func resolveChannel(ctx context.Context, api *tg.Client, st *store.Store, now fu
 		return nil, false, err
 	}
 	all := make([]*tg.Channel, 0, len(seen))
-	for _, c := range seen {
+	ids := make([]int64, 0, len(seen))
+	for id, c := range seen {
 		all = append(all, c)
+		ids = append(ids, id)
 	}
 	savePeers(ctx, st, now, all...)
+	absent.remove(ids...)
 	if c := seen[link.ChannelID]; c != nil {
 		return c, false, nil
 	}
+	absent.add(link.ChannelID, now())
 	return nil, false, errNotMember
 }
 
@@ -401,7 +411,8 @@ func (f *Fetcher) archive(ctx context.Context, job *store.FetchJob, got *fetched
 		if err != nil {
 			return err
 		}
-		ir, err := f.st.Ingest(ctx, store.IngestInput{BotID: job.BotID, Sender: sender, Msg: msg, Now: now})
+		// The user sent the link again: a post deleted from the archive comes back.
+		ir, err := f.st.Ingest(ctx, store.IngestInput{BotID: job.BotID, Sender: sender, Msg: msg, Now: now, Revive: true})
 		if err != nil {
 			return err
 		}

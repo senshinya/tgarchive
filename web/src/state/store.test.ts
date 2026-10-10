@@ -594,6 +594,40 @@ describe('conversation windows', () => {
     await s.refreshLatest(10, { reset: true });
     expect(ids(s.conv(10).items)).toEqual(ids(page(151, 200)));
   });
+
+  it('keeps a window short of the latest on resync', async () => {
+    const s = createStore(fakeApi({ messages: serve }));
+    await s.loadAround(10, 60);
+    await s.resync();
+    expect(ids(s.conv(10).items)).toEqual(ids(page(36, 85)));
+    expect(s.conv(10)).toMatchObject({ hasMore: true, hasNewer: true, loading: false });
+    await s.loadNewer(10);
+    expect(ids(s.conv(10).items)).toEqual(ids(page(36, 135)));
+  });
+
+  it('extends a window that reaches the latest page on resync', async () => {
+    const s = createStore(fakeApi({ messages: serve }));
+    await s.loadAround(10, 150); // 126..175, newer posts exist
+    await s.resync();
+    expect(ids(s.conv(10).items)).toEqual(ids(page(126, 200)));
+    expect(s.conv(10).hasNewer).toBe(false);
+  });
+
+  it('keeps the list on resync when more arrived than one page, leaving the rest to load', async () => {
+    let top = 120;
+    const messages = vi.fn(async (_c: number, _before = 0, limit = 50, extra: { after?: number } = {}) => {
+      const have = all.filter((m) => m.id <= top);
+      return extra.after ? have.filter((m) => m.id > extra.after!).slice(0, limit) : have.slice(-limit);
+    });
+    const s = createStore(fakeApi({ messages }));
+    await s.refreshLatest(10); // 71..120, the latest
+    top = 200; // 80 more while disconnected
+    await s.resync();
+    expect(ids(s.conv(10).items)).toEqual(ids(page(71, 120)));
+    expect(s.conv(10).hasNewer).toBe(true);
+    await s.loadNewer(10);
+    expect(ids(s.conv(10).items)).toEqual(ids(page(71, 170)));
+  });
 });
 
 describe('read marks', () => {

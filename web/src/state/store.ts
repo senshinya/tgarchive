@@ -271,8 +271,10 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
   }
 
   /** Loads the newest page; merges when it overlaps what we have, otherwise (or with reset, or
-   * when showing a window short of the latest) starts over. */
-  async function refreshLatest(chatId: number, opts: { reset?: boolean } = {}) {
+   * when showing a window short of the latest) starts over. With keep (a resync) the loaded list
+   * is never replaced: a page that does not reach it leaves it as a window short of the latest,
+   * for loadNewer to fill in as the user scrolls, so the view and the unread posts stay put. */
+  async function refreshLatest(chatId: number, opts: { reset?: boolean; keep?: boolean } = {}) {
     if (conv(chatId).loading) return;
     setConv(chatId, { loading: true, error: '' });
     const gen = generation(chatId);
@@ -281,14 +283,19 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
       if (gen !== generation(chatId)) return;
       const c = conv(chatId);
       const newestKnown = c.items[c.items.length - 1];
-      const overlaps = !opts.reset && !c.hasNewer && c.loaded && page.length > 0 && !!newestKnown && byPosition(page[0], newestKnown) <= 0;
+      const keep = !!opts.keep && !opts.reset && c.loaded && !!newestKnown && page.length > 0;
+      const reaches = page.length > 0 && !!newestKnown && byPosition(page[0], newestKnown) <= 0;
+      const overlaps = !opts.reset && (keep || !c.hasNewer) && c.loaded && reaches;
       if (overlaps) {
         // Within the refreshed window [page[0], newest], the server is authoritative: drop
         // anything we had there that it no longer returns (deleted while disconnected). Items
         // older than the window are untouched.
         const pageIds = new Set(page.map((m) => m.id));
         const kept = c.items.filter((m) => byPosition(m, page[0]) < 0 || pageIds.has(m.id));
-        setConv(chatId, { items: mergeById(kept, page), loading: false, loaded: true });
+        setConv(chatId, { items: mergeById(kept, page), hasNewer: false, loading: false, loaded: true });
+      } else if (keep) {
+        // The latest page starts after what is loaded: more is missing between them.
+        setConv(chatId, { hasNewer: true, loading: false });
       } else {
         setConv(chatId, { items: page, hasMore: page.length >= PAGE_SIZE, hasNewer: false, loading: false, loaded: true });
       }
@@ -472,7 +479,8 @@ export function createStore(api: Api, opts: { chatsReloadDelay?: number; downloa
     const loaded = Object.entries(conversations.value)
       .filter(([, c]) => c.loaded)
       .map(([id]) => Number(id));
-    await Promise.all(loaded.map((id) => refreshLatest(id)));
+    // A window short of the latest (a jump, the unread posts) stays where it is.
+    await Promise.all(loaded.map((id) => refreshLatest(id, { keep: true })));
     for (const l of eventListeners) l({ type: 'resync', data: null });
   }
 

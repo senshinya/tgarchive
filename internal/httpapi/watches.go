@@ -39,6 +39,8 @@ const (
 	watchCallTimeout = 90 * time.Second
 	maxWindow        = 1440
 	maxRefreshPosts  = 100
+	// A dialogs rescan pages through the whole account; asking again sooner gets the cached list.
+	channelsRefreshEvery = 5 * time.Minute
 )
 
 func (s *Server) watchRoutes(mux *http.ServeMux) {
@@ -46,6 +48,7 @@ func (s *Server) watchRoutes(mux *http.ServeMux) {
 		return
 	}
 	mux.HandleFunc("GET /api/admin/channels", s.listChannels)
+	mux.HandleFunc("POST /api/admin/channels/refresh", s.refreshChannels)
 	mux.HandleFunc("GET /api/admin/channels/search", s.searchChannels)
 	mux.HandleFunc("POST /api/admin/channels/resolve", s.resolveChannel)
 	mux.HandleFunc("POST /api/admin/watches/test", s.testWatch)
@@ -138,20 +141,42 @@ func (s *Server) withWatched(ctx context.Context, list []userbot.ChannelInfo) ([
 	return out, nil
 }
 
+// listChannels answers with the cached channel list. It never forces a rescan: a GET can be fired
+// by any page (an <img>), and a rescan costs Telegram requests. The watcher still fills an empty or
+// expired cache on its own schedule.
 func (s *Server) listChannels(w http.ResponseWriter, r *http.Request) {
+	s.writeChannels(w, r, false)
+}
+
+// refreshChannels asks for a rescan of the account's dialogs, at most every channelsRefreshEvery;
+// sooner, it answers like listChannels. The scan runs in the background (loading is true meanwhile).
+func (s *Server) refreshChannels(w http.ResponseWriter, r *http.Request) {
+	s.channelsMu.Lock()
+	refresh := s.Now().Sub(s.channelsRefreshed) >= channelsRefreshEvery
+	s.channelsMu.Unlock()
+	if s.writeChannels(w, r, refresh) && refresh {
+		s.channelsMu.Lock()
+		s.channelsRefreshed = s.Now()
+		s.channelsMu.Unlock()
+	}
+}
+
+// writeChannels answers with the channel list and reports whether the watcher took the request.
+func (s *Server) writeChannels(w http.ResponseWriter, r *http.Request, refresh bool) bool {
 	ctx, cancel := context.WithTimeout(r.Context(), watchCallTimeout)
 	defer cancel()
-	list, err := s.Watcher.Channels(ctx, r.URL.Query().Get("refresh") == "1")
+	list, err := s.Watcher.Channels(ctx, refresh)
 	if err != nil {
 		watchErr(w, err)
-		return
+		return false
 	}
 	items, err := s.withWatched(r.Context(), list.Channels)
 	if err != nil {
 		storeErr(w, err)
-		return
+		return false
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"channels": items, "loading": list.Loading, "updated_at": list.UpdatedAt, "error": list.Error})
+	return true
 }
 
 func (s *Server) searchChannels(w http.ResponseWriter, r *http.Request) {

@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
@@ -38,8 +37,7 @@ func (s *Server) addBot(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Token string `json:"token"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid json")
+	if !decodeSmall(w, r, &req) {
 		return
 	}
 	token := strings.TrimSpace(req.Token)
@@ -104,7 +102,14 @@ func (s *Server) patchBot(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled *bool `json:"enabled"`
 	}
-	if !ok || json.NewDecoder(r.Body).Decode(&req) != nil || req.Enabled == nil {
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad bot id")
+		return
+	}
+	if !decodeSmall(w, r, &req) {
+		return
+	}
+	if req.Enabled == nil {
 		writeErr(w, http.StatusBadRequest, `body must be {"enabled": bool}`)
 		return
 	}
@@ -199,8 +204,11 @@ func (s *Server) putWhitelist(w http.ResponseWriter, r *http.Request) {
 		Note     string `json:"note"`
 		CanFetch bool   `json:"can_fetch"`
 	}
-	if err != nil || uid <= 0 || json.NewDecoder(r.Body).Decode(&req) != nil {
-		writeErr(w, http.StatusBadRequest, "bad user id or body")
+	if err != nil || uid <= 0 {
+		writeErr(w, http.StatusBadRequest, "bad user id")
+		return
+	}
+	if !decodeSmall(w, r, &req) {
 		return
 	}
 	if err := s.Store.PutWhitelist(r.Context(), store.WhitelistEntry{BotID: id, TgUserID: uid, Note: req.Note, CanFetch: req.CanFetch}); err != nil {

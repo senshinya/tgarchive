@@ -252,6 +252,12 @@ func (s *Store) DeleteWatch(ctx context.Context, id int64, purge bool) (chatID i
 		if !purge {
 			return nil
 		}
+		// The media of the conversation's messages, which the cascade below unlinks.
+		unlinked, err := queryIDs(ctx, tx, `SELECT DISTINCT mm.media_id FROM chats c JOIN messages m ON m.chat_id = c.id
+			JOIN message_media mm ON mm.message_id = m.id WHERE c.channel_id = ?`, channelID)
+		if err != nil {
+			return err
+		}
 		err = tx.QueryRowContext(ctx, "DELETE FROM chats WHERE channel_id = ? RETURNING id", channelID).Scan(&chatID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -259,7 +265,7 @@ func (s *Store) DeleteWatch(ctx context.Context, id int64, purge bool) (chatID i
 		if err != nil {
 			return err
 		}
-		orphans, err = collectOrphans(ctx, tx)
+		orphans, err = collectOrphans(ctx, tx, unlinked)
 		return err
 	})
 	return chatID, orphans, err

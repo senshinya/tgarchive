@@ -3,6 +3,7 @@ package downloader
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -92,7 +93,7 @@ func TestProcessSuccess(t *testing.T) {
 	if got.State != store.StateDone || got.Size != 4 {
 		t.Fatalf("media = %+v", got)
 	}
-	if !regexp.MustCompile(`^\d+/2026/10/[0-9a-f]{40}\.jpg$`).MatchString(got.Path) {
+	if !regexp.MustCompile(`^\d+/2026/10/[0-9a-f]{40}-\d+\.jpg$`).MatchString(got.Path) {
 		t.Fatalf("path = %q", got.Path)
 	}
 	if _, err := os.Stat(filepath.Join(f.mediaDir, got.Path)); err != nil {
@@ -148,6 +149,142 @@ func TestDeletedWhileDownloadingRemovesFile(t *testing.T) {
 	entries, _ := os.ReadDir(filepath.Join(f.mediaDir, "1", "2026", "10"))
 	if len(entries) != 0 {
 		t.Fatalf("orphaned download left on disk: %v", entries)
+	}
+}
+
+// stallSource writes the media id into the file it fetches, holding the fetch of stall until
+// release is closed.
+type stallSource struct {
+	stall   int64
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *stallSource) Fetch(_ context.Context, m *store.Media, dstBase string) (string, int64, error) {
+	if m.ID == s.stall {
+		close(s.started)
+		<-s.release
+	}
+	body := []byte(fmt.Sprintf("media %d", m.ID))
+	p := dstBase + ".jpg"
+	return p, int64(len(body)), os.WriteFile(p, body, 0o644)
+}
+
+// A download outliving its media row must not touch the file of the row that replaced it: the
+// message is deleted mid-download (the row goes as an orphan), the same file is sent again (a
+// new row, same dedupe key), and the new row finishes first. The stale download then completes
+// and drops its file, which used to be the new row's file too, leaving it done but missing.
+func TestStaleDownloadKeepsReplacementFile(t *testing.T) {
+	f, res, stale := setup(t, 0)
+	d := f.newDL(0)
+	src := &stallSource{stall: stale.ID, started: make(chan struct{}), release: make(chan struct{})}
+	d.Register("bot", src)
+	staleDone := make(chan struct{})
+	go func() { d.Process(ctx, stale); close(staleDone) }()
+	<-src.started
+
+	ingestKey := func(tgID int64, key string) int64 {
+		t.Helper()
+		msg := &model.Message{TgMessageID: tgID, Source: model.SourceBotUpdate, Date: 1, Kind: model.KindPhoto, RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`),
+			Media: []model.Media{{DedupeKey: key, SourceRef: "fid", Kind: "photo", Role: model.RoleMain}}}
+		if _, err := f.st.Ingest(ctx, store.IngestInput{BotID: f.bot, Sender: model.Sender{TgUserID: 42}, Msg: msg, Now: 2}); err != nil {
+			t.Fatal(err)
+		}
+		due, _ := f.st.DueMedia(ctx, 0, 10)
+		for _, m := range due {
+			if m.DedupeKey == key {
+				return m.ID
+			}
+		}
+		t.Fatalf("no due media for %s", key)
+		return 0
+	}
+	ingestKey(2, "bot:other") // so the deleted row is not the newest and its id is not reused
+	if _, _, err := f.st.DeleteMessage(ctx, res.MessageID, 1); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := f.st.GetMedia(ctx, ingestKey(3, "bot:k"))
+	if err != nil || fresh.ID == stale.ID {
+		t.Fatalf("fresh = %+v %v, want a new row", fresh, err)
+	}
+	d.Process(ctx, fresh)
+
+	close(src.release)
+	<-staleDone
+	got, _ := f.st.GetMedia(ctx, fresh.ID)
+	if got.State != store.StateDone {
+		t.Fatalf("media = %+v", got)
+	}
+	b, err := os.ReadFile(filepath.Join(f.mediaDir, got.Path))
+	if err != nil {
+		t.Fatalf("replacement file gone: %v", err)
+	}
+	if want := fmt.Sprintf("media %d", fresh.ID); string(b) != want {
+		t.Fatalf("replacement file holds %q, want %q", b, want)
+	}
+	if _, err := f.st.GetMedia(ctx, stale.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("stale row still there: %v", err)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(filepath.Join(f.mediaDir, got.Path)))
+	if len(entries) != 1 {
+		t.Fatalf("files left = %v, want only the replacement", entries)
+	}
+}
+
+// media.id is a plain INTEGER PRIMARY KEY: delete the newest row and the next insert takes its id.
+// A stale download finishing after that must leave the unrelated media now holding the id alone
+// (pending, no path) and drop its own file, so the new media is still downloaded in its turn.
+func TestStaleDownloadIgnoresReusedID(t *testing.T) {
+	f, res, stale := setup(t, 0)
+	d := f.newDL(0)
+	src := &stallSource{stall: stale.ID, started: make(chan struct{}), release: make(chan struct{})}
+	d.Register("bot", src)
+	staleDone := make(chan struct{})
+	go func() { d.Process(ctx, stale); close(staleDone) }()
+	<-src.started
+
+	if _, _, err := f.st.DeleteMessage(ctx, res.MessageID, 1); err != nil {
+		t.Fatal(err)
+	}
+	msg := &model.Message{TgMessageID: 2, Source: model.SourceBotUpdate, Date: 1, Kind: model.KindPhoto, RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`),
+		Media: []model.Media{{DedupeKey: "bot:new", SourceRef: "fid2", Kind: "photo", Role: model.RoleMain}}}
+	if _, err := f.st.Ingest(ctx, store.IngestInput{BotID: f.bot, Sender: model.Sender{TgUserID: 42}, Msg: msg, Now: 2}); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := f.st.GetMedia(ctx, stale.ID)
+	if err != nil || fresh.DedupeKey != "bot:new" {
+		t.Fatalf("media %d = %+v %v, want the new media reusing the id", stale.ID, fresh, err)
+	}
+
+	close(src.release)
+	<-staleDone
+	got, _ := f.st.GetMedia(ctx, fresh.ID)
+	if got.State != store.StatePending || got.Path != "" || got.Attempts != 0 {
+		t.Fatalf("new media after the stale download = %+v, want untouched", got)
+	}
+	if len(f.settled) != 0 {
+		t.Fatalf("settled = %v", f.settled)
+	}
+	dir := filepath.Join(f.mediaDir, "1", "2026", "10")
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("stale download left on disk: %v", entries)
+	}
+
+	d.Register("bot", &stallSource{}) // same id: the stall was meant for the old media only
+	d.Process(ctx, got)
+	got, _ = f.st.GetMedia(ctx, fresh.ID)
+	if got.State != store.StateDone {
+		t.Fatalf("new media = %+v", got)
+	}
+	b, err := os.ReadFile(filepath.Join(f.mediaDir, got.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("media %d", fresh.ID); string(b) != want {
+		t.Fatalf("file holds %q, want %q", b, want)
+	}
+	if !strings.Contains(got.Path, fmt.Sprintf("%x", sha1.Sum([]byte("bot:new")))) {
+		t.Fatalf("path = %q, want the new media's own file", got.Path)
 	}
 }
 
@@ -311,6 +448,59 @@ func TestWebDownloadsDoNotStarveBotSlots(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not shut down after the blocked web downloads were released")
+	}
+}
+
+// A backlog of web media older than the due batch must not hide newer Telegram media from Run:
+// with 40 web items due ahead of it, a bot item used to fall outside the first 32 rows Run
+// looked at, so free slots sat idle until the whole web backlog drained.
+func TestWebBacklogDoesNotHideBotMedia(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	bot, _ := st.UpsertBot(ctx, &store.Bot{TgBotID: 777, TokenEnc: []byte("x"), CreatedAt: 1})
+	ingest := func(tgID int64, key string) {
+		t.Helper()
+		msg := &model.Message{TgMessageID: tgID, Source: model.SourceBotUpdate, Date: 1, Kind: model.KindPhoto, RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`),
+			Media: []model.Media{{DedupeKey: key, SourceRef: "x", Kind: "photo", Role: model.RoleMain}}}
+		if _, err := st.Ingest(ctx, store.IngestInput{BotID: bot, Sender: model.Sender{TgUserID: 42}, Msg: msg, Now: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 40; i++ {
+		ingest(int64(i+1), fmt.Sprintf("web:%d", i))
+	}
+	ingest(41, "bot:k")
+	due, err := st.DueMedia(ctx, 0, 100)
+	if err != nil || len(due) != 41 || due[40].DedupeKey != "bot:k" {
+		t.Fatalf("due = %d %v", len(due), err)
+	}
+	botMediaID := due[40].ID
+
+	d := New(st, t.TempDir(), 0, func(int64) {})
+	d.Now = func() time.Time { return time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC) }
+	block := make(chan struct{})
+	d.Register("web", &fakeSource{hook: func() { <-block }})
+	d.Register("bot", &fakeSource{})
+
+	c, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { d.Run(c); close(done) }()
+	defer func() { close(block); cancel(); <-done }() // Run waits for the web fetches to return
+
+	// Run's first pass happens at once; the next would only come with the 5s tick.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, _ := st.GetMedia(ctx, botMediaID)
+		if got.State == store.StateDone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("bot media was not claimed while a web backlog filled the due batch")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

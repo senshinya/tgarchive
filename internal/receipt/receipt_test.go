@@ -108,6 +108,16 @@ func newEnvWithFailingTransport(t *testing.T, failReact bool, fails int) (*env, 
 	return &env{st: st, bot: bot, tr: tr, e: New(st, tr)}, tr
 }
 
+// key is the dedupe key of media row id, which the MarkMedia* calls must name with it.
+func (v *env) key(t *testing.T, id int64) string {
+	t.Helper()
+	m, err := v.st.GetMedia(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m.DedupeKey
+}
+
 func (v *env) ingest(t *testing.T, id int64, source string, keys ...string) (int64, []int64) {
 	m := &model.Message{TgMessageID: id, Source: source, Date: id, Kind: model.KindText, Text: "t", RawFormat: model.RawBotAPI, Raw: json.RawMessage(`{}`)}
 	for _, k := range keys {
@@ -147,7 +157,7 @@ func TestPendingThenDone(t *testing.T) {
 	if got := v.tr.(*rec).take(); !reflect.DeepEqual(got, []string{"react 42 10 👀"}) {
 		t.Fatalf("pending calls = %v", got)
 	}
-	v.st.MarkMediaDone(ctx, mids[0], "p", 1)
+	v.st.MarkMediaDone(ctx, mids[0], v.key(t, mids[0]), "p", 1)
 	v.e.MediaSettled(ctx, mids[0])
 	if got := v.tr.(*rec).take(); !reflect.DeepEqual(got, []string{"react 42 10 👌"}) {
 		t.Fatalf("done calls = %v", got)
@@ -157,7 +167,7 @@ func TestPendingThenDone(t *testing.T) {
 func TestFailureRepliesOnceThenRecovers(t *testing.T) {
 	v := newEnv(t)
 	id, mids := v.ingest(t, 10, model.SourceBotUpdate, "bot:a")
-	v.st.MarkMediaFailed(ctx, mids[0], 4, strings.Repeat("x", 300))
+	v.st.MarkMediaFailed(ctx, mids[0], v.key(t, mids[0]), 4, strings.Repeat("x", 300))
 	v.e.MediaSettled(ctx, mids[0])
 	v.e.Evaluate(ctx, id)
 	got := v.tr.(*rec).take()
@@ -165,7 +175,7 @@ func TestFailureRepliesOnceThenRecovers(t *testing.T) {
 		t.Fatalf("failure calls = %v", got)
 	}
 	v.st.ResetMedia(ctx, mids[0])
-	v.st.MarkMediaDone(ctx, mids[0], "p", 1)
+	v.st.MarkMediaDone(ctx, mids[0], v.key(t, mids[0]), "p", 1)
 	v.e.MediaSettled(ctx, mids[0])
 	if got := v.tr.(*rec).take(); !reflect.DeepEqual(got, []string{"react 42 10 👌"}) {
 		t.Fatalf("recovery calls = %v", got)
@@ -175,7 +185,7 @@ func TestFailureRepliesOnceThenRecovers(t *testing.T) {
 func TestTooLargeRepliesAndCompletes(t *testing.T) {
 	v := newEnv(t)
 	_, mids := v.ingest(t, 10, model.SourceBotUpdate, "bot:a")
-	v.st.MarkMediaTooLarge(ctx, mids[0])
+	v.st.MarkMediaTooLarge(ctx, mids[0], v.key(t, mids[0]))
 	v.e.MediaSettled(ctx, mids[0])
 	if got := v.tr.(*rec).take(); !reflect.DeepEqual(got, []string{"react 42 10 👌", "reply 42 10 文件超过存档上限，仅保存了消息记录"}) {
 		t.Fatalf("calls = %v", got)
@@ -217,7 +227,7 @@ func TestRetriesOnReactionFailure(t *testing.T) {
 func TestRetriesOnReplyFailure(t *testing.T) {
 	v, tr := newEnvWithFailingTransport(t, false, 1)
 	id, mids := v.ingest(t, 10, model.SourceBotUpdate, "bot:a")
-	v.st.MarkMediaFailed(ctx, mids[0], 4, "error text")
+	v.st.MarkMediaFailed(ctx, mids[0], v.key(t, mids[0]), 4, "error text")
 	// First Evaluate: Reply fails, receipt stays none
 	v.e.Evaluate(ctx, id)
 	calls := tr.take()
@@ -243,7 +253,7 @@ func TestRetriesOnReplyFailure(t *testing.T) {
 func TestFailureReplyRedactsToken(t *testing.T) {
 	v := newEnv(t)
 	_, mids := v.ingest(t, 10, model.SourceBotUpdate, "bot:a")
-	v.st.MarkMediaFailed(ctx, mids[0], 4, "open /x/777:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/documents/f: denied")
+	v.st.MarkMediaFailed(ctx, mids[0], v.key(t, mids[0]), 4, "open /x/777:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/documents/f: denied")
 	v.e.MediaSettled(ctx, mids[0])
 	got := v.tr.(*rec).take()
 	if len(got) != 2 || got[1] != "reply 42 10 ⚠️ 存档失败：open /x/<bot>/documents/f: denied" {
@@ -281,7 +291,7 @@ func TestTransportCallsHaveTimeout(t *testing.T) {
 	tr := &deadlineRec{}
 	v.e = New(v.st, tr)
 	id, mids := v.ingest(t, 10, model.SourceBotUpdate, "bot:a")
-	v.st.MarkMediaFailed(ctx, mids[0], 4, "boom")
+	v.st.MarkMediaFailed(ctx, mids[0], v.key(t, mids[0]), 4, "boom")
 	v.e.Evaluate(ctx, id)
 	if len(tr.deadlines) != 2 {
 		t.Fatalf("calls = %v", tr.deadlines)

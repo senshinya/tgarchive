@@ -37,6 +37,25 @@ func TestLoadDefaults(t *testing.T) {
 	if !c.Transcode || c.VAAPIDevice != "/dev/dri/renderD128" {
 		t.Fatalf("unexpected transcode defaults: %+v", c)
 	}
+	if c.AllowedHosts != nil {
+		t.Fatalf("AllowedHosts = %q, want none", c.AllowedHosts)
+	}
+}
+
+func TestLoadAllowedHosts(t *testing.T) {
+	for in, want := range map[string]string{
+		"archive.example.com":                "archive.example.com",
+		" Archive.Example.com , tg.lan. ,, ": "archive.example.com|tg.lan",
+		"*":                                  "*",
+	} {
+		c, err := Load(env(map[string]string{"TOKEN_ENC_KEY": validKey, "ALLOWED_HOSTS": in}))
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if got := strings.Join(c.AllowedHosts, "|"); got != want {
+			t.Fatalf("%q: AllowedHosts = %q, want %q", in, got, want)
+		}
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -69,6 +88,10 @@ func TestLoadRejects(t *testing.T) {
 		"bad transcode":      {"TOKEN_ENC_KEY": validKey, "TRANSCODE": "1"},
 		"quoted max bytes":   {"TOKEN_ENC_KEY": validKey, "MEDIA_MAX_BYTES": `"100"`},
 		"negative max bytes": {"TOKEN_ENC_KEY": validKey, "MEDIA_MAX_BYTES": "-1"},
+		"host with port":     {"TOKEN_ENC_KEY": validKey, "ALLOWED_HOSTS": "tg.lan:8090"},
+		"host with scheme":   {"TOKEN_ENC_KEY": validKey, "ALLOWED_HOSTS": "http://tg.lan"},
+		"wildcard and hosts": {"TOKEN_ENC_KEY": validKey, "ALLOWED_HOSTS": "*,tg.lan"},
+		"partial wildcard":   {"TOKEN_ENC_KEY": validKey, "ALLOWED_HOSTS": "*.tg.lan"},
 	}
 	for name, m := range cases {
 		t.Run(name, func(t *testing.T) {

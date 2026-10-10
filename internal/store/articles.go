@@ -109,6 +109,7 @@ type ArticleView struct {
 
 // GetArticle returns the archived article of a non-deleted message (ErrNotFound when none).
 func (s *Store) GetArticle(ctx context.Context, messageID int64) (*ArticleView, error) {
+	s = s.reader()
 	var v ArticleView
 	var content string
 	err := s.db.QueryRowContext(ctx, `

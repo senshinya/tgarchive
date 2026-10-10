@@ -75,7 +75,7 @@ func TestIngestEditReplacesMedia(t *testing.T) {
 	bot := seedBot(t, s, 777)
 	res := ingest(t, s, bot, photoMsg(1, "bot:a"))
 	oldID := mediaIDs(t, s, res.MessageID)[0]
-	if ok, err := s.MarkMediaDone(ctx, oldID, "1/a.jpg", 4); !ok || err != nil {
+	if ok, err := s.MarkMediaDone(ctx, oldID, mediaKey(t, s, oldID), "1/a.jpg", 4); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
 	edit := photoMsg(1, "bot:b")
@@ -137,7 +137,7 @@ func TestDedupeAndOrphanCleanup(t *testing.T) {
 	if id1 != id2 {
 		t.Fatalf("same dedupe key must share a media row: %d vs %d", id1, id2)
 	}
-	s.MarkMediaDone(ctx, id1, "1/k.jpg", 4)
+	s.MarkMediaDone(ctx, id1, mediaKey(t, s, id1), "1/k.jpg", 4)
 	if _, orphans, err := s.DeleteMessage(ctx, r1.MessageID, 9000); err != nil || len(orphans) != 0 {
 		t.Fatalf("first delete must keep shared file: %v %v", orphans, err)
 	}
@@ -155,7 +155,7 @@ func TestFailedMediaRequeuedWhenSeenAgain(t *testing.T) {
 	bot := seedBot(t, s, 777)
 	r := ingest(t, s, bot, photoMsg(1, "bot:k"))
 	id := mediaIDs(t, s, r.MessageID)[0]
-	s.MarkMediaFailed(ctx, id, 4, "boom")
+	s.MarkMediaFailed(ctx, id, mediaKey(t, s, id), 4, "boom")
 	ingest(t, s, bot, photoMsg(2, "bot:k"))
 	m, _ := s.GetMedia(ctx, id)
 	if m.State != StatePending || m.Attempts != 0 || m.Error != "" {
@@ -168,7 +168,7 @@ func TestMediaStateMachine(t *testing.T) {
 	bot := seedBot(t, s, 777)
 	r := ingest(t, s, bot, photoMsg(1, "bot:k"))
 	id := mediaIDs(t, s, r.MessageID)[0]
-	if err := s.MarkMediaRetry(ctx, id, 1, 160, "net"); err != nil {
+	if err := s.MarkMediaRetry(ctx, id, mediaKey(t, s, id), 1, 160, "net"); err != nil {
 		t.Fatal(err)
 	}
 	if due, _ := s.DueMedia(ctx, 100, 10); len(due) != 0 {
@@ -180,17 +180,17 @@ func TestMediaStateMachine(t *testing.T) {
 	if err := s.ResetMedia(ctx, id); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("reset of non-failed media = %v", err)
 	}
-	s.MarkMediaFailed(ctx, id, 4, "gave up")
+	s.MarkMediaFailed(ctx, id, mediaKey(t, s, id), 4, "gave up")
 	if err := s.ResetMedia(ctx, id); err != nil {
 		t.Fatal(err)
 	}
 	if m, _ := s.GetMedia(ctx, id); m.State != StatePending || m.Attempts != 0 {
 		t.Fatalf("after reset = %+v", m)
 	}
-	if err := s.MarkMediaTooLarge(ctx, id); err != nil {
+	if err := s.MarkMediaTooLarge(ctx, id, mediaKey(t, s, id)); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s.MarkMediaDone(ctx, 9999, "x", 1); ok || err != nil {
+	if ok, err := s.MarkMediaDone(ctx, 9999, "bot:k", "x", 1); ok || err != nil {
 		t.Fatalf("MarkMediaDone on missing row = %v %v", ok, err)
 	}
 	ids, _ := s.MessagesForMedia(ctx, id)
@@ -224,7 +224,8 @@ func TestPurgeAndRemoveBot(t *testing.T) {
 	purge := seedBot(t, s, 2)
 	ingest(t, s, keep, textMsg(1, "kept"))
 	r := ingest(t, s, purge, photoMsg(1, "bot:p"))
-	s.MarkMediaDone(ctx, mediaIDs(t, s, r.MessageID)[0], "2/p.jpg", 4)
+	pid := mediaIDs(t, s, r.MessageID)[0]
+	s.MarkMediaDone(ctx, pid, mediaKey(t, s, pid), "2/p.jpg", 4)
 	if err := s.RemoveBot(ctx, keep); err != nil {
 		t.Fatal(err)
 	}
@@ -288,5 +289,106 @@ func TestUserbotFetchesKeyedByOriginChat(t *testing.T) {
 	}
 	if ids := mediaIDs(t, s, b.MessageID); len(ids) != 1 {
 		t.Fatalf("B media after deleting A = %v", ids)
+	}
+}
+
+func TestReviveBringsBackADeletedMessage(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	fetched := func(key, text string) *model.Message {
+		m := photoMsg(350, key)
+		m.Source = model.SourceUserbotFetch
+		m.OriginChatID = -1001
+		m.Text = text
+		return m
+	}
+	r := ingest(t, s, bot, fetched("mt:photo:a", "first fetch"))
+	if _, orphans, err := s.DeleteMessage(ctx, r.MessageID, 9000); err != nil || len(orphans) != 0 {
+		// Never downloaded, so the dropped media row had no file.
+		t.Fatalf("delete = %v, %v", orphans, err)
+	}
+
+	res, err := s.Ingest(ctx, IngestInput{BotID: bot, Sender: alice, Msg: fetched("mt:photo:a", "fetched again 重新存档"), Now: 9500, Revive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Created || res.MessageID != r.MessageID {
+		t.Fatalf("revive = %+v", res)
+	}
+	v, err := s.GetMessageView(ctx, r.MessageID)
+	if err != nil || v.Text != "fetched again 重新存档" {
+		t.Fatalf("view = %+v, %v", v, err)
+	}
+	// The media row went with the deletion; it is created again and queued for download.
+	if len(v.Media) != 1 || v.Media[0].State != StatePending {
+		t.Fatalf("media = %+v", v.Media)
+	}
+	if due, _ := s.DueMedia(ctx, 0, 10); len(due) != 1 || due[0].ID != v.Media[0].ID {
+		t.Fatalf("due = %+v", due)
+	}
+	hits, err := s.Search(ctx, "重新存档", 0, 0, 10)
+	if err != nil || len(hits) != 1 || hits[0].Message.ID != r.MessageID {
+		t.Fatalf("search = %+v, %v", hits, err)
+	}
+	// The conversation moves up as it does for a new fetch.
+	if chats, _ := s.ListChats(ctx, 0); len(chats) != 1 || chats[0].LastMessageAt != 9500 {
+		t.Fatalf("chats = %+v", chats)
+	}
+
+	// Reviving a live message is an ordinary edit.
+	again, err := s.Ingest(ctx, IngestInput{BotID: bot, Sender: alice, Msg: fetched("mt:photo:a", "edited"), Now: 9600, Revive: true})
+	if err != nil || again.Created || again.MessageID != r.MessageID {
+		t.Fatalf("edit = %+v, %v", again, err)
+	}
+}
+
+// mediaKey is the dedupe key of media row id, which the MarkMedia* calls must name with it.
+func mediaKey(t *testing.T, s *Store, id int64) string {
+	t.Helper()
+	m, err := s.GetMedia(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m.DedupeKey
+}
+
+// media.id is a plain INTEGER PRIMARY KEY, so deleting the newest row lets the next insert take
+// its id. An update aimed at the deleted media (a download that outlived its row) must not land
+// on the unrelated row now holding that id.
+func TestMarkMediaIgnoresReusedID(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	r := ingest(t, s, bot, photoMsg(1, "bot:a"))
+	id := mediaIDs(t, s, r.MessageID)[0]
+	if _, _, err := s.DeleteMessage(ctx, r.MessageID, 9000); err != nil {
+		t.Fatal(err)
+	}
+	reused := mediaIDs(t, s, ingest(t, s, bot, photoMsg(2, "bot:b")).MessageID)[0]
+	if reused != id {
+		t.Fatalf("new media got id %d, want the reused id %d", reused, id)
+	}
+
+	if ok, err := s.MarkMediaDone(ctx, id, "bot:a", "1/a.jpg", 4); ok || err != nil {
+		t.Fatalf("MarkMediaDone with the old key = %v %v", ok, err)
+	}
+	if err := s.MarkMediaRetry(ctx, id, "bot:a", 1, 160, "net"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkMediaFailed(ctx, id, "bot:a", 4, "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkMediaTooLarge(ctx, id, "bot:a"); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := s.GetMedia(ctx, id)
+	if m.DedupeKey != "bot:b" || m.State != StatePending || m.Path != "" || m.Attempts != 0 || m.NextAttemptAt != 0 || m.Error != "" {
+		t.Fatalf("reused row touched by updates for the old media: %+v", m)
+	}
+
+	if ok, err := s.MarkMediaDone(ctx, id, "bot:b", "1/b.jpg", 4); !ok || err != nil {
+		t.Fatalf("MarkMediaDone with the current key = %v %v", ok, err)
+	}
+	if m, _ := s.GetMedia(ctx, id); m.State != StateDone || m.Path != "1/b.jpg" {
+		t.Fatalf("media = %+v", m)
 	}
 }

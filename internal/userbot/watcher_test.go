@@ -184,7 +184,6 @@ func newWatchEnv(t *testing.T, cond string) *watchEnv {
 	}()
 	e.w = NewWatcher(e.api, st, hub, e.n, nil, t.TempDir())
 	e.w.Now = func() time.Time { return e.now }
-	e.w.MaxFlood = 0
 	st.PutPeers(ctx, []store.Peer{{ChannelID: 500, AccessHash: 5005, Title: "Chan", Username: "chan"}}, 1)
 	st.UpsertChannel(ctx, store.Channel{ChannelID: 500, Title: "Chan", Username: "chan"}, 1)
 	e.watch, err = st.CreateWatch(ctx, &store.Watch{ChannelID: 500, WindowMinutes: 30, Cond: cond, Enabled: true, CreatedAt: 1})

@@ -6,10 +6,14 @@ import (
 	"errors"
 	"io/fs"
 	"mime"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"tgarchive/internal/avatars"
@@ -43,6 +47,9 @@ type Server struct {
 	HTTP       *http.Client
 	Now        func() time.Time
 	PingEvery  time.Duration // SSE heartbeat interval; 0 means defaultPingEvery
+
+	channelsMu        sync.Mutex
+	channelsRefreshed time.Time // the last dialogs rescan asked for through POST /api/admin/channels/refresh
 }
 
 const defaultPingEvery = 25 * time.Second
@@ -83,12 +90,33 @@ func (s *Server) Handler() http.Handler {
 	s.favoriteRoutes(mux)
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) { writeErr(w, http.StatusNotFound, "not found") })
 	mux.Handle("GET /", s.spa())
-	return s.auth(mux)
+	return secureHeaders(s.auth(mux))
 }
+
+// secureHeaders keeps the archive out of other sites' frames (clickjacking) and its media and
+// avatars out of other sites' pages. The CSP is frame-ancestors alone, so the SPA's scripts and
+// styles are untouched; /media sets a stricter policy that repeats it.
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Content-Security-Policy", frameCSP)
+		if strings.HasPrefix(r.URL.Path, "/media/") || strings.HasPrefix(r.URL.Path, "/avatars/") {
+			h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+const frameCSP = "frame-ancestors 'none'"
 
 // auth is the in-app backstop behind Caddy forward_auth (which strips client-sent Remote-* headers).
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hostAllowed(r.Host, s.Cfg.AllowedHosts) {
+			writeErr(w, http.StatusForbidden, "host not allowed")
+			return
+		}
 		if s.Cfg.RequireForwardAuth && r.URL.Path != "/healthz" && r.Header.Get("Remote-User") == "" {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
@@ -101,8 +129,35 @@ func (s *Server) auth(next http.Handler) http.Handler {
 	})
 }
 
-// crossSite is a CSRF backstop for state-changing requests: browsers label cross-origin requests
-// with Sec-Fetch-Site, and a form or no-cors fetch cannot send an application/json body.
+// hostAllowed guards against DNS rebinding: a page on the attacker's name, re-pointed at this
+// server, would otherwise be same-origin with it. Rebinding needs a name of its own, so a Host that
+// is an IP address or localhost is always fine and the plain LAN deployment needs no setting; any
+// other name must be listed in ALLOWED_HOSTS, unless that is "*".
+func hostAllowed(hostport string, allowed []string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.ToLower(strings.Trim(host, "[]")), ".")
+	if host == "" {
+		return false
+	}
+	if _, err := netip.ParseAddr(host); err == nil || host == "localhost" {
+		return true
+	}
+	for _, a := range allowed {
+		if a == "*" || a == host {
+			return true
+		}
+	}
+	return false
+}
+
+// crossSite is a CSRF backstop for state-changing requests. Browsers label cross-origin requests
+// with Sec-Fetch-Site, but only from trustworthy origins: over plain HTTP to a LAN address they
+// leave it out. So every write must also say application/json, body or not (a form or a no-cors
+// fetch cannot, and a cross-origin fetch that does needs a CORS preflight this server never
+// grants), and an Origin, when sent, must name this host.
 func crossSite(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
@@ -111,12 +166,12 @@ func crossSite(r *http.Request) bool {
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" {
 		return true
 	}
-	switch r.Method {
-	case http.MethodPost, http.MethodPut, http.MethodPatch:
-		if r.ContentLength != 0 {
-			mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-			return err != nil || mt != "application/json"
-		}
+	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+		return true
+	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		u, err := url.Parse(origin)
+		return err != nil || u.Host == "" || !strings.EqualFold(u.Host, r.Host)
 	}
 	return false
 }
