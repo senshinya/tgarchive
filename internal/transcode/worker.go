@@ -15,7 +15,7 @@ import (
 type Store interface {
 	NextCompatJob(ctx context.Context) (*store.CompatJob, error)
 	SetCompat(ctx context.Context, id int64, state, codec, path, errMsg string) (bool, error)
-	ResetFailedCompat(ctx context.Context) error
+	PrepareCompatJobs(ctx context.Context) error
 }
 
 // Media probes and converts files; *Converter is the real one.
@@ -54,8 +54,8 @@ func (w *Worker) Wake() {
 }
 
 func (w *Worker) Run(ctx context.Context) {
-	if err := w.st.ResetFailedCompat(ctx); err != nil && ctx.Err() == nil {
-		log.Printf("transcode: reset failed conversions: %v", err)
+	if err := w.st.PrepareCompatJobs(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("transcode: prepare compatibility jobs: %v", err)
 	}
 	for {
 		if w.Step(ctx) {
@@ -94,6 +94,9 @@ func (w *Worker) Step(ctx context.Context) bool {
 	if !Needs(s) {
 		_, err := w.set(ctx, job.ID, store.CompatNone, s.Video, "", "")
 		return err == nil
+	}
+	if s.InvalidPTS {
+		log.Printf("transcode: media %d has backwards presentation timestamps; generating compatibility copy", job.ID)
 	}
 	rel := store.CompatRel(job.Path)
 	dst := filepath.Join(w.mediaDir, rel)

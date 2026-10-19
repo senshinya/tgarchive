@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Streams are the container and the codecs of a file's first video (cover art aside) and first
@@ -21,6 +22,8 @@ type Streams struct {
 	Video  string
 	Audio  string
 	Format string
+	// InvalidPTS records repeated backwards presentation times after frame reordering.
+	InvalidPTS bool
 }
 
 // playableVideo and playableAudio are the codecs left as they are. HEVC and VP9 do not play in
@@ -36,7 +39,7 @@ func Needs(s Streams) bool {
 	if s.Video == "" {
 		return false // audio only, or unreadable: nothing a video copy would fix
 	}
-	if !playableVideo[s.Video] || !playableAudio[s.Audio] {
+	if s.InvalidPTS || !playableVideo[s.Video] || !playableAudio[s.Audio] {
 		return true
 	}
 	switch {
@@ -103,12 +106,14 @@ func NewConverter(vaapiDevice string) *Converter {
 // Probe reads the codecs of path's first video and first audio stream.
 func (c *Converter) Probe(ctx context.Context, path string) (Streams, error) {
 	out, err := c.Run(ctx, c.FFprobe, "-v", "error", "-show_entries",
-		"stream=codec_type,codec_name:stream_disposition=attached_pic:format=format_name", "-of", "json", path)
+		"stream=index,codec_type,codec_name,has_b_frames:stream_disposition=attached_pic:format=format_name", "-of", "json", path)
 	if err != nil {
 		return Streams{}, err
 	}
 	var r struct {
 		Streams []struct {
+			Index       int    `json:"index"`
+			HasBFrames  int    `json:"has_b_frames"`
 			CodecType   string `json:"codec_type"`
 			CodecName   string `json:"codec_name"`
 			Disposition struct {
@@ -123,15 +128,66 @@ func (c *Converter) Probe(ctx context.Context, path string) (Streams, error) {
 		return Streams{}, fmt.Errorf("ffprobe output: %w", err)
 	}
 	s := Streams{Format: r.Format.FormatName}
+	videoIndex, reorder := -1, 0
 	for _, st := range r.Streams {
 		switch {
 		case st.CodecType == "video" && s.Video == "" && st.Disposition.AttachedPic == 0: // not cover art
 			s.Video = st.CodecName
+			videoIndex, reorder = st.Index, st.HasBFrames
 		case st.CodecType == "audio" && s.Audio == "":
 			s.Audio = st.CodecName
 		}
 	}
+	if s.Video == "h264" && reorder > 0 && strings.Contains(s.Format, "mp4") && !Needs(s) {
+		s.InvalidPTS, err = c.invalidPTS(ctx, path, videoIndex)
+		if err != nil {
+			return Streams{}, err
+		}
+	}
 	return s, nil
+}
+
+// invalidPTS samples decoded presentation order. Packets are in decoding order and
+// best_effort_timestamp may already be repaired by FFmpeg, so neither exposes missing ctts.
+func (c *Converter) invalidPTS(ctx context.Context, path string, stream int) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := c.Run(ctx, c.FFprobe, "-v", "error", "-threads", "2", "-select_streams", fmt.Sprint(stream),
+		"-read_intervals", "%+#240", "-show_frames", "-show_entries", "frame=pts", "-of", "json", path)
+	if err != nil {
+		return false, fmt.Errorf("video presentation timestamps: %w", err)
+	}
+	var r struct {
+		Frames []struct {
+			PTS *int64 `json:"pts"`
+		} `json:"frames"`
+	}
+	if err := json.Unmarshal(out, &r); err != nil {
+		return false, fmt.Errorf("video presentation timestamps: %w", err)
+	}
+	// A bounded decode can flush incomplete reorder queues. Keep those boundary frames
+	// out of the decision and require repeated regressions, rather than one isolated jump.
+	frames := r.Frames
+	if len(frames) > 16 {
+		frames = frames[4 : len(frames)-4]
+	}
+	backwards, timestamped := 0, 0
+	var previous *int64
+	for _, frame := range frames {
+		if frame.PTS == nil {
+			previous = nil
+			continue
+		}
+		timestamped++
+		if previous != nil && *frame.PTS < *previous {
+			backwards++
+		}
+		previous = frame.PTS
+	}
+	if timestamped == 0 {
+		return false, errors.New("video presentation timestamps: no timestamped frames")
+	}
+	return backwards >= 3, nil
 }
 
 // Convert writes an H.264/AAC MP4 of src to dst, with the index up front so it plays while

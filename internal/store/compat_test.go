@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -51,7 +52,7 @@ func TestCompatJobs(t *testing.T) {
 			t.Fatalf("view of media %d: compat_codec = %q %v, want %q (only a ready copy is announced)", id, v.Media[0].CompatCodec, err, want)
 		}
 	}
-	if err := s.ResetFailedCompat(ctx); err != nil {
+	if err := s.PrepareCompatJobs(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if j, err := s.NextCompatJob(ctx); err != nil || j.ID != older {
@@ -80,5 +81,62 @@ func TestOrphanedVideoTakesItsCopyAlong(t *testing.T) {
 	want := []string{"1/2026/10/v.mov", "1/2026/10/v.compat.mp4", "1/2026/10/v.compat.mp4.part"}
 	if !reflect.DeepEqual(orphans, want) {
 		t.Fatalf("orphans = %v, want %v", orphans, want)
+	}
+}
+
+func TestCompatTimingRecheckOnce(t *testing.T) {
+	s := newStore(t)
+	bot, _ := s.UpsertBot(ctx, &Bot{TgBotID: 778, TokenEnc: []byte("x"), CreatedAt: 1})
+	add := func(n int64, state, codec, path string) int64 {
+		m := photoMsg(n, fmt.Sprintf("bot:timing:%d", n))
+		m.Kind, m.Media[0].Kind, m.Media[0].Mime = "video", "video", "video/mp4"
+		msg := ingest(t, s, bot, m).MessageID
+		id := mediaIDs(t, s, msg)[0]
+		if _, err := s.MarkMediaDone(ctx, id, mediaKey(t, s, id), fmt.Sprintf("1/%d.mp4", n), 4); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.SetCompat(ctx, id, state, codec, path, ""); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	h264 := add(1, CompatNone, "h264", "")
+	hevc := add(2, CompatNone, "hevc", "")
+	ready := add(3, CompatDone, "h264+aac@mp4", "1/3.compat.mp4")
+	failed := add(4, CompatFailed, "mpeg4", "")
+	article := add(5, CompatNone, "h264", "")
+	if _, err := s.db.ExecContext(ctx, `UPDATE message_media SET role='article' WHERE media_id=?`, article); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE TRIGGER fail_timing_marker BEFORE INSERT ON settings WHEN NEW.key='compat_timing_v1' BEGIN SELECT RAISE(FAIL,'forced marker failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PrepareCompatJobs(ctx); err == nil {
+		t.Fatal("expected preparation failure")
+	}
+	if m, err := s.GetMedia(ctx, failed); err != nil || m.CompatState != CompatFailed {
+		t.Fatalf("failure reset committed without marker: %+v %v", m, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DROP TRIGGER fail_timing_marker`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PrepareCompatJobs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[int64]string{h264: CompatUnchecked, hevc: CompatNone, ready: CompatDone, failed: CompatUnchecked, article: CompatNone} {
+		m, err := s.GetMedia(ctx, id)
+		if err != nil || m.CompatState != want {
+			t.Fatalf("media %d: state=%q, err=%v, want %q", id, m.CompatState, err, want)
+		}
+	}
+	if _, err := s.SetCompat(ctx, h264, CompatNone, "h264", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PrepareCompatJobs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.GetMedia(ctx, h264)
+	if err != nil || m.CompatState != CompatNone {
+		t.Fatalf("rechecked media reset on next startup: %+v %v", m, err)
 	}
 }

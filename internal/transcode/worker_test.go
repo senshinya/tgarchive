@@ -40,7 +40,7 @@ func (f *fakeStore) SetCompat(ctx context.Context, id int64, state, codec, path,
 	return true, nil
 }
 
-func (f *fakeStore) ResetFailedCompat(ctx context.Context) error { f.reset++; return nil }
+func (f *fakeStore) PrepareCompatJobs(ctx context.Context) error { f.reset++; return nil }
 
 type fakeMedia struct {
 	streams map[string]Streams
@@ -72,7 +72,7 @@ func setup(t *testing.T, jobs ...store.CompatJob) (*fakeStore, *fakeMedia, *Work
 	os.MkdirAll(filepath.Join(dir, "1"), 0o755)
 	st := &fakeStore{jobs: jobs, set: map[int64]record{}, gone: map[int64]bool{}}
 	md := &fakeMedia{streams: map[string]Streams{
-		"a.mp4": {"av1", "aac", mp4}, "h.mp4": {"h264", "aac", mp4}, "m.mov": {"mpeg4", "mp3", mp4}, "d.mp4": {"hevc", "ac3", mp4},
+		"a.mp4": {Video: "av1", Audio: "aac", Format: mp4}, "h.mp4": {Video: "h264", Audio: "aac", Format: mp4}, "m.mov": {Video: "mpeg4", Audio: "mp3", Format: mp4}, "d.mp4": {Video: "hevc", Audio: "ac3", Format: mp4},
 	}}
 	var done []int64
 	w := NewWorker(st, md, dir, func(id int64) { done = append(done, id) })
@@ -170,6 +170,24 @@ func TestRunResetsFailuresAndStops(t *testing.T) {
 	cancel()
 	<-stopped
 	if st.reset != 1 {
-		t.Fatalf("ResetFailedCompat calls = %d", st.reset)
+		t.Fatalf("PrepareCompatJobs calls = %d", st.reset)
+	}
+}
+
+func TestWorkerRepairsInvalidPresentationTimes(t *testing.T) {
+	st, md, w, dir, done := setup(t, store.CompatJob{ID: 9, Path: "1/bad.mp4"})
+	md.streams["bad.mp4"] = Streams{Video: "h264", Audio: "aac", Format: mp4, InvalidPTS: true}
+	if !w.Step(context.Background()) {
+		t.Fatal("job not processed")
+	}
+	r := st.set[9]
+	if r.state != store.CompatDone || r.codec != "h264+aac@"+mp4 || r.path != "1/bad.compat.mp4" {
+		t.Fatalf("result=%+v", r)
+	}
+	if _, err := os.Stat(filepath.Join(dir, r.path)); err != nil {
+		t.Fatal(err)
+	}
+	if len(*done) != 1 || (*done)[0] != 9 {
+		t.Fatalf("ready notifications=%v", *done)
 	}
 }

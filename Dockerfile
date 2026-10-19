@@ -14,6 +14,8 @@ FROM --platform=$BUILDPLATFORM golang:1.26.8-alpine3.24@sha256:8ac98ca534ac3f51e
 ARG TARGETOS
 ARG TARGETARCH
 ENV CGO_ENABLED=0
+# Run the synthetic missing-ctts regression with real ffmpeg/ffprobe in CI.
+RUN apk add --no-cache ffmpeg
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download

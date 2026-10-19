@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Compat states of a video's browser-playable copy (media.compat_state).
@@ -59,9 +60,32 @@ func (s *Store) SetCompat(ctx context.Context, id int64, state, codec, path, err
 	return n > 0, err
 }
 
-// ResetFailedCompat makes failed conversions eligible again, so a fix in a new release (or a
-// transient failure such as a full disk) gets another try after a restart.
-func (s *Store) ResetFailedCompat(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE media SET compat_state = '', compat_error = '' WHERE compat_state = ?`, CompatFailed)
-	return err
+// PrepareCompatJobs retries failures and rechecks H.264 videos skipped by the old
+// codec-only probe once. The marker and resets commit together; completed copies stay ready.
+func (s *Store) PrepareCompatJobs(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE media SET compat_state = '', compat_error = '' WHERE compat_state = ?`, CompatFailed); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO settings (key,value,updated_at) VALUES ('compat_timing_v1',?,?) ON CONFLICT(key) DO NOTHING`, []byte("done"), time.Now().Unix())
+	if err != nil {
+		return err
+	}
+	inserted, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if inserted > 0 {
+		if _, err = tx.ExecContext(ctx, `UPDATE media SET compat_state = '', compat_error = ''
+   WHERE state = ? AND compat_state = ? AND compat_codec = 'h264'
+    AND kind IN ('video','animation','video_note') AND path != ''
+    AND EXISTS (SELECT 1 FROM message_media mm WHERE mm.media_id=media.id AND mm.role != 'article')`, StateDone, CompatNone); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
