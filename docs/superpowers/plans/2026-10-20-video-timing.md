@@ -12,25 +12,25 @@
 
 Files: `internal/transcode/transcode.go`, `internal/transcode/transcode_test.go`, `internal/transcode/worker_test.go`.
 
-- [ ] Add an integration test creating `testsrc2` with B frames and replacing only its `ctts` box type with `free`; assert `Needs(Probe(broken))`, preserve the original's checksum, and assert `!Needs(Probe(Convert(broken)))`.
-- [ ] Run `go test ./internal/transcode -run TestMissingCompositionTimes -v`; observe the existing probe's false negative.
-- [ ] Add `InvalidPTS bool` to `Streams`; return true from `Needs` for video with that flag. Probe only otherwise-playable H.264 MP4, using the selected stream index and a bounded sample of raw `frame.pts`. Require at least three backwards steps after trimming four frames at each boundary. Use a 30-second deadline.
-- [ ] Add coverage for normal reordered frames, missing PTS, duplicate timestamps, isolated boundary regressions, probe errors, and cancellation. Existing codec-only fixtures use keyed fields.
-- [ ] Run `go test ./internal/transcode -v` and commit the tested change.
+- [x] Add an integration test creating `testsrc2` with B frames and replacing only its `ctts` box type with `free`; assert `Needs(Probe(broken))`, preserve the original's checksum, and assert `!Needs(Probe(Convert(broken)))`.
+- [x] Run `go test ./internal/transcode -run TestMissingCompositionTimes -v`; observe the existing probe's false negative.
+- [x] Add `InvalidPTS bool` to `Streams`; return true from `Needs` for video with that flag. Probe only otherwise-playable H.264 MP4, using the selected stream index and a bounded sample of raw `frame.pts`. Require at least three backwards steps after trimming four frames at each boundary. Use a 30-second deadline.
+- [x] Add coverage for normal reordered frames, missing PTS, duplicate timestamps, isolated boundary regressions, probe errors, and cancellation. Existing codec-only fixtures use keyed fields.
+- [x] Run `go test ./internal/transcode -v` and commit the tested change.
 
 ### Task 2: One-time archive recheck
 
 Files: `internal/store/compat.go`, `internal/store/compat_test.go`, `internal/transcode/worker.go`, `internal/transcode/worker_test.go`.
 
-- [ ] Write a failing store test: initial H.264 `none` becomes unchecked once; successful copies and other codecs remain; failures are retried; a second preparation preserves freshly checked `none` rows.
-- [ ] Replace startup preparation with a transaction: reset failures; insert settings marker `compat_timing_v1`; when inserted, reset only downloaded H.264 `none` video rows; commit marker and resets together.
-- [ ] Rename preparation to `PrepareCompatJobs` throughout worker and fakes. Run `go test ./internal/store ./internal/transcode` and commit.
+- [x] Write a failing store test: initial H.264 `none` becomes unchecked once; successful copies and other codecs remain; failures are retried; a second preparation preserves freshly checked `none` rows.
+- [x] Replace startup preparation with a transaction: reset failures; insert settings marker `compat_timing_v1`; when inserted, reset only downloaded H.264 `none` video rows; commit marker and resets together.
+- [x] Rename preparation to `PrepareCompatJobs` throughout worker and fakes. Run `go test ./internal/store ./internal/transcode` and commit.
 
 ### Task 3: Verification, audit and release preparation
 
 Files: `README.md`, deployment documentation in the server workspace.
 
-- [ ] Verify full Go suite and `go vet ./...`; confirm the real synthesized corrupted MP4 regression fails against the old probe and passes with the new probe.
-- [ ] Finish read-only NAS audit of downloaded video media, recording sample counts, raw PTS regressions, existing compatibility copies, and explicit scan errors.
-- [ ] Review the whole branch with a fresh reviewer; fix material findings with a failing test first.
-- [ ] Document current detection/recheck constraints; prepare a versioned release and deployment, honoring existing authorization and release-only policy.
+- [x] Verify full Go suite and `go vet ./...`; confirm the real synthesized corrupted MP4 regression fails against the old probe and passes with the new probe.
+- [x] Finish read-only NAS audit of downloaded video media, recording sample counts, raw PTS regressions, existing compatibility copies, and explicit scan errors.
+- [x] Review the whole branch with a fresh reviewer; fix material findings with a failing test first.
+- [x] Document current detection/recheck constraints; prepare a versioned release and deployment, honoring existing authorization and release-only policy.

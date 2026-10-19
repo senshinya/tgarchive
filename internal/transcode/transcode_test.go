@@ -282,3 +282,15 @@ func TestTimingProbeFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestTimingProbeCancellation(t *testing.T) {
+	c := NewConverter("")
+	if c == nil {
+		t.Skip("ffprobe not installed")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.invalidPTS(ctx, filepath.Join(t.TempDir(), "missing.mp4"), 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation=%v", err)
+	}
+}
