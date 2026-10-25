@@ -78,7 +78,7 @@
     display: block;
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
   }
   svg {
     flex-shrink: 0;
@@ -344,9 +344,12 @@
   min-height: 2.5rem;
 }
 .LibraryGrid {
+  --library-row-gap: 24px;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1.5rem 1.125rem;
+  grid-auto-rows: 1px;
+  column-gap: 1.125rem;
+  align-items: start;
   &.resume {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -378,13 +381,13 @@
 .LibraryCover {
   position: relative;
   display: block;
-  aspect-ratio: 16/9;
+  aspect-ratio: var(--cover-ratio, 16/9);
   border-radius: var(--border-radius-default);
   overflow: hidden;
   background: var(--color-background-secondary);
   isolation: isolate;
   img {
-    transition: transform 0.25s ease;
+    transition: opacity 0.2s ease;
   }
 }
 .LibraryCover-placeholder {
@@ -557,7 +560,11 @@
 }
 .LibraryDetail-cover {
   position: relative;
-  aspect-ratio: 16/9;
+  aspect-ratio: var(--cover-ratio, 16/9);
+  width: 100%;
+  max-width: min(100%, calc(28rem * var(--cover-ratio, 1.777778)));
+  justify-self: center;
+  background: var(--color-background-secondary);
   border-radius: var(--border-radius-island);
   overflow: hidden;
 }
@@ -682,6 +689,7 @@
   aspect-ratio: 16/9;
   border-radius: 0.625rem;
   overflow: hidden;
+  background: var(--color-background-secondary);
 }
 .LibraryEpisode-text {
   min-width: 0;
@@ -798,6 +806,7 @@
   aspect-ratio: 16/10;
   border-radius: 0.375rem;
   overflow: hidden;
+  background: var(--color-background);
   .LibraryCover-placeholder small {
     display: none;
   }
@@ -827,7 +836,7 @@
     opacity: 1;
   }
   .LibraryCover:hover img {
-    transform: scale(1.025);
+    opacity: 0.9;
   }
   .LibraryNav-link:hover:not(.active),
   .LibraryIconButton:hover {
@@ -974,7 +983,8 @@
     }
   }
   .LibraryGrid {
-    gap: 1.25rem 0.75rem;
+    --library-row-gap: 20px;
+    column-gap: 0.75rem;
     &.resume {
       display: flex;
       overflow-x: auto;
@@ -984,7 +994,11 @@
       padding: 0 1rem 0.5rem;
       > .LibraryCard {
         min-width: 78%;
+        flex: 0 0 78%;
         scroll-snap-align: start;
+      }
+      .LibraryCover {
+        aspect-ratio: 16/9;
       }
       > :nth-child(3) {
         display: block;

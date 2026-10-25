@@ -7,7 +7,7 @@ import { navigate } from '../../lib/router';
 import { useStore } from '../../state/store';
 import { Spinner } from '../../ui/Spinner';
 import { TagDialog } from '../favorites/TagDialog';
-import { coverVideo, libraryReturnRoute, resumeVideo, videoTitle } from './library';
+import { coverDimensions, coverVideo, libraryReturnRoute, resumeVideo, videoTitle } from './library';
 import { itemSource, LibraryLink, VideoCover } from './LibraryCard';
 import { LibraryError, invalidateLibraryCache } from './LibraryHome';
 
@@ -68,6 +68,7 @@ export function LibraryDetail({ itemId }: { itemId: number }) {
         completed: !v.progress.completed,
       }),
     );
+  const coverSize = coverDimensions(item ? coverVideo(item) : undefined);
   return (
     <div class="LibraryScroll custom-scroll">
       <div class="LibraryContent">
@@ -84,7 +85,7 @@ export function LibraryDetail({ itemId }: { itemId: number }) {
         ) : (
           <>
             <section class="LibraryDetail-summary">
-              <div class="LibraryDetail-cover">
+              <div class="LibraryDetail-cover" style={{ '--cover-ratio': coverSize.width / coverSize.height }}>
                 <VideoCover video={coverVideo(item)} />
                 <span class="LibraryCover-badge">
                   {item.videos.length > 1 ? (

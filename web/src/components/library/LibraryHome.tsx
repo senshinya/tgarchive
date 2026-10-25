@@ -44,6 +44,24 @@ export function LibrarySection({
   more?: ComponentChildren;
   class?: string;
 }) {
+  const grid = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = grid.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const layout = () => {
+      const style = getComputedStyle(el);
+      const masonry = style.display === 'grid';
+      const gap = parseFloat(style.getPropertyValue('--library-row-gap')) || 24;
+      for (const card of Array.from(el.children) as HTMLElement[]) {
+        card.style.gridRowEnd = masonry ? `span ${Math.ceil(card.getBoundingClientRect().height + gap)}` : '';
+      }
+    };
+    const observer = new ResizeObserver(layout);
+    observer.observe(el);
+    for (const card of Array.from(el.children)) observer.observe(card);
+    layout();
+    return () => observer.disconnect();
+  }, [children]);
   return (
     <section class="LibrarySection">
       <div class="LibrarySection-head">
@@ -53,7 +71,9 @@ export function LibrarySection({
         </h2>
         {more}
       </div>
-      <div class={`LibraryGrid ${cls}`}>{children}</div>
+      <div class={`LibraryGrid ${cls}`} ref={grid}>
+        {children}
+      </div>
     </section>
   );
 }

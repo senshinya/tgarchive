@@ -5,7 +5,7 @@ import type { LibraryVideo, VideoLibraryItem } from '../../api/types';
 import { chatName, formatDuration } from '../../lib/format';
 import { navigate, routePath, type Route } from '../../lib/router';
 import { useStore } from '../../state/store';
-import { coverThumb, coverVideo, videoTitle } from './library';
+import { coverDimensions, coverThumb, coverVideo, videoTitle } from './library';
 
 export function LibraryLink({
   to,
@@ -38,10 +38,11 @@ export function LibraryLink({
 }
 export function VideoCover({ video, title = '', children }: { video?: LibraryVideo; title?: string; children?: ComponentChildren }) {
   const id = coverThumb(video);
+  const { width, height } = coverDimensions(video);
   return (
     <>
       {id ? (
-        <img src={mediaUrl(id)} width={640} height={360} alt={title} loading="lazy" />
+        <img src={mediaUrl(id)} width={width} height={height} alt={title} loading="lazy" />
       ) : (
         <span class="LibraryCover-placeholder">
           <Film size={32} />
@@ -67,6 +68,7 @@ export function LibraryCard({
 }) {
   const store = useStore();
   const v = video || coverVideo(item);
+  const { width, height } = coverDimensions(v);
   const collection = !video && item.videos.length > 1;
   const title = video ? videoTitle(video, item.videos.indexOf(video)) : item.title;
   const to: Route = video ? { name: 'video-play', itemId: item.id, mediaId: video.media.id } : { name: 'video-detail', itemId: item.id };
@@ -74,7 +76,7 @@ export function LibraryCard({
   const duration = p?.duration || v?.media.duration || 0;
   const percentage = p?.completed ? 100 : duration > 0 ? Math.min(100, ((p?.position || 0) / duration) * 100) : 0;
   return (
-    <article class={`LibraryCard${collection ? ' collection' : ''}`}>
+    <article class={`LibraryCard${collection ? ' collection' : ''}`} style={{ '--cover-ratio': width / height }}>
       <LibraryLink class="LibraryCover" to={to} label={`${video ? '继续播放' : '查看'}：${title}`}>
         <VideoCover video={v} />
         <span class="LibraryCover-play">

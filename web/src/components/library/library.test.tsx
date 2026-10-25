@@ -5,6 +5,7 @@ import { fakeApi, makeMedia, makeMessage } from '../../test/fixtures';
 import { renderWithStore } from '../../test/render';
 import { VideoLibrary } from './VideoLibrary';
 import { invalidateLibraryCache } from './LibraryHome';
+import { LibraryCard } from './LibraryCard';
 import { libraryParams, libraryQuery, resumeVideo } from './library';
 
 export function makeVideoItem() {
@@ -61,6 +62,22 @@ beforeEach(() => {
   route.value = { name: 'videos' };
 });
 describe('video library', () => {
+  it('preserves portrait and landscape cover dimensions, including the selected collection cover', () => {
+    const item = makeVideoItem();
+    item.videos[0].media = { ...item.videos[0].media, width: 1920, height: 1080 };
+    item.videos[1].media = { ...item.videos[1].media, width: 1080, height: 1920 };
+    item.cover_media_id = item.videos[1].media.id;
+    const thumb = makeMedia({ id: 301, role: 'thumb', width: 180, height: 320, state: 'done' });
+    item.videos[1].message.media = [item.videos[1].media, thumb];
+    const view = renderWithStore(<LibraryCard item={item} onFavorite={() => {}} />, fakeApi());
+    const card = view.container.querySelector('.LibraryCard') as HTMLElement;
+    expect(Number(card.style.getPropertyValue('--cover-ratio'))).toBeCloseTo(1080 / 1920);
+    const image = card.querySelector('img')!;
+    expect(image.width / image.height).toBeCloseTo(1080 / 1920);
+    view.unmount();
+    const landscape = renderWithStore(<LibraryCard item={item} video={item.videos[0]} onFavorite={() => {}} />, fakeApi());
+    expect(Number((landscape.container.querySelector('.LibraryCard') as HTMLElement).style.getPropertyValue('--cover-ratio'))).toBeCloseTo(1920 / 1080);
+  });
   it('round trips list filters and deep detail/player routes', () => {
     expect(parseRoute('/videos?view=collections&q=%E5%B1%B1')).toEqual({
       name: 'videos',

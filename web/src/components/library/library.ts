@@ -44,6 +44,13 @@ export function coverVideo(item: VideoLibraryItem): LibraryVideo | undefined {
 export function coverThumb(video: LibraryVideo | undefined): number | undefined {
   return video && readyThumb(video.message)?.id;
 }
+export function coverDimensions(video: LibraryVideo | undefined): { width: number; height: number } {
+  for (const media of [video?.media, video && readyThumb(video.message)]) {
+    if (media && Number.isFinite(media.width) && Number.isFinite(media.height) && media.width > 0 && media.height > 0)
+      return { width: media.width, height: media.height };
+  }
+  return { width: 16, height: 9 };
+}
 export function videoTitle(v: LibraryVideo, index = 0): string {
   return v.media.file_name || v.message.text.split('\n').find((x) => x.trim()) || `视频 ${index + 1}`;
 }
