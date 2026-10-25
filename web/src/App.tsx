@@ -14,6 +14,8 @@ import { connectEvents, type EventSourceFactory } from './lib/sse';
 import { StoreContext, type Store } from './state/store';
 import { Toast } from './ui/Toast';
 import './layout.scss';
+import { VideoLibrary } from './components/library/VideoLibrary';
+import { isLibraryRoute } from './components/library/library';
 
 interface Props {
   store: Store;
@@ -70,7 +72,8 @@ export function App({ store, eventSource }: Props) {
 
   return (
     <StoreContext.Provider value={store}>
-      <div id="Main" class={cls}>
+      <div id="Main" class={isLibraryRoute(r) ? 'library-mode' : cls}>
+        {isLibraryRoute(r) ? <VideoLibrary current={r} /> : <>
         <div id="LeftColumn">
           {isSettings(r) ? <SettingsPanel route={r} /> : r.name === 'downloads' ? <DownloadsPanel /> : <ChatsPanel />}
         </div>
@@ -94,6 +97,7 @@ export function App({ store, eventSource }: Props) {
         <div id="RightColumn" aria-hidden={!rightOpen}>
           {rightOpen && <SharedMedia key={chatId} chatId={chatId} />}
         </div>
+        </>}
       </div>
       <MediaViewer />
       <Toast />

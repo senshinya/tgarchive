@@ -1,4 +1,9 @@
 import type {
+  VideoLibraryItem,
+  VideoLibraryPage,
+  VideoLibraryParams,
+  VideoProgress,
+  VideoProgressInput,
   AddBotResult,
   Article,
   Bot,
@@ -51,8 +56,8 @@ export class ApiError extends Error {
 
 export const NETWORK_ERROR = '网络错误或登录已过期，请刷新页面';
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const init: RequestInit = { method, credentials: 'same-origin', redirect: 'error' };
+async function request<T>(method: string, path: string, body?: unknown, keepalive = false): Promise<T> {
+  const init: RequestInit = { method, credentials: 'same-origin', redirect: 'error', keepalive };
   // The server's CSRF guard takes a write only as JSON, so one without a body sends {}.
   if (method !== 'GET' && method !== 'HEAD') {
     init.headers = { 'Content-Type': 'application/json' };
@@ -93,6 +98,10 @@ function qs(params: Record<string, string | number | undefined>): string {
 }
 
 export interface Api {
+  videoLibrary(params?: VideoLibraryParams): Promise<VideoLibraryPage>;
+  videoLibraryItem(id: number): Promise<VideoLibraryItem>;
+  saveVideoProgress(id: number, progress: VideoProgressInput, keepalive?: boolean): Promise<VideoProgress>;
+  updateVideoLibraryItem(id: number, patch: { title?: string; cover_media_id?: number }): Promise<VideoLibraryItem>;
   bots(): Promise<Bot[]>;
   chats(): Promise<Chat[]>;
   /** A chat's messages: older than `before` (the latest with 0), or per `page` newer than a
@@ -162,6 +171,10 @@ export interface Api {
 }
 
 export const api: Api = {
+  videoLibrary: (params = {}) => request('GET', `/api/video-library${qs({ ...params })}`),
+  videoLibraryItem: (id) => request('GET', `/api/video-library/${id}`),
+  saveVideoProgress: (id, progress, keepalive = false) => request('PUT', `/api/video-library/media/${id}/progress`, progress, keepalive),
+  updateVideoLibraryItem: (id, patch) => request('PATCH', `/api/video-library/${id}`, patch),
   bots: () => request('GET', '/api/bots'),
   chats: () => request('GET', '/api/chats'),
   messages: (chatId, before = 0, limit = PAGE_SIZE, page = {}) =>

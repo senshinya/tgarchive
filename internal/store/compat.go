@@ -31,12 +31,15 @@ type CompatJob struct {
 	Path string
 }
 
+// Telegram can archive a movie as a document instead of a video message.
+const compatMediaKinds = `(kind IN ('video','animation','video_note') OR (kind='document' AND mime LIKE 'video/%'))`
+
 // NextCompatJob returns the newest downloaded video still in use whose codecs have not been
 // checked, or ErrNotFound. Telegraph article videos are left alone: the reader plays originals.
 func (s *Store) NextCompatJob(ctx context.Context) (*CompatJob, error) {
 	var j CompatJob
 	err := s.db.QueryRowContext(ctx, `SELECT id, path FROM media
-		WHERE state = ? AND compat_state = '' AND path != '' AND kind IN ('video', 'animation', 'video_note')
+		WHERE state = ? AND compat_state = '' AND path != '' AND `+compatMediaKinds+`
 			AND EXISTS (SELECT 1 FROM message_media mm WHERE mm.media_id = media.id AND mm.role != 'article')
 		ORDER BY id DESC LIMIT 1`, StateDone).Scan(&j.ID, &j.Path)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -82,7 +85,7 @@ func (s *Store) PrepareCompatJobs(ctx context.Context) error {
 	if inserted > 0 {
 		if _, err = tx.ExecContext(ctx, `UPDATE media SET compat_state = '', compat_error = ''
    WHERE state = ? AND compat_state = ? AND compat_codec = 'h264'
-    AND kind IN ('video','animation','video_note') AND path != ''
+    AND `+compatMediaKinds+` AND path != ''
     AND EXISTS (SELECT 1 FROM message_media mm WHERE mm.media_id=media.id AND mm.role != 'article')`, StateDone, CompatNone); err != nil {
 			return err
 		}

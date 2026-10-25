@@ -105,7 +105,7 @@ func NewConverter(vaapiDevice string) *Converter {
 
 // Probe reads the codecs of path's first video and first audio stream.
 func (c *Converter) Probe(ctx context.Context, path string) (Streams, error) {
-	out, err := c.Run(ctx, c.FFprobe, "-v", "error", "-show_entries",
+	out, err := c.Run(ctx, c.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-show_entries",
 		"stream=index,codec_type,codec_name,has_b_frames:stream_disposition=attached_pic:format=format_name", "-of", "json", path)
 	if err != nil {
 		return Streams{}, err
@@ -152,7 +152,7 @@ func (c *Converter) Probe(ctx context.Context, path string) (Streams, error) {
 func (c *Converter) invalidPTS(ctx context.Context, path string, stream int) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := c.Run(ctx, c.FFprobe, "-v", "error", "-threads", "2", "-select_streams", fmt.Sprint(stream),
+	out, err := c.Run(ctx, c.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-threads", "2", "-select_streams", fmt.Sprint(stream),
 		"-read_intervals", "%+#240", "-show_frames", "-show_entries", "frame=pts", "-of", "json", path)
 	if err != nil {
 		return false, fmt.Errorf("video presentation timestamps: %w", err)
@@ -230,7 +230,7 @@ func ffmpegArgs(src, dst, device string, vaapi bool) []string {
 	if vaapi {
 		args = append(args, "-vaapi_device", device)
 	}
-	args = append(args, "-i", src, "-map", "0:V:0", "-map", "0:a:0?", "-sn", "-dn") // V: no cover art
+	args = append(args, "-protocol_whitelist", "file", "-i", src, "-map", "0:V:0", "-map", "0:a:0?", "-sn", "-dn") // V: no cover art
 	const even = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
 	if vaapi {
 		args = append(args, "-vf", even+",format=nv12,hwupload", "-c:v", "h264_vaapi", "-qp", "24")

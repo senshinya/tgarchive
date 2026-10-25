@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"tgarchive/internal/model"
 )
 
 func TestCompatJobs(t *testing.T) {
@@ -138,5 +139,114 @@ func TestCompatTimingRecheckOnce(t *testing.T) {
 	m, err := s.GetMedia(ctx, h264)
 	if err != nil || m.CompatState != CompatNone {
 		t.Fatalf("rechecked media reset on next startup: %+v %v", m, err)
+	}
+}
+
+func TestCompatIncludesVideoDocumentsWithoutChangingScope(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	var want []int64
+	for i, c := range []struct {
+		kind, mime, role string
+		comment, want    bool
+	}{
+		{"document", "video/mp4", "main", false, true},
+		{"document", "application/pdf", "main", false, false},
+		{"document", "video/webm", "article", false, false},
+		{"video", "video/mp4", "article", false, false},
+		{"document", "video/mp4", "main", true, true},
+		{"video", "video/mp4", "main", true, true},
+		{"animation", "video/mp4", "main", false, true},
+		{"video_note", "video/mp4", "main", false, true},
+	} {
+		m := photoMsg(int64(i+1), fmt.Sprintf("bot:compat-scope:%d", i))
+		m.Kind = model.Kind(c.kind)
+		m.Media[0].Kind = c.kind
+		m.Media[0].Mime = c.mime
+		r := ingest(t, s, bot, m)
+		id := mediaIDs(t, s, r.MessageID)[0]
+		if c.role != "main" {
+			if _, err := s.db.Exec("UPDATE message_media SET role=? WHERE media_id=?", c.role, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if c.comment {
+			if _, err := s.db.Exec("UPDATE messages SET thread_root_id=999 WHERE id=?", r.MessageID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := s.MarkMediaDone(ctx, id, mediaKey(t, s, id), fmt.Sprintf("1/%d.mp4", id), 100); err != nil {
+			t.Fatal(err)
+		}
+		if c.want {
+			want = append([]int64{id}, want...)
+		}
+	}
+	var got []int64
+	for {
+		j, err := s.NextCompatJob(ctx)
+		if errors.Is(err, ErrNotFound) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, j.ID)
+		if _, err := s.SetCompat(ctx, j.ID, CompatNone, "h264", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("compat jobs=%v want %v", got, want)
+	}
+}
+
+func TestCompatTimingRechecksVideoDocumentsOnly(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	for i, c := range []struct{ mime, role, want string }{
+		{"video/mp4", "main", CompatUnchecked},
+		{"application/pdf", "main", CompatNone},
+		{"video/mp4", "article", CompatNone},
+	} {
+		m := photoMsg(int64(i+1), fmt.Sprintf("bot:document-timing:%d", i))
+		m.Kind = model.KindDocument
+		m.Media[0].Kind = "document"
+		m.Media[0].Mime = c.mime
+		r := ingest(t, s, bot, m)
+		id := mediaIDs(t, s, r.MessageID)[0]
+		s.MarkMediaDone(ctx, id, mediaKey(t, s, id), fmt.Sprintf("1/%d.mp4", id), 100)
+		s.SetCompat(ctx, id, CompatNone, "h264", "", "")
+		if c.role != "main" {
+			if _, err := s.db.Exec("UPDATE message_media SET role=? WHERE media_id=?", c.role, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := s.PrepareCompatJobs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[int64]string{1: CompatUnchecked, 2: CompatNone, 3: CompatNone} {
+		md, err := s.GetMedia(ctx, id)
+		if err != nil || md.CompatState != want {
+			t.Fatalf("media%d=%+v %v want %s", id, md, err, want)
+		}
+	}
+}
+
+func TestOrphanedVideoDocumentTakesItsCopyAlong(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	m := photoMsg(1, "bot:video-document")
+	m.Kind = model.KindDocument
+	m.Media[0].Kind = "document"
+	m.Media[0].Mime = "video/mp4"
+	r := ingest(t, s, bot, m)
+	id := mediaIDs(t, s, r.MessageID)[0]
+	s.MarkMediaDone(ctx, id, mediaKey(t, s, id), "1/document.mp4", 100)
+	_, paths, err := s.DeleteMessage(ctx, r.MessageID, 1000)
+	want := []string{"1/document.mp4", "1/document.compat.mp4", "1/document.compat.mp4.part"}
+	if err != nil || !reflect.DeepEqual(paths, want) {
+		t.Fatalf("orphan paths=%v %v want %v", paths, err, want)
 	}
 }

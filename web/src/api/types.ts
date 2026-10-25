@@ -479,6 +479,7 @@ export interface Downloads {
 }
 
 export type ArchiveEvent =
+  | { type: 'video-library.updated'; data: { media_id?: number; item_id?: number } }
   | { type: 'message.created' | 'message.updated' | 'message.deleted'; data: MessageRef }
   | { type: 'media.updated'; data: { media_id: number; message_ids: number[] | null } }
   | { type: 'bot.status'; data: { bot_id: number; status: string; error: string } }
@@ -501,6 +502,7 @@ export const EVENT_TYPES = [
   'download.progress',
   'watch.updated',
   'favorites.updated',
+  'video-library.updated',
   'chat.read',
   'comments.updated',
 ] as const;
@@ -519,4 +521,47 @@ export interface SearchPage {
   items: SearchHit[];
   /** The `before` cursor of the next page; 0 when this was the last. */
   next: number;
+}
+
+/** Shared single-user video-library playback state, independent of chat read marks. */
+export interface VideoProgress {
+  position: number;
+  duration: number;
+  completed: boolean;
+  updated_at: number;
+}
+export type VideoProgressInput = Pick<VideoProgress, 'position' | 'duration' | 'completed'>;
+export interface LibraryVideo {
+  message: Message;
+  media: Media;
+  progress: VideoProgress;
+}
+export interface VideoLibraryItem {
+  id: number;
+  message: Message;
+  title: string;
+  description: string;
+  date: number;
+  added: number;
+  duration: number;
+  cover_media_id: number;
+  videos: LibraryVideo[];
+}
+export interface VideoLibraryPage {
+  items: VideoLibraryItem[];
+  next: string;
+  total_items: number;
+  total_videos: number;
+  collections: number;
+}
+export interface VideoLibraryParams {
+  q?: string;
+  chat_id?: number;
+  tag_id?: number;
+  kind?: 'all' | 'single' | 'collection';
+  watched?: 'all' | 'unwatched' | 'in_progress' | 'completed';
+  view?: 'all' | 'continue' | 'collections' | 'favorites';
+  sort?: 'new' | 'old' | 'published' | 'duration' | 'title';
+  cursor?: string;
+  limit?: number;
 }
