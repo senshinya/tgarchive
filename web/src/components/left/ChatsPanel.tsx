@@ -1,4 +1,4 @@
-import { Bookmark, ChartColumn, CircleAlert, Images, Megaphone, Radio, Settings, Volume2, VolumeX } from 'lucide-preact';
+import { Bookmark, ChartColumn, CircleAlert, Film, Images, Megaphone, Radio, Settings, Volume2, VolumeX } from 'lucide-preact';
 import { avatarUrl } from '../../api/client';
 import type { Chat } from '../../api/types';
 import { botName, formatListTime, previewText, senderName } from '../../lib/format';
@@ -227,6 +227,7 @@ export function ChatsPanel() {
         <SilentButton />
         <ListModeSwitch />
       </div>
+      <button type="button" class="VideoLibraryEntry" onClick={() => navigate({ name: 'videos' })}><Film size={19} /><span>视频库</span><small>视频与帖子合集</small></button>
       <SearchBox />
       {searching ? (
         <SearchResults />

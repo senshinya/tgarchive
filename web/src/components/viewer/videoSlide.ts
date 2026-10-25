@@ -62,6 +62,9 @@ export interface VideoSlideOptions {
   title: string;
   /** 静音模式 is on: the video starts muted. */
   silent?: boolean;
+  /** Optional server-backed storage for the video library. */
+  storage?: PlayerStorage;
+  onEnded?: () => void;
 }
 
 export interface VideoSlide {
@@ -101,7 +104,7 @@ export function createVideoSlide(o: VideoSlideOptions): VideoSlide {
   }
 
   const player = document.createElement('media-player') as MediaPlayerElement;
-  const storage = new PlayerStorage(o.mediaId, () => player.state?.duration ?? 0);
+  const storage = o.storage ?? new PlayerStorage(o.mediaId, () => player.state?.duration ?? 0);
   player.src = { src: o.src, type: sourceType(o.mime) as 'video/mp4' };
   player.title = o.title;
   player.playsInline = true;
@@ -161,6 +164,8 @@ export function createVideoSlide(o: VideoSlideOptions): VideoSlide {
     },
   });
 
+  const ended = () => { if (active) o.onEnded?.(); };
+  player.addEventListener('ended', ended);
   let active = false;
   return {
     el,
@@ -190,6 +195,7 @@ export function createVideoSlide(o: VideoSlideOptions): VideoSlide {
     destroy() {
       // Tearing down resets the player to 0s; that must not read as "watched from the start".
       storage.freeze();
+      player.removeEventListener('ended', ended);
       unbind();
       for (const t of QUIET) player.removeEventListener(t, muteGesture, true);
       player.pause().catch(() => {});

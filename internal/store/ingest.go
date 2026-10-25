@@ -255,7 +255,7 @@ func collectOrphans(ctx context.Context, tx *sql.Tx, candidates []int64) ([]stri
 		for i, id := range batch {
 			args[i] = id
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT id, kind, path FROM media WHERE id IN (`+
+		rows, err := tx.QueryContext(ctx, `SELECT id, kind, mime, path FROM media WHERE id IN (`+
 			strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")+`)
 			AND NOT EXISTS (SELECT 1 FROM message_media mm WHERE mm.media_id = media.id)
 			AND NOT EXISTS (SELECT 1 FROM custom_emoji ce WHERE ce.media_id = media.id) ORDER BY id`, args...)
@@ -264,8 +264,8 @@ func collectOrphans(ctx context.Context, tx *sql.Tx, candidates []int64) ([]stri
 		}
 		for rows.Next() {
 			var id int64
-			var kind, p string
-			if err := rows.Scan(&id, &kind, &p); err != nil {
+			var kind, mime, p string
+			if err := rows.Scan(&id, &kind, &mime, &p); err != nil {
 				rows.Close()
 				return nil, err
 			}
@@ -274,7 +274,7 @@ func collectOrphans(ctx context.Context, tx *sql.Tx, candidates []int64) ([]stri
 				continue
 			}
 			paths = append(paths, p)
-			if kind == "video" || kind == "animation" || kind == "video_note" {
+			if kind == "video" || kind == "animation" || kind == "video_note" || (kind == "document" && strings.HasPrefix(strings.ToLower(mime), "video/")) {
 				// A browser-playable copy, or one a crash left half-written or unrecorded; removing a
 				// file that does not exist is a no-op.
 				paths = append(paths, CompatRel(p), CompatPartRel(p))

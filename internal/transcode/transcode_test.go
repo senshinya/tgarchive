@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -292,5 +293,42 @@ func TestTimingProbeCancellation(t *testing.T) {
 	cancel()
 	if _, err := c.invalidPTS(ctx, filepath.Join(t.TempDir(), "missing.mp4"), 0); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation=%v", err)
+	}
+}
+
+func TestLocalMediaCommandsRestrictInputProtocols(t *testing.T) {
+	requireFileOnly := func(t *testing.T, args []string, inputIndex int) {
+		t.Helper()
+		index := slices.Index(args, "-protocol_whitelist")
+		if index < 0 || index+1 >= len(args) || args[index+1] != "file" || index >= inputIndex {
+			t.Errorf("local media input must restrict protocols to file before input: %q", args)
+		}
+	}
+	t.Run("metadata and presentation probes", func(t *testing.T) {
+		calls := 0
+		c := &Converter{FFprobe: "ffprobe", Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			calls++
+			requireFileOnly(t, args, len(args)-1)
+			if slices.Contains(args, "-show_frames") {
+				return []byte(`{"frames":[{"pts":0},{"pts":1},{"pts":2}]}`), nil
+			}
+			return []byte(`{"streams":[{"index":0,"codec_type":"video","codec_name":"h264","has_b_frames":1}],"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2"}}`), nil
+		}}
+		if _, err := c.Probe(context.Background(), "local.mp4"); err != nil {
+			t.Fatal(err)
+		}
+		if calls != 2 {
+			t.Fatalf("probe calls=%d", calls)
+		}
+	})
+	for _, hardware := range []bool{false, true} {
+		t.Run(fmt.Sprintf("convert hardware=%v", hardware), func(t *testing.T) {
+			args := ffmpegArgs("local.mp4", "local.compat.mp4", "/dev/dri/renderD128", hardware)
+			input := slices.Index(args, "-i")
+			if input < 0 {
+				t.Fatal("missing input")
+			}
+			requireFileOnly(t, args, input)
+		})
 	}
 }

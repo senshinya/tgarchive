@@ -157,6 +157,10 @@ export function makeArticle(over: Partial<Article> = {}): Article {
 /** An Api whose every method is a vi.fn with an empty-but-valid default result. */
 export function fakeApi(over: Partial<Api> = {}): Api {
   const base: Api = {
+    videoLibrary: vi.fn(async () => ({ items: [], next: '', total_items: 0, total_videos: 0, collections: 0 })),
+    videoLibraryItem: vi.fn(async () => { throw new Error('not found'); }),
+    saveVideoProgress: vi.fn(async (_id, p) => ({ ...p, updated_at: 1 })),
+    updateVideoLibraryItem: vi.fn(async () => { throw new Error('not found'); }),
     bots: vi.fn(async () => []),
     chats: vi.fn(async () => []),
     messages: vi.fn(async () => []),

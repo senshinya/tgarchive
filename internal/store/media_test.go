@@ -3,6 +3,7 @@ package store
 import (
 	"reflect"
 	"testing"
+	"tgarchive/internal/model"
 )
 
 func TestDoneMediaPaths(t *testing.T) {
@@ -45,5 +46,25 @@ func TestDueMediaSplitsWebFromTelegram(t *testing.T) {
 	}
 	if got := keys(s.DueWebMedia(ctx, 0, 2)); !reflect.DeepEqual(got, []string{"web:a", "web:b"}) {
 		t.Fatalf("web = %v", got)
+	}
+}
+
+// The app's startup mp4fix sweep consumes every done path and must not lose movies
+// archived as documents. The filename filter still decides which paths are MP4 candidates.
+func TestDoneMediaPathsIncludesVideoDocument(t *testing.T) {
+	s := newStore(t)
+	bot := seedBot(t, s, 777)
+	m := photoMsg(1, "bot:mp4-document")
+	m.Kind = model.KindDocument
+	m.Media[0].Kind = "document"
+	m.Media[0].Mime = "video/mp4"
+	r := ingest(t, s, bot, m)
+	id := mediaIDs(t, s, r.MessageID)[0]
+	if _, err := s.MarkMediaDone(ctx, id, mediaKey(t, s, id), "1/document.mp4", 100); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := s.DoneMediaPaths(ctx)
+	if err != nil || !reflect.DeepEqual(paths, []string{"1/document.mp4"}) {
+		t.Fatal(paths, err)
 	}
 }

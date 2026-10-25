@@ -30,6 +30,7 @@ import (
 	"tgarchive/internal/tgapp"
 	"tgarchive/internal/transcode"
 	"tgarchive/internal/userbot"
+	"tgarchive/internal/videocover"
 	"tgarchive/web"
 )
 
@@ -50,6 +51,7 @@ type App struct {
 	watcher *userbot.Watcher
 	tw      *telegraph.Worker
 	tc      *transcode.Worker
+	vc      *videocover.Worker
 	media   string
 	wg      sync.WaitGroup
 }
@@ -98,11 +100,18 @@ func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer, w
 			log.Printf("transcode: ffmpeg/ffprobe not found, videos are served as archived")
 		}
 	}
+	vc := videocover.NewWorker(st, mediaDir, mediaUpdated)
+	if vc == nil {
+		log.Printf("video cover: ffmpeg not found, fallback thumbnails disabled")
+	}
 	dl := downloader.New(st, mediaDir, cfg.MediaMaxBytes, func(mediaID int64) {
 		rc.MediaSettled(ctx, mediaID)
 		mediaUpdated(mediaID)
 		if tc != nil {
 			tc.Wake()
+		}
+		if vc != nil {
+			vc.Wake()
 		}
 	})
 	dl.OnProgress(func(items []downloader.Progress, speed int64) {
@@ -133,7 +142,7 @@ func newApp(parent context.Context, cfg *config.Config, dialer userbot.Dialer, w
 		Web: web.FS(), MediaDir: mediaDir, AvatarDir: avatarDir, HTTP: hc, Now: time.Now,
 	}
 	return &App{Handler: srv.Handler(), ctx: ctx, cancel: cancel, st: st, mgr: mgr, dl: dl, av: av, mapper: mapper, tg: tg, sup: sup,
-		ub: ub, fetcher: fetcher, watcher: watcher, tw: tw, tc: tc, media: mediaDir}, nil
+		ub: ub, fetcher: fetcher, watcher: watcher, tw: tw, tc: tc, vc: vc, media: mediaDir}, nil
 }
 
 func (a *App) Start() error {
@@ -149,6 +158,10 @@ func (a *App) Start() error {
 	if a.tc != nil {
 		a.wg.Add(1)
 		go func() { defer a.wg.Done(); a.tc.Run(a.ctx) }()
+	}
+	if a.vc != nil {
+		a.wg.Add(1)
+		go func() { defer a.wg.Done(); a.vc.Run(a.ctx) }()
 	}
 	if a.sup != nil {
 		creds, err := a.tg.Load(a.ctx)

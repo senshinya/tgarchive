@@ -2,6 +2,9 @@ import { signal } from '@preact/signals';
 
 export type Route =
   | { name: 'home' }
+  | { name: 'videos'; query?: string }
+  | { name: 'video-detail'; itemId: number }
+  | { name: 'video-play'; itemId: number; mediaId: number }
   | { name: 'chat'; chatId: number }
   | { name: 'article'; chatId: number; messageId: number }
   | { name: 'comments'; chatId: number; messageId: number }
@@ -21,8 +24,14 @@ export type Route =
   | { name: 'settings-watch'; watchId: number };
 
 export function parseRoute(pathname: string): Route {
-  const parts = pathname.split('/').filter(Boolean);
+  const [path, query = ''] = pathname.split('?');
+  const parts = path.split('/').filter(Boolean);
   const id = (s: string | undefined) => (s && /^[1-9][0-9]{0,15}$/.test(s) ? Number(s) : 0);
+  if (parts[0] === 'videos') {
+    if (parts.length === 1) return query ? { name: 'videos', query } : { name: 'videos' };
+    if (parts.length === 2 && id(parts[1])) return { name: 'video-detail', itemId: id(parts[1]) };
+    if (parts.length === 4 && parts[2] === 'play' && id(parts[1]) && id(parts[3])) return { name: 'video-play', itemId: id(parts[1]), mediaId: id(parts[3]) };
+  }
   if (parts[0] === 'chat' && parts.length === 2 && id(parts[1])) return { name: 'chat', chatId: id(parts[1]) };
   if (parts[0] === 'chat' && parts.length === 4 && parts[2] === 'article' && id(parts[1]) && id(parts[3])) {
     return { name: 'article', chatId: id(parts[1]), messageId: id(parts[3]) };
@@ -53,6 +62,12 @@ export function parseRoute(pathname: string): Route {
 
 export function routePath(r: Route): string {
   switch (r.name) {
+    case 'videos':
+      return `/videos${r.query ? '?' + r.query : ''}`;
+    case 'video-detail':
+      return `/videos/${r.itemId}`;
+    case 'video-play':
+      return `/videos/${r.itemId}/play/${r.mediaId}`;
     case 'home':
       return '/';
     case 'chat':
@@ -96,7 +111,7 @@ export function isSettings(r: Route): boolean {
   return r.name.startsWith('settings');
 }
 
-export const route = signal<Route>(parseRoute(typeof location === 'undefined' ? '/' : location.pathname));
+export const route = signal<Route>(parseRoute(typeof location === 'undefined' ? '/' : location.pathname + location.search));
 
 export interface NavigateOptions {
   /** Replaces the current history entry instead of pushing a new one. */
@@ -167,7 +182,7 @@ function stripStaleViewerMarker(): void {
 export function startRouter(): () => void {
   stripStaleViewerMarker();
   const onPop = () => {
-    route.value = parseRoute(location.pathname);
+    route.value = parseRoute(location.pathname + location.search);
   };
   window.addEventListener('popstate', onPop);
   onPop();
